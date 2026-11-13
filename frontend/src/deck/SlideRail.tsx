@@ -175,7 +175,7 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-paper" style={{ width }}>
-      <div ref={listRef} tabIndex={0} onKeyDown={onKeyDown} className="min-h-0 flex-1 overflow-y-auto px-2 py-2 outline-none">
+      <div ref={listRef} tabIndex={0} onKeyDown={onKeyDown} className="min-h-0 flex-1 overflow-y-auto px-2 py-2 outline-none [scrollbar-gutter:stable]">
         {pres.slides.map((slide, i) => {
           const sid = session.sldIds.get(slide.id) ?? ''
           const openNotes = notes.filter((n) => n.deck === session.path && n.status === 'open' && (sid ? n.slideId === sid : n.slideIndex === i + 1)).length

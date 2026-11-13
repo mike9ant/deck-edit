@@ -66,7 +66,9 @@ export const SlideRender = forwardRef<SlideRenderHandle, Props>(function SlideRe
     let handle: ReturnType<typeof renderSlide>
     const charts = new Set<never>()
     try {
-      handle = thumbnail
+      // The fast thumbnail path draws charts as grey placeholders; a slide
+      // with a chart gets the full renderer so its thumbnail shows the chart.
+      handle = thumbnail && !slide.nodes.some((n) => n.nodeType === 'chart')
         ? renderThumbnail(pres, slide, { mediaUrlCache: cache })
         : renderSlide(pres, slide, { mediaUrlCache: cache, clipContent: true, chartInstances: charts as never })
     } catch (e) {
@@ -81,7 +83,7 @@ export const SlideRender = forwardRef<SlideRenderHandle, Props>(function SlideRe
     // Charts initialise once attached: polish them on the next frame and once
     // the slide's async resources settle.
     let live = true
-    const polish = () => live && charts.size && polishCharts(charts, (dom) => scalingForChart(pres, slide, dom))
+    const polish = () => live && charts.size && polishCharts(charts, (dom) => scalingForChart(pres, slide, dom), !!thumbnail)
     requestAnimationFrame(polish)
     void handle.ready.then(polish)
     return () => {

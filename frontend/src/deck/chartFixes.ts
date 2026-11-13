@@ -21,6 +21,9 @@ export interface ChartLike {
   getWidth(): number
   getHeight(): number
   getDom?(): HTMLElement
+  getDataURL?(opts: Record<string, unknown>): string
+  on?(event: string, handler: () => void): void
+  off?(event: string, handler: () => void): void
   isDisposed?(): boolean
 }
 
@@ -128,6 +131,8 @@ function polish(chart: ChartLike, scaling: AxisScaling[]) {
   const W = chart.getWidth()
   const H = chart.getHeight()
   const patch: Opt = {
+    // Static like PowerPoint: no draw-in animation (it also replayed on every edit).
+    animation: false,
     tooltip: (o.tooltip ?? [{}]).map(() => ({ show: false })),
     axisPointer: [{ show: false }],
     series: (o.series ?? []).map(() => ({ emphasis: { disabled: true }, silent: true })),
@@ -206,11 +211,33 @@ function polish(chart: ChartLike, scaling: AxisScaling[]) {
  * `scalingFor` maps a chart's DOM to the value-axis scaling in its chart XML
  * (see SlideRender), for the fixes the rendered option alone can't make.
  */
-export function polishCharts(charts: Set<unknown>, scalingFor?: (dom: HTMLElement | undefined) => AxisScaling[]) {
+/**
+ * Replace a chart's canvas with a PNG snapshot of it. For thumbnails: a large
+ * canvas shrunk by CSS loses its thin lines (canvas downscaling skips pixels),
+ * an <img> is downscaled smoothly.
+ */
+function snapshotAsImage(chart: ChartLike) {
+  const dom = chart.getDom?.()
+  if (!dom || !chart.getDataURL || dom.dataset.pdfeditSnapshot) return
+  const take = () => {
+    if (chart.isDisposed?.()) return
+    const img = document.createElement('img')
+    img.src = chart.getDataURL!({ type: 'png', pixelRatio: 1, backgroundColor: 'transparent' })
+    img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block'
+    dom.dataset.pdfeditSnapshot = '1'
+    for (const child of Array.from(dom.children)) (child as HTMLElement).style.visibility = 'hidden'
+    dom.appendChild(img)
+  }
+  // Draw is synchronous-ish after setOption with animation off; wait a frame to be safe.
+  requestAnimationFrame(() => requestAnimationFrame(take))
+}
+
+export function polishCharts(charts: Set<unknown>, scalingFor?: (dom: HTMLElement | undefined) => AxisScaling[], asImage = false) {
   for (const c of charts) {
     try {
       const chart = c as ChartLike
       polish(chart, scalingFor?.(chart.getDom?.()) ?? [])
+      if (asImage) snapshotAsImage(chart)
     } catch (e) {
       console.warn('chart polish', e)
     }

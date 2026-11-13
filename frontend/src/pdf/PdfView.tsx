@@ -120,7 +120,7 @@ function PageRail({ session, width, busy }: { session: PdfSession; width: number
   }
   return (
     <div className="flex h-full flex-col bg-paper" style={{ width }}>
-      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-2">
+      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-2 [scrollbar-gutter:stable]">
         {Array.from({ length: n }, (_, i) => {
           const open = notes.filter((x) => x.deck === session.path && x.status === 'open' && x.slideIndex === i + 1).length
           return (
