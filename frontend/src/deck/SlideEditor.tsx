@@ -299,6 +299,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     if (editing && editing.container.contains(e.target as Node)) return
     if (editing) void commitEditing()
     if (noteMode) {
+      e.preventDefault() // no default mousedown focus: it would pull focus back from the note box that opens
       const p = toSlide(e.clientX, e.clientY)
       const id = hitNode(e.target)
       const n = id ? nodeById(id) : undefined

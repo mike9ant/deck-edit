@@ -44,3 +44,22 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
 /* The rendered slide must never show a text caret or selection unless it's being edited. */
 [data-slide-stage] [contenteditable='true'] { cursor: text; }
 [data-slide-stage] { user-select: none; }
+
+/* Formatted Markdown with in-place text editing (viewers/MarkdownEditable.tsx). */
+.md-editable [data-md-block] {
+  border-radius: 3px;
+  outline: 1px solid transparent;
+  outline-offset: 2px;
+  cursor: text;
+  transition: outline-color 120ms, background-color 120ms;
+}
+.md-editable [data-md-block]:hover {
+  outline-color: rgb(0 0 0 / 0.08);
+}
+.md-editable [data-md-block]:focus {
+  outline: 2px solid rgb(59 91 219 / 0.45);
+  background-color: rgb(59 91 219 / 0.03);
+}
+.md-editable [data-md-block] [data-md-block]:hover {
+  outline-color: transparent;
+}

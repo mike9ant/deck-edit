@@ -1,7 +1,7 @@
 /**
  * What the agent is told about the user's view with each message: the open
  * deck and slide, the selected shapes, and the edits the user made since the
- * last turn (already saved to disk).
+ * last turn (already saved to disk) — in decks, PDFs and text files.
  */
 
 import type { TurnContext } from '../api/types'
@@ -9,11 +9,23 @@ import { docKind, useApp } from '../store/appStore'
 import { deckKey, useDecks } from '../deck/deckStore'
 import { nodeText } from '../deck/deckModel'
 import { pdfKey, usePdfs } from '../pdf/pdfStore'
+import { flushTextSaves, textEditLines } from '../viewers/textEdits'
 
 /** `consume`: mark the reported edits as delivered (only when actually sending). */
 export async function buildTurnContext(consume: boolean): Promise<TurnContext> {
-  const { projectId, activePath } = useApp.getState()
-  if (!projectId || !activePath) return {}
+  const { projectId } = useApp.getState()
+  if (!projectId) return {}
+  // Text edits: write pending autosaves first so the agent reads the latest.
+  await flushTextSaves()
+  const ctx = await viewContext(projectId, consume)
+  const text = textEditLines(projectId, consume)
+  if (text.length) ctx.userChanges = [...(ctx.userChanges ?? []), ...text]
+  return ctx
+}
+
+async function viewContext(projectId: string, consume: boolean): Promise<TurnContext> {
+  const { activePath } = useApp.getState()
+  if (!activePath) return {}
   const kind = docKind(activePath)
   if (kind === 'pptx') {
     const key = deckKey(projectId, activePath)
@@ -53,8 +65,10 @@ export async function buildTurnContext(consume: boolean): Promise<TurnContext> {
 
 /** Edits pending for the next turn across every open deck/PDF (for the composer's hint). */
 export function pendingEditCount(pid: string | null, path: string | null): number {
-  if (!pid || !path) return 0
-  if (docKind(path) === 'pptx') return useDecks.getState().peekUserChanges(deckKey(pid, path)).length
-  if (docKind(path) === 'pdf') return usePdfs.getState().peekUserChanges(pdfKey(pid, path)).length
-  return 0
+  if (!pid) return 0
+  const text = textEditLines(pid, false).length
+  if (!path) return text
+  if (docKind(path) === 'pptx') return text + useDecks.getState().peekUserChanges(deckKey(pid, path)).length
+  if (docKind(path) === 'pdf') return text + usePdfs.getState().peekUserChanges(pdfKey(pid, path)).length
+  return text
 }

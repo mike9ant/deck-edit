@@ -34,7 +34,29 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
 
 - **Projects** — a project is a folder + its agent chats. Pick one in the top bar.
 - **Files** — the folder tree; open `.pptx`, `.pdf`, `.md`, text and image files in tabs.
-  Markdown and text render as a reader; everything reloads when the file changes on disk.
+  Everything reloads when the file changes on disk.
+  - A newly opened file is a *preview* tab (italic title): opening another file replaces it. It
+    stays open once you change the file (any edit, typing, a pinned note), the agent or another
+    app changes it, or you double-click the tab; kept tabs stay until you close them.
+  - A document's toolbar shows "Saved" only once the file was changed this session (by you or
+    the agent); Saving… / Unsaved… show whenever they apply.
+  - **Text and Markdown are editable** (CodeMirror, with syntax highlighting for Markdown, JSON,
+    Python, JS/TS, HTML, CSS, XML, YAML). Edits autosave shortly after you stop typing (⌘S saves
+    now), etag-guarded like decks; the editor is read-only while the agent works, and your saved
+    edits are reported to the agent with your next message.
+  - Markdown has a **Formatted / Markdown** switch; the last choice is remembered for the next file.
+    In **Formatted**, click any paragraph, heading, list item or table cell and type (Enter or
+    clicking away commits, Esc cancels, ↑/↓ at a block's first/last line moves to the previous/next
+    block — in a table the cell above/below — and ←/→ at a cell's start/end to the previous/next
+    cell, ⌘Z/⇧⌘Z undo/redo). Blocks turn editable only when clicked, so dragging across
+    paragraphs still selects normally — the bar over such a selection has **Copy** (text) and
+    **Copy Markdown** (the source of the blocks it touches). **Bold / italic** toggle with ⌘B / ⌘I
+    or the small bar over a selection (`**`/`*` added around it; with the caret in bold/italic text,
+    its markers are removed); other formatting is changed in the Markdown tab. Each change is
+    written back into exactly the characters it came from, so the rest of the file is never
+    reformatted, and a toggle that Markdown wouldn't read as formatting is refused rather than
+    leaving stray `*` (`viewers/mdSourceEdit.ts`). Inline
+    code, code blocks and images are read-only there; ⌘-click opens a link.
 - **Slides** (PPTX)
   - mini-slides rail: click, shift/⌘-click to multi-select, drag to reorder,
     duplicate (⌘D), delete (⌫), copy/paste slides (⌘C / ⌘V)

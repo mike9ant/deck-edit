@@ -24,6 +24,7 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   const busy = useChat((s) => !!s.busyProjects[pid])
   const railW = useApp((s) => s.widths.rail)
   const setWidth = useApp((s) => s.setWidth)
+  const changed = useApp((s) => s.changed.includes(path))
   const [noteMode, setNoteMode] = useState(false)
   const [showResolved, setShowResolved] = useState(false)
   const [dismissedAt, setDismissedAt] = useState(0)
@@ -87,7 +88,7 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
           {session.selection.length > 0 && ` · ${session.selection.length} selected`}
         </div>
         <div className="ml-auto flex items-center gap-2 text-xs text-ink-3">
-          {session.saving ? <span className="flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Saving…</span> : session.dirty ? <span>Unsaved…</span> : <span>Saved</span>}
+          {session.saving ? <span className="flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Saving…</span> : session.dirty ? <span>Unsaved…</span> : changed ? <span>Saved</span> : null}
           <button className="tool-btn" title="Open this deck in PowerPoint" onClick={() => void api.openExternal(pid, path)}><ExternalLink size={14} /> PowerPoint</button>
         </div>
       </div>

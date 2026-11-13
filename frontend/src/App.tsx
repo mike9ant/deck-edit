@@ -23,6 +23,7 @@ import { onServerEvent } from './api/events'
 import { handleDeckFileEvent } from './deck/deckStore'
 import { handlePdfFileEvent } from './pdf/pdfStore'
 import { handleScreenshot } from './screenshot'
+import { markChangedOnFileEvent } from './store/tabKeeping'
 
 export default function App() {
   const { projectId, projects, loadProjects, widths, setWidth } = useApp()
@@ -46,6 +47,7 @@ export default function App() {
         const pid = useApp.getState().projectId
         switch (ev.type) {
           case 'file':
+            markChangedOnFileEvent(ev)
             useFileVersions.getState().bump(ev.projectId, ev.path)
             handleDeckFileEvent(ev.projectId, ev.path, ev.etag, ev.writer)
             handlePdfFileEvent(ev.projectId, ev.path, ev.etag, ev.writer)
@@ -100,11 +102,13 @@ export default function App() {
 }
 
 function DocTabs() {
-  const { tabs, activePath, openFile, closeTab } = useApp()
+  const { tabs, kept, activePath, projectId, openFile, closeTab, keepTab } = useApp()
   if (!tabs.length) return null
   return (
     <div className="flex h-9 shrink-0 items-end gap-0.5 overflow-x-auto border-b border-hair bg-paper px-1">
-      {tabs.map((t) => (
+      {tabs.map((t) => {
+        const preview = !kept.includes(t)
+        return (
         <div
           key={t}
           className={clsx(
@@ -112,12 +116,15 @@ function DocTabs() {
             t === activePath ? 'border-hair bg-panel text-ink' : 'border-transparent text-ink-3 hover:bg-black/5',
           )}
           onClick={() => openFile(t)}
-          title={t}
+          onDoubleClick={() => projectId && keepTab(projectId, t)}
+          title={preview ? `${t}\nPreview — opening another file replaces this tab. It stays once you or the agent change the file, or double-click to keep it.` : t}
+          data-preview={preview || undefined}
         >
-          <span className="truncate">{t.split('/').pop()}</span>
+          <span className={clsx('truncate', preview && 'italic')}>{t.split('/').pop()}</span>
           <button className="hidden shrink-0 text-ink-3 hover:text-ink group-hover:block" onClick={(e) => { e.stopPropagation(); closeTab(t) }}><X size={12} /></button>
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }

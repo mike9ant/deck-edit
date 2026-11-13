@@ -63,7 +63,7 @@ start_backend() {
     curl -sf "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1 && break
     sleep 0.25
   done
-  say "Server running → http://127.0.0.1:$PORT  (log: ./run.sh logs)"
+  say "Server running → http://127.0.0.1:$PORT  (log: ./run.sh logs)  · $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
 case "${1:-start}" in
@@ -72,7 +72,7 @@ case "${1:-start}" in
   start) build_backend; build_frontend; start_backend ;;
   dev)
     build_backend; start_backend
-    say "Vite dev server → http://127.0.0.1:5180"
+    say "Vite dev server → http://127.0.0.1:5180  · $(date '+%Y-%m-%d %H:%M:%S')"
     cd "$FRONTEND" && PDFEDIT_BACKEND="http://127.0.0.1:$PORT" npx vite --host 127.0.0.1
     ;;
   stop) stop ;;

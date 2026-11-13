@@ -55,6 +55,7 @@ export function PdfView({ pid, path }: { pid: string; path: string }) {
   const railW = useApp((s) => s.widths.rail)
   const setWidth = useApp((s) => s.setWidth)
   const busy = useChat((s) => !!s.busyProjects[pid])
+  const changed = useApp((s) => s.changed.includes(path))
   const [noteMode, setNoteMode] = useState(false)
   const [showResolved, setShowResolved] = useState(false)
 
@@ -87,7 +88,7 @@ export function PdfView({ pid, path }: { pid: string; path: string }) {
         <button className="icon-btn" onClick={() => setShowResolved(!showResolved)} title="Show/hide resolved notes">{showResolved ? <Eye size={15} /> : <EyeOff size={15} />}</button>
         <div className="ml-2 text-xs text-ink-3">Page {session.pageIndex + 1} / {session.doc!.numPages} · drop an image on the page to place it</div>
         <div className="ml-auto flex items-center gap-2 text-xs text-ink-3">
-          {session.saving ? 'Saving…' : 'Saved'}
+          {session.saving ? 'Saving…' : changed ? 'Saved' : null}
           <button className="tool-btn" onClick={() => void api.openExternal(pid, path)}><ExternalLink size={14} /> Open</button>
         </div>
       </div>
@@ -222,6 +223,7 @@ function PageStage({ session, noteMode, setNoteMode, showResolved, busy }: { ses
         style={{ width: w, height: h }}
         onPointerDown={(e) => {
           if (!noteMode) return
+          e.preventDefault() // the note's text box keeps the focus
           const r = e.currentTarget.getBoundingClientRect()
           setDraft({ x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height })
         }}

@@ -21,6 +21,7 @@ import { useDecks } from '../deck/deckStore'
 import { usePdfs } from '../pdf/pdfStore'
 import type { Chat, Posture, Turn, TurnEvent } from '../api/types'
 import { buildTurnContext, pendingEditCount } from './turnContext'
+import { useTextEditTick } from '../viewers/textEdits'
 import { PosturePopover } from './PosturePopover'
 import { AgentSettingsDialog } from './AgentSettings'
 import { ConversationsPanel } from './ConversationsPanel'
@@ -519,6 +520,7 @@ function Composer({ chat }: { chat: Chat }) {
   const runningTurn = chat.turns.find((t) => t.status === 'running')
   const running = !!runningTurn
   const openNotes = notes.filter((n) => n.status === 'open')
+  useTextEditTick((s) => s.n) // re-render when a text file's edit is saved or reported
   const edits = pendingEditCount(pid, activePath)
   const apiKeyAvailable = !!settings?.apiKeyAvailable
   const posture: Posture = chatPosture(chat, { auth: settings?.auth ?? 'subscription' })
