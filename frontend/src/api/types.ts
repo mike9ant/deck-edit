@@ -22,6 +22,10 @@ export interface Note {
   x: number
   y: number
   shapeName?: string
+  /** A freehand mark instead of a point: polylines of [x, y] slide fractions; x/y is then the pin's spot. */
+  strokes?: Stroke[]
+  /** Shapes the drawn mark covers (slides only). */
+  shapes?: string[]
   text: string
   author: 'user' | 'agent'
   createdAt: string
@@ -31,9 +35,13 @@ export interface Note {
   resolvedBy?: string
 }
 
+export type Stroke = [number, number][]
+
 export interface FileChange {
   path: string
-  kind: 'modified' | 'created' | 'deleted'
+  kind: 'modified' | 'created' | 'deleted' | 'moved'
+  /** For 'moved': the path before the turn. */
+  from?: string
   restorable: boolean
 }
 
@@ -127,7 +135,7 @@ export type ServerEvent =
   | { type: 'chat'; chatId: string; turnId: string; event: TurnEvent }
   | { type: 'turn'; chatId: string; turnId: string; projectId: string; status: Turn['status']; changes?: FileChange[] }
   | { type: 'chatUpdated'; chatId: string }
-  | { type: 'screenshot'; requestId: string; projectId: string; deck: string; slideIndex: number }
+  | { type: 'screenshot'; requestId: string; projectId: string; deck: string; slideIndex: number; showNotes?: boolean }
 
 export type ApprovalMode = 'manual' | 'acceptEdits' | 'plan' | 'auto'
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'

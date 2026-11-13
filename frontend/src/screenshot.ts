@@ -5,6 +5,10 @@
  * Slides are rasterized with html-to-image. Fonts registered through the
  * FontFace API (the deck's embedded fonts) aren't visible to it, so we decode
  * the embedded font parts ourselves and hand it matching @font-face CSS.
+ *
+ * With `showNotes`, the slide's open notes are drawn on top — the user's
+ * freehand marks and a tag with each note's id at its pin — so the agent can
+ * see exactly which area a note points at.
  */
 
 import { toPng } from 'html-to-image'
@@ -12,7 +16,9 @@ import { renderSlide, type PresentationData } from '@diceui/pptx-core'
 import { decodeEmbeddedFont } from '@diceui/pptx-core/fonts'
 import * as pdfjs from 'pdfjs-dist'
 import { api } from './api/client'
-import type { ServerEvent } from './api/types'
+import type { Note, ServerEvent } from './api/types'
+import { notesForSlide, useNotes } from './store/notesStore'
+import { NOTE_COLORS } from './notes/NoteDrawing'
 import { docKind, useApp } from './store/appStore'
 import { deckKey, useDecks } from './deck/deckStore'
 import { mediaCache } from './deck/SlideRender'
@@ -49,7 +55,31 @@ function embeddedFontCss(pres: PresentationData): string {
   return css
 }
 
-async function slidePng(pid: string, deck: string, slideNumber: number): Promise<string> {
+function openNotesOn(deck: string, slideId: string, n: number): Note[] {
+  return notesForSlide(useNotes.getState().notes, deck, slideId, n).filter((x) => x.status === 'open')
+}
+
+/** The notes as an SVG overlay for a w×h image: marks, then an id tag at each pin. */
+function notesSvg(notes: Note[], w: number, h: number): string {
+  const lw = Math.max(3, w / 300)
+  const fs = Math.max(12, w / 70)
+  const parts: string[] = []
+  for (const n of notes) {
+    const c = n.author === 'agent' ? NOTE_COLORS.agent : NOTE_COLORS.user
+    for (const s of n.strokes ?? []) {
+      parts.push(`<polyline points="${s.map(([x, y]) => `${x * w},${y * h}`).join(' ')}" fill="none" stroke="${c}" stroke-width="${lw}" stroke-linecap="round" stroke-linejoin="round"/>`)
+    }
+    const label = `note ${n.id}`
+    const tw = label.length * fs * 0.6 + fs
+    const px = Math.min(Math.max(0, n.x * w), w - tw)
+    const py = Math.max(fs * 1.6, n.y * h)
+    parts.push(`<rect x="${px}" y="${py - fs * 1.6}" width="${tw}" height="${fs * 1.5}" rx="${fs * 0.4}" fill="${c}"/>`)
+    parts.push(`<text x="${px + fs / 2}" y="${py - fs * 0.5}" font-family="Helvetica, Arial, sans-serif" font-size="${fs}" font-weight="700" fill="#fff">${label}</text>`)
+  }
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${parts.join('')}</svg>`
+}
+
+async function slidePng(pid: string, deck: string, slideNumber: number, showNotes: boolean): Promise<string> {
   const decks = useDecks.getState()
   const key = deckKey(pid, deck)
   if (!decks.sessions[key]) await decks.open(pid, deck)
@@ -75,6 +105,14 @@ async function slidePng(pid: string, deck: string, slideNumber: number): Promise
     await Promise.all(
       [...host.querySelectorAll('img')].map((img) => (img.complete ? null : new Promise((r) => { img.onload = img.onerror = r }))),
     )
+    const notes = showNotes ? openNotesOn(deck, s.sldIds.get(slide.id) ?? '', slideNumber) : []
+    if (notes.length) {
+      const overlay = document.createElement('div')
+      overlay.style.cssText = 'position:absolute;left:0;top:0;pointer-events:none;z-index:2147483647'
+      overlay.innerHTML = notesSvg(notes, pres.width, pres.height)
+      if (getComputedStyle(handle.element).position === 'static') handle.element.style.position = 'relative'
+      handle.element.appendChild(overlay)
+    }
     return await toPng(handle.element, { width: pres.width, height: pres.height, pixelRatio: 1.5, backgroundColor: '#ffffff', fontEmbedCSS: embeddedFontCss(pres) })
   } finally {
     handle.dispose()
@@ -82,7 +120,7 @@ async function slidePng(pid: string, deck: string, slideNumber: number): Promise
   }
 }
 
-async function pagePng(pid: string, path: string, pageNumber: number): Promise<string> {
+async function pagePng(pid: string, path: string, pageNumber: number, showNotes: boolean): Promise<string> {
   const store = usePdfs.getState()
   const key = pdfKey(pid, path)
   if (!store.sessions[key]) await store.open(pid, path)
@@ -95,6 +133,13 @@ async function pagePng(pid: string, path: string, pageNumber: number): Promise<s
   canvas.width = Math.ceil(vp.width)
   canvas.height = Math.ceil(vp.height)
   await page.render({ canvasContext: canvas.getContext('2d')!, viewport: vp }).promise
+  const notes = showNotes ? openNotesOn(path, '', pageNumber) : []
+  if (notes.length) {
+    const img = new Image()
+    img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(notesSvg(notes, canvas.width, canvas.height))}`
+    await img.decode()
+    canvas.getContext('2d')!.drawImage(img, 0, 0)
+  }
   return canvas.toDataURL('image/png')
 }
 
@@ -103,8 +148,8 @@ export async function handleScreenshot(ev: Extract<ServerEvent, { type: 'screens
   try {
     const kind = docKind(ev.deck)
     const url =
-      kind === 'pptx' ? await slidePng(ev.projectId, ev.deck, ev.slideIndex)
-        : kind === 'pdf' ? await pagePng(ev.projectId, ev.deck, ev.slideIndex)
+      kind === 'pptx' ? await slidePng(ev.projectId, ev.deck, ev.slideIndex, !!ev.showNotes)
+        : kind === 'pdf' ? await pagePng(ev.projectId, ev.deck, ev.slideIndex, !!ev.showNotes)
           : (() => { throw new Error('only .pptx and .pdf files can be rendered') })()
     await api.screenshotResult(ev.requestId, url)
   } catch (e) {

@@ -1,20 +1,26 @@
 /**
  * Sticky notes pinned on a slide/page: numbered pins at their saved position,
  * a popover to read/edit/resolve/delete, and a draft popover when the user
- * places a new note (in "add note" mode). Notes go to the agent with every
- * turn; the agent resolves them through its tools.
+ * places a new note (in "add note" mode). A drawn note (see NoteDrawing) also
+ * shows its freehand mark. Notes go to the agent with every turn; the agent
+ * resolves them through its tools.
  */
 
 import { useEffect, useRef, useState } from 'react'
 import { Check, MessageSquarePlus, RotateCcw, Trash2, X } from 'lucide-react'
 import clsx from 'clsx'
-import type { Note } from '../api/types'
+import type { Note, Stroke } from '../api/types'
 import { useNotes } from '../store/notesStore'
+import { NOTE_COLORS, StrokesSvg } from './NoteDrawing'
 
 export interface NoteDraft {
   x: number
   y: number
   shapeName?: string
+  /** A drawn note: the strokes so far (more can be added while the popover is open). */
+  strokes?: Stroke[]
+  /** Shapes the drawn mark covers. */
+  shapes?: string[]
 }
 
 interface Props {
@@ -31,8 +37,26 @@ interface Props {
 export function NotePins({ notes, width, height, showResolved, draft, onSaveDraft, onCancelDraft }: Props) {
   const [openId, setOpenId] = useState<string | null>(null)
   const visible = notes.filter((n) => showResolved || n.status === 'open')
+  // Open popovers toward the side with room (they're ~290 px wide, ≤ ~260 px tall).
+  const flipX = (x: number) => x * width + 300 > width && x * width > 300
+  const flipY = (y: number) => y * height + 270 > height && y * height > 270
+  const color = (n: Note) => (n.status === 'resolved' ? NOTE_COLORS.resolved : n.author === 'agent' ? NOTE_COLORS.agent : NOTE_COLORS.user)
   return (
     <div className="pointer-events-none absolute inset-0" style={{ width, height }}>
+      {visible.map((n) =>
+        n.strokes?.length ? (
+          <StrokesSvg
+            key={`s-${n.id}`}
+            strokes={n.strokes}
+            width={width}
+            height={height}
+            color={color(n)}
+            strokeWidth={openId === n.id ? 4.5 : 3}
+            opacity={n.status === 'resolved' ? 0.5 : openId && openId !== n.id ? 0.45 : 0.9}
+          />
+        ) : null,
+      )}
+      {draft?.strokes?.length ? <StrokesSvg strokes={draft.strokes} width={width} height={height} color={NOTE_COLORS.user} /> : null}
       {visible.map((n, i) => (
         <div key={n.id} className="absolute" style={{ left: n.x * width, top: n.y * height }}>
           <button
@@ -53,7 +77,7 @@ export function NotePins({ notes, width, height, showResolved, draft, onSaveDraf
           >
             {n.status === 'resolved' ? <Check size={12} /> : n.author === 'agent' ? 'AI' : i + 1}
           </button>
-          {openId === n.id && <NotePopover note={n} onClose={() => setOpenId(null)} flipX={n.x > 0.7} flipY={n.y > 0.6} />}
+          {openId === n.id && <NotePopover note={n} onClose={() => setOpenId(null)} flipX={flipX(n.x)} flipY={flipY(n.y)} />}
         </div>
       ))}
       {draft && (
@@ -61,7 +85,7 @@ export function NotePins({ notes, width, height, showResolved, draft, onSaveDraf
           <div className="-translate-x-1/2 -translate-y-full flex h-6 w-6 items-center justify-center rounded-full rounded-bl-none border border-amber-400 bg-note shadow-md">
             <MessageSquarePlus size={12} />
           </div>
-          <DraftPopover draft={draft} onSave={onSaveDraft} onCancel={onCancelDraft} flipX={draft.x > 0.7} flipY={draft.y > 0.6} />
+          <DraftPopover draft={draft} onSave={onSaveDraft} onCancel={onCancelDraft} flipX={flipX(draft.x)} flipY={flipY(draft.y)} />
         </div>
       )}
     </div>
@@ -76,7 +100,8 @@ function DraftPopover({ draft, onSave, onCancel, flipX, flipY }: { draft: NoteDr
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
-  useEffect(() => ref.current?.focus(), [])
+  // Back to the text after each stroke, so drawing then typing just works.
+  useEffect(() => ref.current?.focus(), [draft.strokes?.length])
   const save = async () => {
     if (!text.trim()) return
     setBusy(true)
@@ -85,7 +110,10 @@ function DraftPopover({ draft, onSave, onCancel, flipX, flipY }: { draft: NoteDr
   }
   return (
     <div className={popoverPos(flipX, flipY)} onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-      <div className="mb-1 text-xs text-ink-3">Note for the agent{draft.shapeName ? ` · on “${draft.shapeName}”` : ''}</div>
+      <div className="mb-1 text-xs text-ink-3">
+        Note for the agent{draft.strokes?.length ? ' · on the area you marked' : draft.shapeName ? ` · on “${draft.shapeName}”` : ''}
+      </div>
+      {draft.strokes?.length ? <MarkInfo shapes={draft.shapes} hint /> : null}
       <textarea
         ref={ref}
         className="h-20 w-full resize-none rounded border border-hair p-2 text-sm outline-none focus:border-accent"
@@ -115,10 +143,11 @@ function NotePopover({ note, onClose, flipX, flipY }: { note: Note; onClose(): v
         <span className={clsx('rounded px-1.5 py-0.5 font-medium', note.author === 'agent' ? 'bg-violet-100 text-violet-800' : 'bg-amber-100 text-amber-900')}>
           {note.author === 'agent' ? 'Agent' : 'You'}
         </span>
-        {note.shapeName && <span className="truncate">on “{note.shapeName}”</span>}
+        {note.strokes?.length ? <span className="truncate">drawn mark</span> : note.shapeName && <span className="truncate">on “{note.shapeName}”</span>}
         <span className="ml-auto">{new Date(note.createdAt).toLocaleString()}</span>
         <button className="text-ink-3 hover:text-ink" onClick={onClose}><X size={14} /></button>
       </div>
+      {note.strokes?.length ? <MarkInfo shapes={note.shapes} /> : null}
       {editing ? (
         <textarea className="h-20 w-full resize-none rounded border border-hair p-2 outline-none focus:border-accent" value={text} onChange={(e) => setText(e.target.value)} autoFocus />
       ) : (
@@ -147,6 +176,15 @@ function NotePopover({ note, onClose, flipX, flipY }: { note: Note; onClose(): v
           </>
         )}
       </div>
+    </div>
+  )
+}
+
+function MarkInfo({ shapes, hint }: { shapes?: string[]; hint?: boolean }) {
+  return (
+    <div className="mb-2 text-[11px] text-ink-3">
+      {shapes?.length ? <div className="line-clamp-3">Covers: {shapes.join(' · ')}</div> : null}
+      {hint && <div>Draw more strokes to extend the mark.</div>}
     </div>
   )
 }

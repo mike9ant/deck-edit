@@ -5,7 +5,7 @@
  *   resize them (8 handles; pictures keep their aspect ratio on corners),
  * - edit existing text in place (double-click / Enter), keeping formatting,
  * - copy/paste/duplicate/delete shapes, drop or paste images,
- * - pin notes for the agent.
+ * - pin notes for the agent, at a point or as a freehand mark around an area.
  *
  * Every change is one `applyEdit` operation (see deckStore), so it is
  * undoable and saved straight into the .pptx.
@@ -21,6 +21,8 @@ import { nodeText, short } from './deckModel'
 import { getClipboard, setClipboard } from './clipboard'
 import { fitSize, prepareImage } from './images'
 import { NotePins, type NoteDraft } from '../notes/NotePins'
+import { DrawLayer, pinFor, strokesBox, type Box } from '../notes/NoteDrawing'
+import type { Stroke } from '../api/types'
 import { notesForSlide, useNotes } from '../store/notesStore'
 import { useApp } from '../store/appStore'
 import { api } from '../api/client'
@@ -92,6 +94,13 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
   const slideIdStable = session.sldIds.get(slide.id) ?? ''
   const allNotes = useNotes((s) => s.notes)
   const slideNotes = notesForSlide(allNotes, session.path, slideIdStable, slideNo)
+  const noteTool = useNotes((s) => s.tool)
+  const drawing = noteMode && noteTool === 'draw'
+
+  // A half-made note goes away when note mode ends or the tool changes.
+  useEffect(() => {
+    setDraft(null)
+  }, [noteMode, noteTool])
 
   // Leave text editing / drafts when the slide changes underneath.
   useEffect(() => {
@@ -437,6 +446,38 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     },
   })
 
+  // ── drawn notes ─────────────────────────────────────────────────────────
+  /** The shapes a mark covers, most-covered first (skips backdrops the mark merely sits on). */
+  const shapesIn = (b: Box): string[] => {
+    const r = { x: b.x1 * pres.width, y: b.y1 * pres.height, w: (b.x2 - b.x1) * pres.width, h: (b.y2 - b.y1) * pres.height }
+    const markArea = Math.max(1, r.w * r.h)
+    const scored = slide.nodes
+      .map((n) => {
+        const ix = Math.max(0, Math.min(r.x + r.w, n.position.x + n.size.w) - Math.max(r.x, n.position.x))
+        const iy = Math.max(0, Math.min(r.y + r.h, n.position.y + n.size.h) - Math.max(r.y, n.position.y))
+        const area = Math.max(1, n.size.w * n.size.h)
+        const inter = ix * iy
+        return { n, ofShape: inter / area, ofMark: inter / markArea, area }
+      })
+      .filter((x) => x.ofShape >= 0.3 || (x.ofMark >= 0.5 && x.area <= markArea * 4))
+      .sort((a, b) => b.ofShape - a.ofShape)
+    return scored.slice(0, 6).map(({ n }) => {
+      const t = short(nodeText(n), 40)
+      return t ? `"${label(n)}" — “${t}”` : `"${label(n)}"`
+    })
+  }
+  const addStroke = (st: Stroke) => {
+    const strokes = [...(draft?.strokes ?? []), st]
+    setDraft({ ...pinFor(strokes), strokes, shapes: shapesIn(strokesBox(strokes)) })
+  }
+  /** A tap while drawing pins the note at that point, like the pin tool. */
+  const tapPin = (p: { x: number; y: number }) => {
+    if (draft?.strokes?.length) return
+    const sx = p.x * pres.width, sy = p.y * pres.height
+    const n = [...slide.nodes].reverse().find((n) => sx >= n.position.x && sx <= n.position.x + n.size.w && sy >= n.position.y && sy <= n.position.y + n.size.h)
+    setDraft({ x: p.x, y: p.y, shapeName: n ? label(n) : undefined })
+  }
+
   const saveDraft = async (text: string) => {
     if (!draft) return
     let sid = slideIdStable
@@ -445,7 +486,10 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
       await saveNow(key)
       sid = useDecks.getState().sessions[key]?.sldIds.get(slide.id) ?? ''
     }
-    await useNotes.getState().add({ deck: session.path, slideId: sid, slideIndex: slideNo, x: draft.x, y: draft.y, shapeName: draft.shapeName, text })
+    await useNotes.getState().add({
+      deck: session.path, slideId: sid, slideIndex: slideNo, x: draft.x, y: draft.y,
+      shapeName: draft.shapeName, strokes: draft.strokes, shapes: draft.shapes, text,
+    })
     setDraft(null)
     setNoteMode(false)
   }
@@ -515,6 +559,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
             <div className="absolute border border-accent bg-accent/10" style={{ left: marquee.x * scale, top: marquee.y * scale, width: marquee.w * scale, height: marquee.h * scale }} />
           )}
         </div>
+        {drawing && <DrawLayer width={stageW} height={stageH} onStroke={addStroke} onTap={tapPin} />}
         <NotePins
           notes={slideNotes}
           width={stageW}

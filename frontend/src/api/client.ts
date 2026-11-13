@@ -1,6 +1,6 @@
 /** Thin typed wrappers over the backend's /api endpoints. */
 
-import type { AgentSettings, AgentStatus, ApprovalMode, Chat, ChatSummary, ConversationDetail, ConversationHit, ModelOption, Note, Posture, Project, TreeNode, TurnContext } from './types'
+import type { AgentSettings, AgentStatus, ApprovalMode, Chat, ChatSummary, ConversationDetail, ConversationHit, ModelOption, Note, Posture, Project, Stroke, TreeNode, TurnContext } from './types'
 
 /** Identifies this browser tab, so the watcher event for our own save can be skipped. */
 export const CLIENT_ID: string = (() => {
@@ -106,7 +106,7 @@ export const api = {
   notes: (pid: string) => json<Note[]>('GET', `/projects/${pid}/notes`),
   addNote: (
     pid: string,
-    n: { deck: string; slideId: string; slideIndex: number; x: number; y: number; shapeName?: string; text: string },
+    n: { deck: string; slideId: string; slideIndex: number; x: number; y: number; shapeName?: string; strokes?: Stroke[]; shapes?: string[]; text: string },
   ) => json<Note>('POST', `/projects/${pid}/notes`, n),
   updateNote: (pid: string, id: string, body: Partial<Pick<Note, 'text' | 'x' | 'y' | 'status' | 'slideIndex' | 'slideId'>>) =>
     json<Note>('PATCH', `/projects/${pid}/notes/${id}`, body),

@@ -113,7 +113,7 @@ fn tool_defs() -> Value {
     json!([
         {
             "name": "list_notes",
-            "description": "List the notes pinned on slides/pages in this project. Each note has an id, deck path, current 1-based slide number, slideId, position (x/y as fractions of the slide), the shape it was pinned near, its text, author and status.",
+            "description": "List the notes pinned on slides/pages in this project. Each note has an id, deck path, current 1-based slide number, slideId, position (x/y as fractions of the slide), the shape it was pinned near, its text, author and status. A note the user drew freehand (circled or marked an area) also has `strokes` (polylines of [x, y] slide fractions), `region` (its bounding box as fractions, and whether it's a closed loop) and `shapes` (the shapes the mark covers); `where` describes it in words.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -187,7 +187,8 @@ fn tool_defs() -> Value {
                 "type": "object",
                 "properties": {
                     "deck": { "type": "string", "description": "Deck path relative to the project folder." },
-                    "slide_number": { "type": "integer", "description": "1-based." }
+                    "slide_number": { "type": "integer", "description": "1-based." },
+                    "show_notes": { "type": "boolean", "description": "Overlay the open notes on this slide — pins and the marks the user drew — to see exactly which area a note points at. Default false (the clean slide)." }
                 },
                 "required": ["deck", "slide_number"]
             }
@@ -208,10 +209,24 @@ async fn call_tool(state: &AppState, chat_id: &str, name: &str, args: &Value) ->
                 "" => "open".to_string(),
                 other => other.to_string(),
             };
-            let list: Vec<Note> = notes::with_current_index(state, &pid, state.notes.all(&pid))
+            let list: Vec<Value> = notes::with_current_index(state, &pid, state.notes.all(&pid))
                 .into_iter()
                 .filter(|n| deck.is_empty() || n.deck == deck)
                 .filter(|n| status == "all" || n.status == status)
+                .map(|n| {
+                    let place = n.describe_place();
+                    let region = n.region().map(|r| {
+                        json!({ "x1": r.x1, "y1": r.y1, "x2": r.x2, "y2": r.y2, "circled": r.closed })
+                    });
+                    let mut v = serde_json::to_value(&n).unwrap_or_default();
+                    if let Some(o) = v.as_object_mut() {
+                        o.insert("where".into(), json!(place));
+                        if let Some(r) = region {
+                            o.insert("region".into(), r);
+                        }
+                    }
+                    v
+                })
                 .collect();
             text_result(serde_json::to_string_pretty(&list).unwrap_or_default(), false)
         }
@@ -255,6 +270,8 @@ async fn call_tool(state: &AppState, chat_id: &str, name: &str, args: &Value) ->
                 x: args.get("x").and_then(|v| v.as_f64()).unwrap_or(0.9).clamp(0.0, 1.0),
                 y: args.get("y").and_then(|v| v.as_f64()).unwrap_or(0.1).clamp(0.0, 1.0),
                 shape_name: None,
+                strokes: Vec::new(),
+                shapes: Vec::new(),
                 text: s("text"),
                 author: "agent".into(),
                 created_at: chrono::Utc::now().to_rfc3339(),
@@ -384,13 +401,14 @@ async fn call_tool(state: &AppState, chat_id: &str, name: &str, args: &Value) ->
                 "projectId": pid,
                 "deck": deck,
                 "slideIndex": n,
+                "showNotes": args.get("show_notes").and_then(|v| v.as_bool()).unwrap_or(false),
             }));
             match tokio::time::timeout(Duration::from_secs(45), rx).await {
                 Ok(Ok(data_url)) => {
                     if let Some(b64) = data_url.strip_prefix("data:image/png;base64,") {
                         json!({ "content": [
                             { "type": "image", "data": b64, "mimeType": "image/png" },
-                            { "type": "text", "text": format!("{deck} slide {n} as rendered in the app.") }
+                            { "type": "text", "text": format!("{deck} slide {n} as rendered in the app{}.", if args.get("show_notes").and_then(|v| v.as_bool()).unwrap_or(false) { ", with the open notes overlaid (pins and drawn marks)" } else { "" }) }
                         ], "isError": false })
                     } else {
                         text_result(data_url, true)

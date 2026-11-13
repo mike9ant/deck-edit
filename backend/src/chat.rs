@@ -573,12 +573,10 @@ fn compose_prompt(state: &AppState, project_id: &str, root: &Path, text: &str, c
     if !notes.is_empty() {
         out.push_str("Open notes the user pinned on slides (address the ones relevant to this request; call resolve_note with a one-line summary for each note you handle):\n");
         for n in notes.iter().take(30) {
-            let near = n.shape_name.as_deref().map(|s| format!(" near \"{s}\"")).unwrap_or_default();
-            let unit = if n.deck.to_lowercase().ends_with(".pdf") { "page" } else { "slide" };
-            out.push_str(&format!(
-                "- [note {}] {} {unit} {}{near} (by {}): \"{}\"\n",
-                n.id, n.deck, n.slide_index, n.author, n.text
-            ));
+            out.push_str(&format!("- [note {}] {} (by {}): \"{}\"\n", n.id, n.describe_place(), n.author, n.text));
+        }
+        if notes.iter().take(30).any(|n| !n.strokes.is_empty()) {
+            out.push_str("(Notes with an area were drawn freehand on the slide — the request applies to what's inside the mark. `screenshot_slide` with show_notes=true shows the marks.)\n");
         }
     }
     out
@@ -596,7 +594,7 @@ pub fn system_prompt(state: &AppState) -> String {
 How the app works:
 - The user sees the deck live: whenever a .pptx/.pdf file in the folder changes on disk, the app reloads it within a second. So edit decks IN PLACE and save to the same path — the user watches your changes appear. Save after each logical change (e.g. per slide) so progress shows up while you work.
 - The user also edits slides themselves in the app (text, moving/resizing boxes and images, reordering/duplicating slides, dropping in images). Their edits are saved straight into the file before your turn; each message lists them. Re-open the file at the start of every turn and never overwrite their edits with stale state.
-- The user pins notes on slides for you. Open notes are listed in the context block. Use the `deck` MCP tools: `list_notes`, `resolve_note` (always resolve a note you've addressed, with a one-line summary of what you did), `add_note` (leave a question/remark for the user on a slide), `get_user_view` (what the user is looking at now) and `screenshot_slide` (renders a slide exactly as the app shows it — use it to check your visual result after significant layout changes).
+- The user pins notes on slides for you — either at a point, or by drawing freehand (circling or marking an area; the note then gives the area in % of the slide and the shapes it covers: focus your change there). Open notes are listed in the context block. Use the `deck` MCP tools: `list_notes`, `resolve_note` (always resolve a note you've addressed, with a one-line summary of what you did), `add_note` (leave a question/remark for the user on a slide), `get_user_view` (what the user is looking at now) and `screenshot_slide` (renders a slide exactly as the app shows it — use it to check your visual result after significant layout changes).
 - Before every turn the app snapshots the folder; the user can revert your whole turn with one click. You don't need to make your own backups.
 
 Editing PowerPoint files:

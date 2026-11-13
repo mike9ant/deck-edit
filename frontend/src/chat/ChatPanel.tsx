@@ -338,8 +338,10 @@ function TurnView({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; draft
           </div>
           {turn.changes.map((c) => (
             <button key={c.path} className={clsx('flex w-full items-center gap-1.5 truncate rounded px-1 py-0.5 text-left hover:bg-white', turn.reverted && 'line-through opacity-60')} onClick={() => c.kind !== 'deleted' && openFile(c.path)}>
-              <span className={clsx('w-14 shrink-0 text-[10px] uppercase', c.kind === 'created' ? 'text-emerald-700' : c.kind === 'deleted' ? 'text-red-700' : 'text-amber-700')}>{c.kind}</span>
-              <span className="truncate">{c.path}</span>
+              <span className={clsx('w-14 shrink-0 text-[10px] uppercase', c.kind === 'created' ? 'text-emerald-700' : c.kind === 'deleted' ? 'text-red-700' : c.kind === 'moved' ? 'text-sky-700' : 'text-amber-700')}>{c.kind}</span>
+              <span className="truncate" title={c.from ? `${c.from} → ${c.path}` : c.path}>
+                {c.from ? <><span className="text-ink-3">{c.from} → </span>{c.path}</> : c.path}
+              </span>
             </button>
           ))}
         </div>

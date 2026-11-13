@@ -4,9 +4,15 @@ import { create } from 'zustand'
 import { api } from '../api/client'
 import type { Note } from '../api/types'
 
+/** How a new note is placed: a pin at a point, or a freehand mark around an area. */
+export type NoteTool = 'pin' | 'draw'
+const TOOL_KEY = 'pptxedit-note-tool'
+
 interface NotesState {
   pid: string | null
   notes: Note[]
+  tool: NoteTool
+  setTool(t: NoteTool): void
   load(pid: string): Promise<void>
   add(n: Parameters<typeof api.addNote>[1]): Promise<Note | undefined>
   update(id: string, body: Parameters<typeof api.updateNote>[2]): Promise<void>
@@ -16,6 +22,11 @@ interface NotesState {
 export const useNotes = create<NotesState>((set, get) => ({
   pid: null,
   notes: [],
+  tool: globalThis.localStorage?.getItem(TOOL_KEY) === 'draw' ? 'draw' : 'pin',
+  setTool(tool) {
+    globalThis.localStorage?.setItem(TOOL_KEY, tool)
+    set({ tool })
+  },
   async load(pid) {
     const notes = await api.notes(pid)
     if (get().pid === pid || get().pid === null) set({ pid, notes })

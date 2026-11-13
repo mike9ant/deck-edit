@@ -58,7 +58,11 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
   parsed defensively, see `backend/src/conversations.rs`). Found on macOS, Windows (incl. Microsoft
   Store installs) and Linux; Claude Code's `CLAUDE_CONFIG_DIR` is honored, and
   `PDFEDIT_CLAUDE_DESKTOP_DIR` adds another desktop-app folder. Agent settings shows what was found.
-- **Notes for the agent** — pin a note anywhere on a slide or page ("Note" in the toolbar).
+- **Notes for the agent** — "Note" in the toolbar; its ▾ menu picks how to place one:
+  *Pin at a point* (click), or *Draw on the slide* — circle, underline or arrow at an area
+  freehand (several strokes per note; a single click still pins). A drawn note reaches the agent
+  as the area it covers (% of the slide, circled vs. marked) plus the shapes under it, and
+  `screenshot_slide` with `show_notes` shows the agent the marks themselves.
   Open notes are sent with every message; the agent resolves them (you see them flip to
   resolved with its one-line summary) and can pin its own notes for you.
 - **Agent chats** — tabs of Claude Code conversations. Each message automatically tells

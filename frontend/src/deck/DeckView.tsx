@@ -5,12 +5,13 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { ExternalLink, Eye, EyeOff, Loader2, MessageSquarePlus, Redo2, Type, Undo2, Sparkles, X } from 'lucide-react'
+import { ExternalLink, Eye, EyeOff, Loader2, Redo2, Type, Undo2, Sparkles, X } from 'lucide-react'
 import clsx from 'clsx'
 import { useDecks, deckKey } from './deckStore'
 import { SlideRail } from './SlideRail'
 import { SlideEditor } from './SlideEditor'
 import { NotesPane } from './NotesPane'
+import { NoteToolButton } from '../notes/NoteDrawing'
 import { Splitter } from '../components/Splitter'
 import { useApp } from '../store/appStore'
 import { useChat } from '../store/chatStore'
@@ -77,9 +78,7 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
         <button className="icon-btn" title="Redo (⇧⌘Z)" disabled={!session.redo.length || busy} onClick={() => void redo(key)}><Redo2 size={16} /></button>
         <div className="mx-1 h-5 w-px bg-hair" />
         <button className="tool-btn" disabled={busy} onClick={() => actions.current.addTextBox()} title="Add a text box"><Type size={15} /> Text</button>
-        <button className={clsx('tool-btn', noteMode && 'bg-amber-100 text-amber-900')} onClick={() => setNoteMode(!noteMode)} title="Pin a note for the agent (click on the slide)">
-          <MessageSquarePlus size={15} /> Note
-        </button>
+        <NoteToolButton active={noteMode} onToggle={() => setNoteMode(!noteMode)} />
         <button className="icon-btn" onClick={() => setShowResolved(!showResolved)} title={showResolved ? 'Hide resolved notes' : 'Show resolved notes'}>
           {showResolved ? <Eye size={15} /> : <EyeOff size={15} />}
         </button>

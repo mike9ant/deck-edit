@@ -6,11 +6,12 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { degrees } from 'pdf-lib'
-import { CopyPlus, ExternalLink, Eye, EyeOff, Loader2, MessageSquarePlus, Redo2, Trash2, Undo2 } from 'lucide-react'
+import { CopyPlus, ExternalLink, Eye, EyeOff, Loader2, Redo2, Trash2, Undo2 } from 'lucide-react'
 import clsx from 'clsx'
 import { usePdfs, pdfKey, type PdfSession } from './pdfStore'
 import { Splitter } from '../components/Splitter'
 import { NotePins, type NoteDraft } from '../notes/NotePins'
+import { DrawLayer, NoteToolButton, pinFor } from '../notes/NoteDrawing'
 import { notesForSlide, useNotes } from '../store/notesStore'
 import { useApp } from '../store/appStore'
 import { useChat } from '../store/chatStore'
@@ -82,7 +83,7 @@ export function PdfView({ pid, path }: { pid: string; path: string }) {
         <button className="icon-btn" title="Undo (⌘Z)" disabled={!session.undo.length || busy} onClick={() => void undo(key)}><Undo2 size={16} /></button>
         <button className="icon-btn" title="Redo (⇧⌘Z)" disabled={!session.redo.length || busy} onClick={() => void redo(key)}><Redo2 size={16} /></button>
         <div className="mx-1 h-5 w-px bg-hair" />
-        <button className={clsx('tool-btn', noteMode && 'bg-amber-100 text-amber-900')} onClick={() => setNoteMode(!noteMode)}><MessageSquarePlus size={15} /> Note</button>
+        <NoteToolButton active={noteMode} onToggle={() => setNoteMode(!noteMode)} />
         <button className="icon-btn" onClick={() => setShowResolved(!showResolved)} title="Show/hide resolved notes">{showResolved ? <Eye size={15} /> : <EyeOff size={15} />}</button>
         <div className="ml-2 text-xs text-ink-3">Page {session.pageIndex + 1} / {session.doc!.numPages} · drop an image on the page to place it</div>
         <div className="ml-auto flex items-center gap-2 text-xs text-ink-3">
@@ -166,6 +167,9 @@ function PageStage({ session, noteMode, setNoteMode, showResolved, busy }: { ses
   const [aspect, setAspect] = useState(0.5625)
   const [draft, setDraft] = useState<NoteDraft | null>(null)
   const notes = useNotes((s) => s.notes)
+  const noteTool = useNotes((s) => s.tool)
+  const drawing = noteMode && noteTool === 'draw'
+  useEffect(() => setDraft(null), [noteMode, noteTool, session.pageIndex])
   useLayoutEffect(() => {
     const el = wrap.current!
     const ro = new ResizeObserver(() => setBox({ w: el.clientWidth, h: el.clientHeight }))
@@ -223,6 +227,17 @@ function PageStage({ session, noteMode, setNoteMode, showResolved, busy }: { ses
         }}
       >
         <PageCanvas doc={session.doc!} index={session.pageIndex} width={w} version={session.version} />
+        {drawing && (
+          <DrawLayer
+            width={w}
+            height={h}
+            onStroke={(st) => setDraft((d) => {
+              const strokes = [...(d?.strokes ?? []), st]
+              return { ...pinFor(strokes), strokes }
+            })}
+            onTap={(p) => setDraft((d) => (d?.strokes?.length ? d : p))}
+          />
+        )}
         <NotePins
           notes={notesForSlide(notes, session.path, '', pageNo)}
           width={w}
@@ -231,7 +246,7 @@ function PageStage({ session, noteMode, setNoteMode, showResolved, busy }: { ses
           draft={draft}
           onCancelDraft={() => setDraft(null)}
           onSaveDraft={async (text) => {
-            await useNotes.getState().add({ deck: session.path, slideId: '', slideIndex: pageNo, x: draft!.x, y: draft!.y, text })
+            await useNotes.getState().add({ deck: session.path, slideId: '', slideIndex: pageNo, x: draft!.x, y: draft!.y, strokes: draft!.strokes, text })
             setDraft(null)
             setNoteMode(false)
           }}
