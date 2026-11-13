@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; }
+body { margin: 0; -webkit-font-smoothing: antialiased; }
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-[#3254c4] disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-ink-2 hover:bg-paper disabled:opacity-50;
+  }
+  .icon-btn {
+    @apply inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-2 hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-35;
+  }
+  .tool-btn {
+    @apply inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-ink-2 hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .input {
+    @apply rounded-md border border-hair px-2.5 py-1.5 text-sm outline-none focus:border-accent;
+  }
+}
+
+/* The rendered slide must never show a text caret or selection unless it's being edited. */
+[data-slide-stage] [contenteditable='true'] { cursor: text; }
+[data-slide-stage] { user-select: none; }
