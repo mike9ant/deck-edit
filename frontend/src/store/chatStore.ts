@@ -35,6 +35,9 @@ interface ChatState {
   update(chatId: string, body: { title?: string } & Partial<Posture>): Promise<void>
   /** Switch the approval mode; a running turn switches too unless plan is involved. */
   setMode(chatId: string, mode: ApprovalMode): Promise<void>
+  /** Text another panel wants added to the composer (consumed by the composer). */
+  composerInsert: string | null
+  insertIntoComposer(text: string | null): void
   /** chat id → the mode governing its running turn */
   runningModes: Record<string, ApprovalMode>
   remove(chatId: string): Promise<void>
@@ -58,6 +61,12 @@ export const useChat = create<ChatState>((set, get) => {
     drafts: {},
     busyProjects: {},
     runningModes: {},
+    composerInsert: null,
+    // Inserts made while the composer isn't on screen (e.g. several quotes
+    // from the Conversations panel) accumulate until it takes them.
+    insertIntoComposer(text) {
+      set({ composerInsert: text === null ? null : (get().composerInsert ?? '') + text })
+    },
 
     async load(pid) {
       let saved: { openIds: string[]; activeId: string | null } = { openIds: [], activeId: null }

@@ -1,6 +1,6 @@
 /** Thin typed wrappers over the backend's /api endpoints. */
 
-import type { AgentSettings, AgentStatus, ApprovalMode, Chat, ChatSummary, ModelOption, Note, Posture, Project, TreeNode, TurnContext } from './types'
+import type { AgentSettings, AgentStatus, ApprovalMode, Chat, ChatSummary, ConversationDetail, ConversationHit, ModelOption, Note, Posture, Project, TreeNode, TurnContext } from './types'
 
 /** Identifies this browser tab, so the watcher event for our own save can be skipped. */
 export const CLIENT_ID: string = (() => {
@@ -135,5 +135,10 @@ export const api = {
   settings: () => json<AgentSettings>('GET', '/settings'),
   updateSettings: (body: Partial<Omit<AgentSettings, 'apiKeyStored' | 'apiKeyAvailable'>>) => json<AgentSettings>('PUT', '/settings', body),
   setApiKey: (key: string) => json<AgentSettings>('PUT', '/settings/api-key', { key }),
+  conversations: (q: string, source?: string) =>
+    json<ConversationHit[]>('GET', `/conversations?limit=200&q=${encodeURIComponent(q)}${source ? `&source=${source}` : ''}`),
+  conversation: (id: string) => json<ConversationDetail>('GET', `/conversations/${encodeURIComponent(id)}`),
+  importConversationOutput: (id: string, projectId: string, path: string) =>
+    json<{ path: string }>('POST', `/conversations/${encodeURIComponent(id)}/import`, { projectId, path }),
   screenshotResult: (rid: string, dataUrl: string) => json('POST', `/screenshots/${rid}`, { dataUrl }),
 }

@@ -8,6 +8,7 @@ use serde_json::Value;
 use tokio::sync::{broadcast, oneshot};
 
 use crate::chat::ChatRegistry;
+use crate::conversations::ConversationIndex;
 use crate::notes::NotesStore;
 use crate::permissions::Permissions;
 use crate::projects::ProjectStore;
@@ -31,6 +32,8 @@ pub struct AppState {
     pub perms: Arc<Permissions>,
     pub notes: Arc<NotesStore>,
     pub settings: Arc<SettingsStore>,
+    /// The user's past Claude conversations on this machine (CLI, desktop Code, Cowork).
+    pub conversations: Arc<ConversationIndex>,
     /// project id → what the user is looking at (deck, slide, selection),
     /// reported by the frontend; read by the agent's `get_user_view` tool.
     pub views: Arc<Mutex<HashMap<String, Value>>>,

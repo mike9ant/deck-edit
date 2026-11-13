@@ -9,6 +9,7 @@ mod backups;
 mod chat;
 mod chat_images;
 mod claude_cli;
+mod conversations;
 mod error;
 mod events;
 mod files;
@@ -85,6 +86,7 @@ async fn main() -> anyhow::Result<()> {
         perms: Arc::new(permissions::Permissions::default()),
         notes: Arc::new(notes::NotesStore::new(&data_dir)),
         settings: Arc::new(settings::SettingsStore::load(&data_dir)),
+        conversations: Arc::new(conversations::ConversationIndex::default()),
         views: Arc::new(Mutex::new(HashMap::new())),
         deck_maps: Arc::new(Mutex::new(HashMap::new())),
         screenshots: Arc::new(Mutex::new(HashMap::new())),
@@ -99,7 +101,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(chat::routes())
         .merge(permissions::routes())
         .merge(mcp::routes())
-        .merge(settings::routes());
+        .merge(settings::routes())
+        .merge(conversations::routes());
 
     let dist = repo_root().join("frontend/dist");
     let static_files = ServeDir::new(&dist).not_found_service(ServeFile::new(dist.join("index.html")));

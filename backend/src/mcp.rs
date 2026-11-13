@@ -84,7 +84,7 @@ async fn mcp(
             )
         }
         "ping" => ok(id, json!({})),
-        "tools/list" => ok(id, json!({ "tools": tool_defs() })),
+        "tools/list" => ok(id, json!({ "tools": with_annotations(tool_defs()) })),
         "tools/call" => {
             let name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
@@ -93,6 +93,20 @@ async fn mcp(
         other => err(id, -32601, &format!("method {other} not supported")),
     };
     Json(resp).into_response()
+}
+
+/// Mark the tools that only read as `readOnlyHint` — Claude Code's plan mode
+/// blocks MCP tools it can't tell are read-only.
+fn with_annotations(mut tools: Value) -> Value {
+    const READ_ONLY: [&str; 5] = ["list_notes", "get_user_view", "screenshot_slide", "search_conversations", "read_conversation"];
+    if let Some(arr) = tools.as_array_mut() {
+        for t in arr {
+            let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+            let ro = READ_ONLY.contains(&name.as_str());
+            t["annotations"] = json!({ "readOnlyHint": ro, "destructiveHint": false, "openWorldHint": false });
+        }
+    }
+    tools
 }
 
 fn tool_defs() -> Value {
@@ -139,6 +153,32 @@ fn tool_defs() -> Value {
             "name": "get_user_view",
             "description": "What the user is looking at right now: open deck, current slide number, selected shapes.",
             "inputSchema": { "type": "object", "properties": {} }
+        },
+        {
+            "name": "search_conversations",
+            "description": "Search the user's past Claude conversations on this machine — Claude Code CLI sessions, Claude desktop Code sessions and Cowork sessions — by words in their title, folders or full transcript. Returns newest first with ids, titles, dates, folders and matching snippets. Empty query lists recent ones.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string", "description": "Words that must all appear (case-insensitive). Empty = recent conversations." },
+                    "source": { "type": "string", "enum": ["cowork", "desktop", "cli"], "description": "Limit to one source." },
+                    "limit": { "type": "integer", "description": "Default 15." }
+                }
+            }
+        },
+        {
+            "name": "read_conversation",
+            "description": "Read one past conversation found with search_conversations: the user's messages and Claude's replies (tool calls as one-line summaries), plus files a Cowork session produced. With `query`, returns only the messages around matches. Long transcripts are paged with `offset`.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Conversation id, e.g. cowork:… or cli:…" },
+                    "query": { "type": "string", "description": "Only return messages near this text (with one message of context either side)." },
+                    "offset": { "type": "integer", "description": "First message index to return (default 0)." },
+                    "max_chars": { "type": "integer", "description": "Default 40000." }
+                },
+                "required": ["id"]
+            }
         },
         {
             "name": "screenshot_slide",
@@ -230,6 +270,100 @@ async fn call_tool(state: &AppState, chat_id: &str, name: &str, args: &Value) ->
                 }
                 Err(e) => text_result(e.to_string(), true),
             }
+        }
+        "search_conversations" => {
+            let query = s("query");
+            let source = s("source");
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(15) as usize;
+            let st = state.clone();
+            let hits = tokio::task::spawn_blocking(move || {
+                crate::conversations::search(&st, &query, Some(source.as_str()).filter(|x| !x.is_empty()), limit)
+            })
+            .await
+            .unwrap_or_default();
+            if hits.is_empty() {
+                return text_result("No matching conversations.".into(), false);
+            }
+            let mut out = String::new();
+            for h in hits {
+                let c = &h.info;
+                let when = chrono::DateTime::from_timestamp_millis(c.last_activity_at as i64)
+                    .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                    .unwrap_or_default();
+                out.push_str(&format!("- id {} [{}] \"{}\" — last active {when}", c.id, c.source, c.title));
+                if !c.folders.is_empty() {
+                    out.push_str(&format!(" — folders: {}", c.folders.join(", ")));
+                }
+                if c.output_count > 0 {
+                    out.push_str(&format!(" — {} output file(s)", c.output_count));
+                }
+                out.push('\n');
+                for sn in h.snippets {
+                    out.push_str(&format!("    · {} (msg {}): {}\n", sn.role, sn.message, sn.text));
+                }
+            }
+            text_result(out, false)
+        }
+        "read_conversation" => {
+            let id = s("id");
+            let query = s("query").to_lowercase();
+            let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let max = args.get("max_chars").and_then(|v| v.as_u64()).unwrap_or(40_000) as usize;
+            let st = state.clone();
+            let res = tokio::task::spawn_blocking(move || crate::conversations::read_json_value(&st, &id)).await;
+            let v = match res {
+                Ok(Ok(v)) => v,
+                Ok(Err(e)) => return text_result(e.to_string(), true),
+                Err(e) => return text_result(e.to_string(), true),
+            };
+            let msgs = v["messages"].as_array().cloned().unwrap_or_default();
+            let keep: Vec<usize> = if query.is_empty() {
+                (offset..msgs.len()).collect()
+            } else {
+                let mut set = std::collections::BTreeSet::new();
+                for (i, m) in msgs.iter().enumerate() {
+                    if m["text"].as_str().unwrap_or("").to_lowercase().contains(&query) {
+                        set.extend(i.saturating_sub(1)..=(i + 1).min(msgs.len().saturating_sub(1)));
+                    }
+                }
+                set.into_iter().filter(|i| *i >= offset).collect()
+            };
+            let info = &v["info"];
+            let mut out = format!(
+                "Conversation {} [{}] \"{}\" — {} messages{}\n",
+                info["id"].as_str().unwrap_or(""),
+                info["source"].as_str().unwrap_or(""),
+                info["title"].as_str().unwrap_or(""),
+                msgs.len(),
+                if query.is_empty() { String::new() } else { format!(", {} shown around \"{query}\"", keep.len()) }
+            );
+            if let Some(outputs) = v["outputs"].as_array().filter(|a| !a.is_empty()) {
+                out.push_str("Output files: ");
+                out.push_str(&outputs.iter().filter_map(|o| o["path"].as_str()).collect::<Vec<_>>().join(", "));
+                out.push('\n');
+            }
+            let mut last = None;
+            let mut truncated_at = None;
+            for i in keep {
+                let m = &msgs[i];
+                if last.is_some_and(|l: usize| i > l + 1) {
+                    out.push_str("\n[…]\n");
+                }
+                last = Some(i);
+                let mut block = format!("\n### {} (msg {i})\n{}\n", m["role"].as_str().unwrap_or(""), m["text"].as_str().unwrap_or(""));
+                if let Some(t) = m["tools"].as_array().filter(|t| !t.is_empty()) {
+                    block.push_str(&format!("(tools: {})\n", t.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join("; ")));
+                }
+                if out.len() + block.len() > max {
+                    truncated_at = Some(i);
+                    break;
+                }
+                out.push_str(&block);
+            }
+            if let Some(i) = truncated_at {
+                out.push_str(&format!("\n[truncated — continue with offset={i}]\n"));
+            }
+            text_result(out, false)
         }
         "get_user_view" => {
             let view = state.views.lock().unwrap().get(&pid).cloned().unwrap_or(json!({}));

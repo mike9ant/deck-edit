@@ -10,7 +10,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   AlertTriangle, Check, ChevronDown, ChevronRight, CircleDot, FileEdit, History, Loader2, MessageSquare, SquarePlus, Trash2,
-  Plus, RotateCcw, Send, Settings, Square, Terminal, Wrench, X, StickyNote, Pencil, Play, ImagePlus,
+  Plus, RotateCcw, Send, Settings, Square, Terminal, Wrench, X, StickyNote, Pencil, Play, ImagePlus, Library,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useChat } from '../store/chatStore'
@@ -23,6 +23,7 @@ import type { Chat, Posture, Turn, TurnEvent } from '../api/types'
 import { buildTurnContext, pendingEditCount } from './turnContext'
 import { PosturePopover } from './PosturePopover'
 import { AgentSettingsDialog } from './AgentSettings'
+import { ConversationsPanel } from './ConversationsPanel'
 import { APPROVAL_MODES, FALLBACK_MODELS, chatPosture, turnPostureLabel } from './posture'
 import { api } from '../api/client'
 import { MAX_IMAGES, dragHasFiles, maxImageEdgeFor, prepareImage, splitImageFiles, type PendingImage } from './imageAttachments'
@@ -30,6 +31,7 @@ import { MAX_IMAGES, dragHasFiles, maxImageEdgeFor, prepareImage, splitImageFile
 export function ChatPanel() {
   const { openIds, activeId, chats, summaries, newChat, openChat, closeChat } = useChat()
   const [history, setHistory] = useState(false)
+  const [library, setLibrary] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const active = activeId ? chats[activeId] : undefined
   return (
@@ -45,7 +47,7 @@ export function ChatPanel() {
                 'group flex h-8 max-w-[180px] cursor-pointer items-center gap-1.5 rounded-t-md border border-b-0 px-2.5 text-xs',
                 id === activeId ? 'border-hair bg-panel text-ink' : 'border-transparent text-ink-3 hover:bg-black/5',
               )}
-              onClick={() => { setHistory(false); void openChat(id) }}
+              onClick={() => { setHistory(false); setLibrary(false); void openChat(id) }}
             >
               {running ? <Loader2 size={12} className="shrink-0 animate-spin text-violet-600" /> : <MessageSquare size={12} className="shrink-0" />}
               <span className="truncate">{c?.title ?? '…'}</span>
@@ -54,7 +56,15 @@ export function ChatPanel() {
           )
         })}
         <button className="icon-btn mb-1" title="New chat" onClick={() => { setHistory(false); void newChat() }}><Plus size={15} /></button>
-        <button className="icon-btn mb-1 ml-auto" title="Agent settings — Claude Code CLI, billing, defaults" onClick={() => setSettingsOpen(true)}><Settings size={15} /></button>
+        <button
+          className={clsx('icon-btn mb-1 ml-auto', library && 'bg-black/10 text-ink')}
+          title={library ? 'Back to the conversation' : 'Claude conversations on this Mac — search Cowork, Claude Code and desktop sessions'}
+          aria-pressed={library}
+          onClick={() => { setHistory(false); setLibrary(!library) }}
+        >
+          <Library size={15} />
+        </button>
+        <button className="icon-btn mb-1" title="Agent settings — Claude Code CLI, billing, defaults" onClick={() => setSettingsOpen(true)}><Settings size={15} /></button>
         {settingsOpen && <AgentSettingsDialog onClose={() => setSettingsOpen(false)} />}
         <button
           className={clsx('icon-btn mb-1', history && 'bg-black/10 text-ink')}
@@ -62,13 +72,16 @@ export function ChatPanel() {
           aria-pressed={history}
           onClick={() => {
             if (!history) void useChat.getState().refreshSummaries()
+            setLibrary(false)
             setHistory(!history)
           }}
         >
           <History size={15} />
         </button>
       </div>
-      {history ? (
+      {library ? (
+        <ConversationsPanel onDone={() => setLibrary(false)} />
+      ) : history ? (
         <HistoryPanel onDone={() => setHistory(false)} />
       ) : active ? (
         <ChatBody chat={active} />
@@ -493,6 +506,14 @@ function Composer({ chat }: { chat: Chat }) {
   const [imageNote, setImageNote] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
+  const textArea = useRef<HTMLTextAreaElement>(null)
+  const composerInsert = useChat((s) => s.composerInsert)
+  useEffect(() => {
+    if (!composerInsert) return
+    setText((t) => (t && !t.endsWith(' ') && !t.endsWith('\n') ? `${t} ` : t) + composerInsert)
+    useChat.getState().insertIntoComposer(null)
+    requestAnimationFrame(() => textArea.current?.focus())
+  }, [composerInsert])
   const runningTurn = chat.turns.find((t) => t.status === 'running')
   const running = !!runningTurn
   const openNotes = notes.filter((n) => n.status === 'open')
@@ -615,6 +636,7 @@ function Composer({ chat }: { chat: Chat }) {
       )}
       {imageNote && <div className="mb-1 text-[11px] text-amber-800">{imageNote}</div>}
       <textarea
+        ref={textArea}
         className="h-20 w-full resize-none rounded-lg border border-hair bg-white p-2 text-sm outline-none focus:border-accent"
         placeholder={running ? 'The agent is working…' : 'Ask the agent to change the deck…  (Enter to send, Shift+Enter for a new line)'}
         value={text}

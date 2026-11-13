@@ -168,6 +168,17 @@ impl ChatRegistry {
         self.chats.lock().unwrap().get(id).cloned()
     }
 
+    /// CLI session id → chat title, for every chat of this app (so the
+    /// conversation browser can label PPTX Edit's own agent sessions).
+    pub fn cli_sessions(&self) -> HashMap<String, String> {
+        self.chats
+            .lock()
+            .unwrap()
+            .values()
+            .filter_map(|c| c.cli_session_id.clone().map(|s| (s, format!("PPTX Edit chat: {}", c.title))))
+            .collect()
+    }
+
     pub fn running_turn(&self, chat_id: &str) -> Option<String> {
         self.running.lock().unwrap().get(chat_id).map(|r| r.turn_id.clone())
     }
@@ -593,6 +604,7 @@ Editing PowerPoint files:
 - Keep the file valid for PowerPoint: don't hand-edit zip parts unless python-pptx can't do it; when duplicating slides, copy image relationships properly.
 - Slide numbers the user mentions are 1-based in the current order. Notes reference slides by number and stable slideId (the p:sldId id in presentation.xml).
 - Write scratch scripts to /tmp, not into the project folder.
+- The user's past Claude conversations (Claude Code CLI, the Claude desktop app's Code sessions, and Cowork) can be searched with the `deck` tools `search_conversations` and read with `read_conversation` (pass `query` to get just the relevant parts). When the user mentions an earlier conversation, a Cowork session, or text like `[Conversation: … — id cowork:…]`, use these instead of searching the disk yourself. Cowork output files are listed by `read_conversation`; ask before copying them into the project.
 - Speaker notes are shown and edited in the app under each slide. Read/write them with python-pptx (`slide.notes_slide.notes_text_frame.text`); keep the user's notes unless asked to change them.
 - Copying slides BETWEEN decks: the user can do it in the app (mini-slides ⌘C in one deck, ⌘V in the other — it re-creates the slide on the target's matching layout). If asked to do it yourself, add a slide on a matching layout of the target, copy the source shapes' XML into it, and copy every image they reference (with its relationship) — never modify the source deck.
 - For PDFs, pymupdf (`import fitz`) and pypdf are installed.

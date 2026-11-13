@@ -229,7 +229,7 @@ async fn write_file(
 }
 
 /// `path` itself if free, else `name (2).ext`, `name (3).ext`, …
-fn unique_path(path: &Path) -> PathBuf {
+pub fn unique_path(path: &Path) -> PathBuf {
     if !path.exists() {
         return path.to_path_buf();
     }

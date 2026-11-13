@@ -172,3 +172,29 @@ export interface AgentStatus {
   apiKeyAvailable: boolean
   python: { path: string | null; pythonPptx: string | null }
 }
+
+/** A past Claude conversation on this machine (CLI, desktop Code, or Cowork). */
+export interface ConversationInfo {
+  id: string
+  source: 'cowork' | 'desktop' | 'cli'
+  title: string
+  folders: string[]
+  createdAt: number
+  lastActivityAt: number
+  firstMessage?: string
+  model?: string
+  appChat?: string
+  hasTranscript: boolean
+  outputCount: number
+}
+
+export interface ConversationHit extends ConversationInfo {
+  snippets: { role: string; text: string; message: number }[]
+}
+
+export interface ConversationDetail {
+  info: ConversationInfo
+  messages: { role: 'user' | 'assistant'; text: string; tools?: string[]; timestamp?: string }[]
+  outputs: { path: string; size: number }[]
+  transcriptPath?: string
+}
