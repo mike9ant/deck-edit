@@ -1,4 +1,4 @@
-# PDF Edit
+# PPTX Edit
 
 A local app for developing slide decks **together with an AI agent**. You and
 the agent take turns on the same PowerPoint (.pptx) or PDF file: your edits are
@@ -43,6 +43,11 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
     pictures keep their aspect ratio), edit existing text in place (double-click or
     Enter — formatting of each run is kept), copy/paste/duplicate/delete shapes
     (also across slides and decks), add a text box, drop or paste images
+  - **speaker notes** under the slide: a collapsible, resizable, editable panel. Edits save into the
+    slide's notes page (formatting kept; a notes page — and a notes master, if the deck has none — is
+    created when needed) and are reported to the agent like other edits
+  - **copy/paste slides between decks**: ⌘C in one deck's slide list, ⌘V in another's — each slide is
+    re-created on the target's matching layout with its shapes and images ("use destination theme")
   - undo/redo (⌘Z / ⇧⌘Z) for all of it
 - **PDF** — page rail, reorder/duplicate/delete pages, drop an image onto a page, undo/redo.
 - **Notes for the agent** — pin a note anywhere on a slide or page ("Note" in the toolbar).

@@ -16,7 +16,7 @@
 import { create } from 'zustand'
 import {
   applyEdit, buildPresentation, readPptx, writePptx,
-  type EditOperation, type PresentationData,
+  type EditOperation, type EditResult, type PresentationData,
 } from '@diceui/pptx-core'
 import { loadEmbeddedFonts } from '@diceui/pptx-core/fonts'
 import { api, ApiError, CLIENT_ID } from '../api/client'
@@ -26,7 +26,8 @@ import { readSlideIds, slideTitle, slideXmlBySldId } from './deckModel'
 
 export interface UndoEntry {
   undo: () => void
-  op: EditOperation
+  /** Re-applies the edit (a single op, or a whole transaction). */
+  redo: () => Promise<unknown>
   description: string
   /** Consecutive edits with the same key (e.g. nudging one shape) read as one change for the agent. */
   coalesceKey?: string
@@ -66,6 +67,18 @@ interface DeckStore {
   reload(key: string, external: boolean): Promise<void>
   close(key: string): void
   apply(key: string, op: EditOperation, description: string, coalesceKey?: string): Promise<string[] | undefined>
+  /**
+   * Several edits as ONE undo step, for edits that depend on each other's
+   * results (e.g. add a slide, then paste onto it). `fn` gets a runner that
+   * applies one op and returns its result; if `fn` throws, everything it
+   * applied is rolled back.
+   */
+  /**
+   * An edit the engine doesn't model (speaker notes): `run` changes the package
+   * and returns its undo. Saved, undoable and reported to the agent like any other.
+   */
+  applyCustom(key: string, description: string, run: () => Promise<() => void>, coalesceKey?: string): Promise<boolean>
+  transaction<T>(key: string, description: string, fn: (run: (op: EditOperation) => Promise<EditResult>, pres: PresentationData) => Promise<T>): Promise<T | undefined>
   undo(key: string): void
   redo(key: string): Promise<void>
   setSlide(key: string, index: number): void
@@ -199,7 +212,7 @@ export const useDecks = create<DeckStore>((set, get) => {
         if (res.createdSlideId) slideVersions[res.createdSlideId] = version
         patch(key, {
           version, slideVersions, dirty: true,
-          undo: [...cur.undo, { undo: res.undo, op, description, coalesceKey }],
+          undo: [...cur.undo, { undo: res.undo, redo: () => get().apply(key, op, description, coalesceKey), description, coalesceKey }],
           redo: [],
         })
         scheduleSave(key)
@@ -238,8 +251,72 @@ export const useDecks = create<DeckStore>((set, get) => {
       if (!s?.pres || !s.redo.length) return
       const entry = s.redo[s.redo.length - 1]
       const redoRest = s.redo.slice(0, -1)
-      await get().apply(key, entry.op, entry.description, entry.coalesceKey)
+      await entry.redo()
       patch(key, { redo: redoRest })
+    },
+
+    async applyCustom(key, description, runEdit, coalesceKey) {
+      const s = get().sessions[key]
+      if (!s?.pres) return false
+      if (isProjectBusy(s.pid)) {
+        useApp.getState().toast('The agent is working on this project — editing resumes when its turn ends.')
+        return false
+      }
+      try {
+        const undo = await runEdit()
+        const cur = get().sessions[key]!
+        patch(key, {
+          version: cur.version + 1,
+          dirty: true,
+          undo: [...cur.undo, { undo, redo: () => get().applyCustom(key, description, runEdit, coalesceKey), description, coalesceKey }],
+          redo: [],
+        })
+        scheduleSave(key)
+        return true
+      } catch (e) {
+        useApp.getState().toast(`Edit failed: ${(e as Error).message}`, 'error')
+        return false
+      }
+    },
+
+    async transaction(key, description, fn) {
+      const s = get().sessions[key]
+      if (!s?.pres) return
+      if (isProjectBusy(s.pid)) {
+        useApp.getState().toast('The agent is working on this project — editing resumes when its turn ends.')
+        return
+      }
+      const pres = s.pres
+      const undos: (() => void)[] = []
+      const run = async (op: EditOperation) => {
+        const r = await applyEdit(pres, op)
+        undos.push(r.undo)
+        return r
+      }
+      const rollback = () => [...undos].reverse().forEach((u) => u())
+      let result: Awaited<ReturnType<typeof fn>>
+      try {
+        result = await fn(run, pres)
+      } catch (e) {
+        try { rollback() } catch { /* best effort */ }
+        console.error(e)
+        useApp.getState().toast(`Edit failed: ${(e as Error).message}`, 'error')
+        const cur = get().sessions[key]!
+        patch(key, { version: cur.version + 1, slideVersions: Object.fromEntries(pres.slides.map((sl) => [sl.id, cur.version + 1])) })
+        return
+      }
+      if (!undos.length) return result
+      const cur = get().sessions[key]!
+      const version = cur.version + 1
+      patch(key, {
+        version,
+        slideVersions: Object.fromEntries(pres.slides.map((sl) => [sl.id, version])),
+        dirty: true,
+        undo: [...cur.undo, { undo: rollback, redo: () => get().transaction(key, description, fn), description }],
+        redo: [],
+      })
+      scheduleSave(key)
+      return result
     },
 
     setSlide(key, index) {

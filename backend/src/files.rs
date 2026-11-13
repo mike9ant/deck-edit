@@ -29,6 +29,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/projects/{id}/tree", get(tree))
         .route("/projects/{id}/file", get(read_file).put(write_file))
+        .route("/projects/{id}/upload", post(upload))
         .route("/projects/{id}/open", post(open_external))
         .route("/projects/{id}/reveal", post(reveal))
         .route("/pick-folder", post(pick_folder))
@@ -227,6 +228,44 @@ async fn write_file(
     Ok(Json(json!({ "etag": etag })))
 }
 
+/// `path` itself if free, else `name (2).ext`, `name (3).ext`, …
+fn unique_path(path: &Path) -> PathBuf {
+    if !path.exists() {
+        return path.to_path_buf();
+    }
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    (2..)
+        .map(|n| path.with_file_name(format!("{stem} ({n}){ext}")))
+        .find(|p| !p.exists())
+        .unwrap()
+}
+
+/// `POST /projects/{id}/upload?path=` — add a file dropped from Finder. Never
+/// overwrites: a taken name gets " (2)", " (3)"… Returns the path written.
+async fn upload(
+    State(state): State<AppState>,
+    AxPath(id): AxPath<String>,
+    Query(q): Query<PathQuery>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>> {
+    let root = state.projects.folder(&id)?;
+    let wanted = resolve_under(&root, &q.path)?;
+    if wanted.file_name().is_none() || q.path.trim().is_empty() {
+        return Err(AppError::BadRequest("missing file name".into()));
+    }
+    let path = unique_path(&wanted);
+    let p2 = path.clone();
+    tokio::task::spawn_blocking(move || write_atomic(&p2, &body))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
+    let client = headers.get("x-client-id").and_then(|v| v.to_str().ok()).unwrap_or("");
+    state.watchers.note_self_write(&path, &etag_of(&path).unwrap_or_default(), client);
+    let rel = path.strip_prefix(&root).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_default();
+    Ok(Json(json!({ "path": rel })))
+}
+
 async fn open_external(
     State(state): State<AppState>,
     AxPath(id): AxPath<String>,
@@ -304,6 +343,17 @@ mod tests {
         assert!(rel_is_ignored(Path::new("a/node_modules/x.js")));
         assert!(rel_is_ignored(Path::new("~$deck.pptx")));
         assert!(!rel_is_ignored(Path::new("decks/a.pptx")));
+    }
+
+    #[test]
+    fn unique_names_never_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("deck.pptx");
+        assert_eq!(unique_path(&p), p);
+        std::fs::write(&p, b"x").unwrap();
+        assert_eq!(unique_path(&p), dir.path().join("deck (2).pptx"));
+        std::fs::write(dir.path().join("deck (2).pptx"), b"x").unwrap();
+        assert_eq!(unique_path(&p), dir.path().join("deck (3).pptx"));
     }
 
     #[test]

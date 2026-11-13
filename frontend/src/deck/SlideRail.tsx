@@ -8,10 +8,10 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { Copy, CopyPlus, ClipboardPaste, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
-import type { PresentationData, SlideData } from '@diceui/pptx-core'
+import { copyNodes, materializeSlide, type PresentationData, type SlideData } from '@diceui/pptx-core'
 import { useDecks, type DeckSession, isProjectBusy } from './deckStore'
 import { SlideRender } from './SlideRender'
-import { getClipboard, setClipboard } from './clipboard'
+import { getClipboard, setClipboard, type PortableSlide } from './clipboard'
 import { slideTitle } from './deckModel'
 import { useNotes } from '../store/notesStore'
 import { useApp } from '../store/appStore'
@@ -61,14 +61,71 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
     setPicked([])
     setSlide(key, Math.min(session.slideIndex, pres.slides.length - 1))
   }
-  const copy = () => {
-    setClipboard({ kind: 'slides', deckKey: key, slideIds: [...selected].sort((a, b) => indexOf(a) - indexOf(b)) })
-    useApp.getState().toast(`Copied slide${selected.length > 1 ? 's' : ''} ${nums(selected)}`)
+  const copy = async () => {
+    const ids = [...selected].sort((a, b) => indexOf(a) - indexOf(b))
+    // A self-contained copy of each slide (shapes + the images they use), so
+    // it can also be pasted into ANOTHER deck.
+    const portable: PortableSlide[] = []
+    let omitted = 0
+    for (const id of ids) {
+      const slide = pres.slides[indexOf(id)]
+      materializeSlide(pres, slide)
+      const nodes = await copyNodes(pres, slide.id, slide.nodes.map((n) => n.id))
+      omitted += nodes.omittedNodeIds.length
+      portable.push({ title: slideTitle(slide), layoutName: pres.layouts.get(slide.layoutIndex)?.name, nodes })
+    }
+    setClipboard({ kind: 'slides', deckKey: key, deckName: session.path.split('/').pop() ?? session.path, slideIds: ids, portable, width: pres.width, height: pres.height })
+    useApp.getState().toast(
+      `Copied slide${ids.length > 1 ? 's' : ''} ${nums(ids)} — paste with ⌘V here or in another deck's slide list` +
+        (omitted ? ` (${omitted} chart/diagram shape${omitted > 1 ? 's' : ''} can only be pasted within this deck)` : ''),
+    )
   }
+
+  /**
+   * Paste slides copied from ANOTHER deck, PowerPoint "use destination theme"
+   * style: each becomes a new slide on the target's layout of the same name
+   * (or the current slide's layout), its empty layout placeholders are
+   * cleared, and the source slide's shapes and images are pasted onto it.
+   * One undo step for the whole paste.
+   */
+  const pasteFromOtherDeck = async (c: Extract<NonNullable<ReturnType<typeof getClipboard>>, { kind: 'slides' }>) => {
+    const anchor = pres.slides[session.slideIndex]
+    if (!anchor) return
+    const layoutByName = new Map([...pres.layouts.entries()].map(([id, l]) => [l.name ?? '', id]))
+    const n = c.portable.length
+    const created = await useDecks.getState().transaction(
+      key,
+      `Pasted ${n} slide${n > 1 ? 's' : ''} from "${c.deckName}" (${c.portable.map((p) => `"${p.title}"`).join(', ')}) after slide ${session.slideIndex + 1}`,
+      async (run, p) => {
+        const ids: string[] = []
+        let after = anchor.id
+        for (const src of c.portable) {
+          const layoutId = (src.layoutName && layoutByName.get(src.layoutName)) || anchor.layoutIndex
+          const added = await run({ type: 'addSlide', layoutId, afterSlideId: after })
+          const sid = added.createdSlideId!
+          const slide = p.slides.find((x) => x.id === sid)!
+          materializeSlide(p, slide)
+          if (slide.nodes.length) {
+            await run({ type: 'batch', operations: slide.nodes.map((nd) => ({ type: 'deleteNode' as const, slideId: sid, nodeId: nd.id })) })
+          }
+          if (src.nodes.nodes.length) await run({ type: 'pasteNodes', slideId: sid, clipboard: src.nodes, offset: { x: 0, y: 0 } })
+          ids.push(sid)
+          after = sid
+        }
+        return ids
+      },
+    )
+    if (created?.length) {
+      setSlide(key, session.slideIndex + 1)
+      const sizeNote = Math.abs(c.width / c.height - pres.width / pres.height) > 0.01 ? ' The decks have different slide sizes — check positions.' : ''
+      useApp.getState().toast(`Pasted ${created.length} slide${created.length > 1 ? 's' : ''} from ${c.deckName} using this deck's layouts.${sizeNote}`)
+    }
+  }
+
   const paste = async () => {
     const c = getClipboard()
     if (!c || c.kind !== 'slides') return
-    if (c.deckKey !== key) return useApp.getState().toast('Pasting slides into a different deck isn’t supported yet — copy shapes instead.')
+    if (c.deckKey !== key) return pasteFromOtherDeck(c)
     let at = session.slideIndex + 1
     for (const id of c.slideIds) {
       if (indexOf(id) < 0) continue
@@ -110,7 +167,7 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
     else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); setPicked([]); setSlide(key, session.slideIndex - 1) }
     if (busy) return
     if (mod && e.key === 'd') { e.preventDefault(); void duplicate() }
-    else if (mod && e.key === 'c') { e.preventDefault(); copy() }
+    else if (mod && e.key === 'c') { e.preventDefault(); void copy() }
     else if (mod && e.key === 'v') { e.preventDefault(); void paste() }
     else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); void remove() }
   }
@@ -183,8 +240,8 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
       </div>
       <div className="flex items-center justify-center gap-0.5 border-t border-hair px-1 py-1">
         <button className="icon-btn" title="Duplicate (⌘D)" disabled={busy} onClick={() => void duplicate()}><CopyPlus size={15} /></button>
-        <button className="icon-btn" title="Copy (⌘C)" onClick={copy}><Copy size={15} /></button>
-        <button className="icon-btn" title="Paste after current (⌘V)" disabled={busy || getClipboard()?.kind !== 'slides'} onClick={() => void paste()}><ClipboardPaste size={15} /></button>
+        <button className="icon-btn" title="Copy slides (⌘C) — paste into this deck or another one" onClick={() => void copy()}><Copy size={15} /></button>
+        <button className="icon-btn" title="Paste slides after the current one (⌘V) — also from another deck" disabled={busy || getClipboard()?.kind !== 'slides'} onClick={() => void paste()}><ClipboardPaste size={15} /></button>
         <button className="icon-btn" title="Delete (⌫)" disabled={busy} onClick={() => void remove()}><Trash2 size={15} /></button>
         {picked.length > 1 && <span className="ml-1 text-[11px] text-ink-3">{picked.length} selected</span>}
       </div>

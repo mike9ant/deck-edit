@@ -25,7 +25,7 @@ export function TopBar() {
   return (
     <div className="flex h-11 shrink-0 items-center gap-3 border-b border-hair bg-panel px-3">
       <div className="flex items-center gap-1.5 font-semibold text-ink">
-        <Presentation size={18} className="text-accent" /> PDF Edit
+        <Presentation size={18} className="text-accent" /> PPTX Edit
       </div>
       <div className="h-5 w-px bg-hair" />
       <div className="relative" ref={menuRef}>

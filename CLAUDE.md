@@ -1,4 +1,4 @@
-# PDF Edit — notes for working on this repo
+# PPTX Edit — notes for working on this repo
 
 - Build/run only through `./run.sh` (`setup`, `build`, `dev`, `test [frontend|backend]`).
 - Backend: Rust/axum in `backend/src` (one module per concern; see the module doc comments).

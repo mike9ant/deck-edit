@@ -10,6 +10,7 @@ import clsx from 'clsx'
 import { useDecks, deckKey } from './deckStore'
 import { SlideRail } from './SlideRail'
 import { SlideEditor } from './SlideEditor'
+import { NotesPane } from './NotesPane'
 import { Splitter } from '../components/Splitter'
 import { useApp } from '../store/appStore'
 import { useChat } from '../store/chatStore'
@@ -108,13 +109,16 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
       <div className="flex min-h-0 flex-1">
         <SlideRail session={session} width={railW} />
         <Splitter width={railW} min={120} max={420} onChange={(w) => setWidth('rail', w)} />
-        <SlideEditor
-          session={session}
-          noteMode={noteMode}
-          setNoteMode={setNoteMode}
-          showResolved={showResolved}
-          registerActions={(a) => (actions.current = a)}
-        />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <SlideEditor
+            session={session}
+            noteMode={noteMode}
+            setNoteMode={setNoteMode}
+            showResolved={showResolved}
+            registerActions={(a) => (actions.current = a)}
+          />
+          <NotesPane session={session} />
+        </div>
       </div>
     </div>
   )

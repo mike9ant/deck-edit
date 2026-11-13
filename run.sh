@@ -1,5 +1,5 @@
 #!/bin/bash
-# PDF Edit — run script
+# PPTX Edit — run script
 #   ./run.sh setup            Python env (.venv with python-pptx, pymupdf, pypdf) + npm install
 #   ./run.sh                  Build everything and (re)start the server  → http://127.0.0.1:3101
 #   ./run.sh build            Just build (backend release + frontend dist)

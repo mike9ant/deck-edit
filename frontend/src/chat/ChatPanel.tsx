@@ -98,6 +98,12 @@ function relativeTime(iso: string): string {
  * the row's buttons open it in a new tab or delete it.
  */
 function HistoryPanel({ onDone }: { onDone(): void }) {
+  // Esc closes the panel, like its × button.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onDone()
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onDone])
   const { summaries, openIds, activeId, chats, openChat, openInThisTab, remove } = useChat()
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const activeBusy = !!(activeId && chats[activeId]?.turns.some((t) => t.status === 'running'))
@@ -105,7 +111,10 @@ function HistoryPanel({ onDone }: { onDone(): void }) {
     <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
       <div className="mb-1 flex items-center px-1 text-[11px] font-semibold uppercase tracking-wide text-ink-3">
         Chats in this project
-        <span className="ml-auto font-normal normal-case tracking-normal">{summaries.length}</span>
+        <span className="ml-1.5 font-normal normal-case tracking-normal">· {summaries.length}</span>
+        <button className="icon-btn ml-auto h-6 w-6" title="Close — back to the current chat (Esc)" onClick={onDone}>
+          <X size={14} />
+        </button>
       </div>
       {summaries.length === 0 && <p className="px-1 py-2 text-sm text-ink-3">No chats yet.</p>}
       <ul className="space-y-0.5">

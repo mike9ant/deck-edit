@@ -1,4 +1,4 @@
-//! PDF Edit backend: a local server for the slide/PDF editor.
+//! PPTX Edit backend: a local server for the slide/PDF editor.
 //!
 //! Serves the built frontend plus a JSON API under `/api`: projects (a folder +
 //! chats), the folder tree and raw file read/write, live file-change events,
@@ -113,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("PDF Edit listening on http://{addr} (data: {})", data_dir.display());
+    tracing::info!("PPTX Edit listening on http://{addr} (data: {})", data_dir.display());
     axum::serve(listener, app).await?;
     Ok(())
 }

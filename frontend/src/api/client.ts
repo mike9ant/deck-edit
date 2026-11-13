@@ -82,6 +82,24 @@ export const api = {
     }
     return res.json()
   },
+  /** Add a file to the project (never overwrites — a taken name gets " (2)"). Returns the path written. */
+  async upload(pid: string, path: string, data: Blob): Promise<{ path: string }> {
+    const res = await fetch(`/api/projects/${pid}/upload?${q(path)}`, {
+      method: 'POST',
+      headers: { 'x-client-id': CLIENT_ID, 'Content-Type': 'application/octet-stream' },
+      body: data,
+    })
+    if (!res.ok) {
+      let msg = res.statusText
+      try {
+        msg = (await res.json()).error ?? msg
+      } catch {
+        /* */
+      }
+      throw new ApiError(res.status, msg)
+    }
+    return res.json()
+  },
   openExternal: (pid: string, path: string) => json('POST', `/projects/${pid}/open?${q(path)}`),
   reveal: (pid: string, path: string) => json('POST', `/projects/${pid}/reveal?${q(path)}`),
 
