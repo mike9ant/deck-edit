@@ -243,11 +243,16 @@ async fn status(State(state): State<AppState>) -> Json<Value> {
             .filter(|s| !s.contains("Error")),
         None => None,
     };
+    let st = state.clone();
+    let conversations = tokio::task::spawn_blocking(move || crate::conversations::sources(&st))
+        .await
+        .unwrap_or(json!(null));
     Json(json!({
         "cli": { "found": path.is_some(), "path": path, "version": version, "command": bin },
         "auth": auth,
         "apiKeyAvailable": state.settings.api_key().is_some(),
         "python": { "path": python, "pythonPptx": pptx },
+        "conversations": conversations,
     }))
 }
 

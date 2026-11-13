@@ -43,6 +43,16 @@ export function AgentSettingsDialog({ onClose }: { onClose(): void }) {
             }
             detail={loggedIn && status?.auth?.authMethod ? `via ${status.auth.authMethod}${status.auth.orgName ? ` · ${status.auth.orgName}` : ''}` : undefined}
           />
+          {status?.conversations && (
+            <Row
+              ok={status.conversations.claudeCode.found || status.conversations.desktopApp.found}
+              label={`Past conversations: ${status.conversations.claudeCode.sessions} Claude Code` +
+                (status.conversations.desktopApp.found
+                  ? `, ${status.conversations.desktopApp.coworkSessions} Cowork, ${status.conversations.desktopApp.codeSessions} desktop Code`
+                  : ' · Claude desktop app data not found')}
+              detail={[status.conversations.claudeCode.path, ...status.conversations.desktopApp.paths].join('  ·  ')}
+            />
+          )}
           <Row ok={!!status?.python.pythonPptx} label={status?.python.pythonPptx ? `Python env ready (python-pptx ${status.python.pythonPptx})` : 'Python env missing — run ./run.sh setup'} detail={status?.python.path ?? undefined} />
           <label className="mt-2 block text-xs font-medium text-ink-2">CLI path <span className="font-normal text-ink-3">(empty = `claude` on PATH)</span></label>
           <div className="mt-1 flex gap-2">

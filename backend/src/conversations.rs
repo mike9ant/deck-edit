@@ -6,12 +6,18 @@
 //!
 //! Where they live (the apps' private storage — not a published format, so
 //! everything here is read-only and parsed defensively, skipping what it
-//! doesn't understand):
-//! - CLI: `~/.claude/projects/<cwd with / → ->/<session>.jsonl`
-//! - Desktop Code: `~/Library/Application Support/Claude/claude-code-sessions/
-//!   <account>/<org>/local_<id>.json` (title, cwd, `cliSessionId`); the
-//!   transcript is that CLI session's jsonl under `~/.claude/projects`.
-//! - Cowork: `…/Claude/local-agent-mode-sessions/<account>/<org>/local_<id>.json`
+//! doesn't understand). `<config>` is Claude Code's config folder
+//! (`$CLAUDE_CONFIG_DIR`, else `~/.claude`); `<desktop>` is the Claude desktop
+//! app's data folder — the OS's per-user app-data folder + `Claude`:
+//! `~/Library/Application Support/Claude` (macOS), `%APPDATA%\Claude` or the
+//! Microsoft Store package's `LocalCache\Roaming\Claude` (Windows),
+//! `$XDG_CONFIG_HOME/Claude` = `~/.config/Claude` (Linux).
+//! `PDFEDIT_CLAUDE_DESKTOP_DIR` adds one more folder to look in.
+//! - CLI: `<config>/projects/<cwd with separators → ->/<session>.jsonl`
+//! - Desktop Code: `<desktop>/claude-code-sessions/<account>/<org>/local_<id>.json`
+//!   (title, cwd, `cliSessionId`); the transcript is that CLI session's jsonl
+//!   under `<config>/projects`.
+//! - Cowork: `<desktop>/local-agent-mode-sessions/<account>/<org>/local_<id>.json`
 //!   (title, shared folders, `cliSessionId`); transcript under
 //!   `local_<id>/.claude/projects/*/<cliSessionId>.jsonl`, files it produced
 //!   under `local_<id>/outputs/`.
@@ -73,8 +79,65 @@ const MAX_SNIPPETS: usize = 3;
 fn home() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
 }
-fn desktop_dir() -> PathBuf {
-    home().join("Library/Application Support/Claude")
+
+/// Claude Code's config folder: `$CLAUDE_CONFIG_DIR` when set, else `~/.claude`.
+fn claude_config_dir_from(env: Option<String>, home: &Path) -> PathBuf {
+    match env.filter(|v| !v.trim().is_empty()) {
+        Some(v) => {
+            let p = PathBuf::from(v.trim());
+            match p.strip_prefix("~") {
+                Ok(rest) => home.join(rest),
+                Err(_) => p,
+            }
+        }
+        None => home.join(".claude"),
+    }
+}
+
+pub fn claude_config_dir() -> PathBuf {
+    claude_config_dir_from(std::env::var("CLAUDE_CONFIG_DIR").ok(), &home())
+}
+
+/// Every Claude desktop app data folder that exists on this machine.
+pub fn desktop_dirs() -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(p) = std::env::var("PDFEDIT_CLAUDE_DESKTOP_DIR") {
+        candidates.push(PathBuf::from(p));
+    }
+    // macOS: ~/Library/Application Support · Windows: %APPDATA% (Roaming) ·
+    // Linux: $XDG_CONFIG_HOME or ~/.config.
+    if let Some(cfg) = dirs::config_dir() {
+        candidates.push(cfg.join("Claude"));
+    }
+    // Windows: also the local app-data folder and Microsoft Store (MSIX)
+    // installs, whose AppData is virtualized under the package's LocalCache.
+    if cfg!(windows) {
+        if let Some(local) = dirs::data_local_dir() {
+            candidates.push(local.join("Claude"));
+            if let Ok(rd) = std::fs::read_dir(local.join("Packages")) {
+                for e in rd.filter_map(|e| e.ok()) {
+                    let name = e.file_name().to_string_lossy().to_lowercase();
+                    if name.starts_with("claude") || name.contains("anthropic") {
+                        candidates.push(e.path().join("LocalCache").join("Roaming").join("Claude"));
+                    }
+                }
+            }
+        }
+    }
+    let mut out: Vec<PathBuf> = Vec::new();
+    for c in candidates {
+        if c.is_dir() && !out.iter().any(|o| same_dir(o, &c)) {
+            out.push(c);
+        }
+    }
+    out
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
 }
 
 fn mtime_ms(p: &Path) -> u64 {
@@ -182,8 +245,12 @@ fn discover(state: &AppState) -> Vec<ConversationInfo> {
     let mut claimed: HashMap<String, usize> = HashMap::new(); // cli session id → index in `out`
 
     // Cowork.
-    let cowork_root = desktop_dir().join("local-agent-mode-sessions");
-    for meta in glob_files(&cowork_root, 2, "local_", ".json") {
+    let desktops = desktop_dirs();
+    let cowork_metas: Vec<PathBuf> = desktops
+        .iter()
+        .flat_map(|d| glob_files(&d.join("local-agent-mode-sessions"), 2, "local_", ".json"))
+        .collect();
+    for meta in cowork_metas {
         let Some(v) = read_json(&meta) else { continue };
         let dir = meta.with_extension("");
         let cli = v.get("cliSessionId").and_then(|s| s.as_str()).unwrap_or("").to_string();
@@ -210,9 +277,9 @@ fn discover(state: &AppState) -> Vec<ConversationInfo> {
     }
 
     // Desktop app's Code sessions (transcripts live with the CLI's).
-    let cli_root = home().join(".claude/projects");
+    let cli_root = claude_config_dir().join("projects");
     let mut desktop: Vec<(Value, String)> = Vec::new();
-    for meta in glob_files(&desktop_dir().join("claude-code-sessions"), 2, "local_", ".json") {
+    for meta in desktops.iter().flat_map(|d| glob_files(&d.join("claude-code-sessions"), 2, "local_", ".json")) {
         if let Some(v) = read_json(&meta) {
             let cli = v.get("cliSessionId").and_then(|s| s.as_str()).unwrap_or("").to_string();
             desktop.push((v, cli));
@@ -491,13 +558,36 @@ pub fn search(state: &AppState, query: &str, source: Option<&str>, limit: usize)
     hits
 }
 
+/// Where conversations were looked for on this machine, and what was found —
+/// so a user can see at a glance whether their Claude apps were detected.
+pub fn sources(state: &AppState) -> Value {
+    let list = state.conversations.list(state);
+    let count = |s: &str| list.iter().filter(|c| c.source == s).count();
+    let config = claude_config_dir();
+    json!({
+        "claudeCode": { "path": config.join("projects"), "found": config.join("projects").is_dir(), "sessions": count("cli") },
+        "desktopApp": {
+            "paths": desktop_dirs(),
+            "found": !desktop_dirs().is_empty(),
+            "codeSessions": count("desktop"),
+            "coworkSessions": count("cowork"),
+        },
+    })
+}
+
 // ─── routes ──────────────────────────────────────────────────────────────────
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/conversations", get(list))
+        .route("/conversations-sources", get(sources_route))
         .route("/conversations/{id}", get(read))
         .route("/conversations/{id}/import", post(import_output))
+}
+
+async fn sources_route(State(state): State<AppState>) -> Result<Json<Value>> {
+    let st = state.clone();
+    tokio::task::spawn_blocking(move || sources(&st)).await.map(Json).map_err(|e| AppError::Internal(e.to_string()))
 }
 
 #[derive(Deserialize)]
@@ -584,6 +674,15 @@ async fn import_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_config_dir_honors_env() {
+        let home = Path::new("/home/ann");
+        assert_eq!(claude_config_dir_from(None, home), home.join(".claude"));
+        assert_eq!(claude_config_dir_from(Some("  ".into()), home), home.join(".claude"));
+        assert_eq!(claude_config_dir_from(Some("/data/claude".into()), home), PathBuf::from("/data/claude"));
+        assert_eq!(claude_config_dir_from(Some("~/alt-claude".into()), home), home.join("alt-claude"));
+    }
 
     #[test]
     fn transcript_reading_and_search() {

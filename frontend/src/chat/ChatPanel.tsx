@@ -58,7 +58,7 @@ export function ChatPanel() {
         <button className="icon-btn mb-1" title="New chat" onClick={() => { setHistory(false); void newChat() }}><Plus size={15} /></button>
         <button
           className={clsx('icon-btn mb-1 ml-auto', library && 'bg-black/10 text-ink')}
-          title={library ? 'Back to the conversation' : 'Claude conversations on this Mac — search Cowork, Claude Code and desktop sessions'}
+          title={library ? 'Back to the conversation' : 'Claude conversations on this computer — search Cowork, Claude Code and desktop sessions'}
           aria-pressed={library}
           onClick={() => { setHistory(false); setLibrary(!library) }}
         >

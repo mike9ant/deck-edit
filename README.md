@@ -50,12 +50,14 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
     re-created on the target's matching layout with its shapes and images ("use destination theme")
   - undo/redo (⌘Z / ⇧⌘Z) for all of it
 - **PDF** — page rail, reorder/duplicate/delete pages, drop an image onto a page, undo/redo.
-- **Claude conversations on this Mac** (library icon in the chat tabs): every Cowork session,
+- **Claude conversations on this computer** (library icon in the chat tabs): every Cowork session,
   Claude desktop Code session and Claude Code CLI session, newest first — search titles, folders
   and full transcripts, read a transcript, copy files a Cowork session produced into the project,
   and **Attach to chat** to hand one to the agent. The agent has the same reach through its
   `search_conversations` / `read_conversation` tools (read-only; the apps' private stores are
-  parsed defensively, see `backend/src/conversations.rs`).
+  parsed defensively, see `backend/src/conversations.rs`). Found on macOS, Windows (incl. Microsoft
+  Store installs) and Linux; Claude Code's `CLAUDE_CONFIG_DIR` is honored, and
+  `PDFEDIT_CLAUDE_DESKTOP_DIR` adds another desktop-app folder. Agent settings shows what was found.
 - **Notes for the agent** — pin a note anywhere on a slide or page ("Note" in the toolbar).
   Open notes are sent with every message; the agent resolves them (you see them flip to
   resolved with its one-line summary) and can pin its own notes for you.

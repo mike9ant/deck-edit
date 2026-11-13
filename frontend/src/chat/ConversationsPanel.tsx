@@ -30,6 +30,9 @@ const SOURCE_BADGE: Record<string, string> = {
 }
 const SOURCE_NAME: Record<string, string> = { cowork: 'Cowork', desktop: 'Desktop Code', cli: 'Claude Code' }
 
+/** Shorten a home-folder path to ~ on macOS (/Users/x), Linux (/home/x) and Windows (C:\Users\x). */
+const tildify = (p: string) => p.replace(/^(\/Users\/[^/]+|\/home\/[^/]+|[A-Za-z]:\\Users\\[^\\]+)/, '~')
+
 function when(ms: number) {
   if (!ms) return ''
   const d = new Date(ms)
@@ -78,7 +81,7 @@ export function ConversationsPanel({ onDone }: { onDone(): void }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="border-b border-hair px-2 pb-2 pt-2">
         <div className="mb-1.5 flex items-center px-1 text-[11px] font-semibold uppercase tracking-wide text-ink-3">
-          Claude conversations on this Mac
+          Claude conversations on this computer
           <button className="icon-btn ml-auto h-6 w-6" title="Close (Esc)" onClick={onDone}><X size={14} /></button>
         </div>
         <div className="flex items-center gap-1.5 rounded-md border border-hair bg-white px-2 focus-within:border-accent">
@@ -116,7 +119,7 @@ export function ConversationsPanel({ onDone }: { onDone(): void }) {
                 </div>
                 <div className="mt-0.5 flex gap-1.5 text-[10.5px] text-ink-3">
                   <span className="shrink-0">{when(h.lastActivityAt)}</span>
-                  {h.folders[0] && <span className="truncate">· {h.folders[0].replace(/^\/Users\/[^/]+/, '~')}{h.folders.length > 1 ? ` +${h.folders.length - 1}` : ''}</span>}
+                  {h.folders[0] && <span className="truncate">· {tildify(h.folders[0])}{h.folders.length > 1 ? ` +${h.folders.length - 1}` : ''}</span>}
                   {h.outputCount > 0 && <span className="shrink-0">· {h.outputCount} file{h.outputCount > 1 ? 's' : ''}</span>}
                 </div>
                 {h.snippets.slice(0, 2).map((s, i) => (
@@ -210,7 +213,7 @@ function ConversationViewer({ id, jump, query, onBack, onDone }: { id: string; j
             {data && (
               <div className="truncate text-[10.5px] text-ink-3">
                 {SOURCE_NAME[data.info.source]} · {when(data.info.lastActivityAt)} · {data.messages.length} messages
-                {data.info.folders[0] && ` · ${data.info.folders[0].replace(/^\/Users\/[^/]+/, '~')}`}
+                {data.info.folders[0] && ` · ${tildify(data.info.folders[0])}`}
               </div>
             )}
           </div>

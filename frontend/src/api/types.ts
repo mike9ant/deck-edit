@@ -171,6 +171,10 @@ export interface AgentStatus {
   } | null
   apiKeyAvailable: boolean
   python: { path: string | null; pythonPptx: string | null }
+  conversations?: {
+    claudeCode: { path: string; found: boolean; sessions: number }
+    desktopApp: { paths: string[]; found: boolean; codeSessions: number; coworkSessions: number }
+  } | null
 }
 
 /** A past Claude conversation on this machine (CLI, desktop Code, or Cowork). */
