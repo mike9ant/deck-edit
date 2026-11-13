@@ -23,6 +23,24 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
   }
 }
 
+/* Tailwind's base styles (`img, svg, video { max-width: 100%; height: auto }`)
+   must not reach rendered slides: a cropped picture is an image deliberately
+   wider/taller than its box (srcRect), and clamping it to the box squishes the
+   whole image in. */
+.pptx-render img,
+.pptx-render svg,
+.pptx-render video,
+.pptx-render canvas {
+  max-width: none;
+  max-height: none;
+}
+
+/* Text that runs past its box (autofit off) overflows visibly in PowerPoint;
+   the renderer clips it vertically, cutting off e.g. a title's second line. */
+.pptx-render div:has(> [data-pptx-p]) {
+  overflow: visible !important;
+}
+
 /* The rendered slide must never show a text caret or selection unless it's being edited. */
 [data-slide-stage] [contenteditable='true'] { cursor: text; }
 [data-slide-stage] { user-select: none; }

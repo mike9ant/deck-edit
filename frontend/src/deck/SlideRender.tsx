@@ -6,6 +6,7 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef } from 'react'
 import { renderSlide, renderThumbnail, type PresentationData, type SlideData } from '@diceui/pptx-core'
+import { polishCharts, valueAxisScaling } from './chartFixes'
 
 /** One blob-URL cache per parsed presentation; the previous one is revoked when a deck reloads. */
 const caches = new Map<string, { pres: PresentationData; map: Map<string, string> }>()
@@ -37,6 +38,19 @@ export interface SlideRenderHandle {
   root(): HTMLElement | null
 }
 
+/** The value-axis scaling of the chart a rendered chart element belongs to. */
+export function scalingForChart(pres: PresentationData, slide: SlideData, dom: HTMLElement | undefined) {
+  const id = dom?.closest('[data-pptx-chart]')?.getAttribute('data-pptx-node-id')
+  if (!id) return []
+  const find = (nodes: SlideData['nodes']): string | undefined => {
+    for (const n of nodes) if (n.id === id && n.nodeType === 'chart') return (n as { chartPath: string }).chartPath
+    return undefined
+  }
+  const path = find(slide.nodes)
+  const root = path ? (pres.charts.get(path) as { element?: Element } | undefined)?.element : undefined
+  return valueAxisScaling(root)
+}
+
 export const SlideRender = forwardRef<SlideRenderHandle, Props>(function SlideRender(
   { deckKey, pres, slide, version, width, thumbnail, className },
   ref,
@@ -50,8 +64,11 @@ export const SlideRender = forwardRef<SlideRenderHandle, Props>(function SlideRe
     if (!el) return
     const cache = mediaCache(deckKey, pres)
     let handle: ReturnType<typeof renderSlide>
+    const charts = new Set<never>()
     try {
-      handle = thumbnail ? renderThumbnail(pres, slide, { mediaUrlCache: cache }) : renderSlide(pres, slide, { mediaUrlCache: cache, clipContent: true })
+      handle = thumbnail
+        ? renderThumbnail(pres, slide, { mediaUrlCache: cache })
+        : renderSlide(pres, slide, { mediaUrlCache: cache, clipContent: true, chartInstances: charts as never })
     } catch (e) {
       console.error('render slide', e)
       el.textContent = 'This slide could not be rendered.'
@@ -61,7 +78,16 @@ export const SlideRender = forwardRef<SlideRenderHandle, Props>(function SlideRe
     handle.element.style.transform = `scale(${width / pres.width})`
     el.replaceChildren(handle.element)
     rootEl.current = handle.element
-    return () => handle.dispose()
+    // Charts initialise once attached: polish them on the next frame and once
+    // the slide's async resources settle.
+    let live = true
+    const polish = () => live && charts.size && polishCharts(charts, (dom) => scalingForChart(pres, slide, dom))
+    requestAnimationFrame(polish)
+    void handle.ready.then(polish)
+    return () => {
+      live = false
+      handle.dispose()
+    }
     // width handled below without re-rendering
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deckKey, pres, slide, version, thumbnail])
@@ -73,7 +99,7 @@ export const SlideRender = forwardRef<SlideRenderHandle, Props>(function SlideRe
   return (
     <div
       ref={host}
-      className={className}
+      className={`pptx-render ${className ?? ''}`}
       style={{ width, height: (width * pres.height) / pres.width, overflow: 'hidden', position: 'relative', background: '#fff' }}
     />
   )

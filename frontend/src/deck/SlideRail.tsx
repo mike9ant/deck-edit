@@ -15,6 +15,7 @@ import { getClipboard, setClipboard, type PortableSlide } from './clipboard'
 import { slideTitle } from './deckModel'
 import { useNotes } from '../store/notesStore'
 import { useApp } from '../store/appStore'
+import { useInnerWidth } from '../components/useInnerWidth'
 
 const Thumb = memo(function Thumb(p: { deckKey: string; pres: PresentationData; slide: SlideData; version: number; width: number }) {
   return <SlideRender deckKey={p.deckKey} pres={p.pres} slide={p.slide} version={p.version} width={p.width} thumbnail />
@@ -30,7 +31,7 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
   const listRef = useRef<HTMLDivElement>(null)
   const notes = useNotes((s) => s.notes)
   const busy = isProjectBusy(session.pid)
-  const thumbW = Math.max(80, width - 44)
+  const thumbW = Math.max(60, Math.floor(useInnerWidth(listRef, width - 16) - 32))
   const current = pres.slides[session.slideIndex]
 
   // Keep the current slide in view.

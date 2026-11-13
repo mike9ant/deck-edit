@@ -16,6 +16,8 @@ import type { ServerEvent } from './api/types'
 import { docKind, useApp } from './store/appStore'
 import { deckKey, useDecks } from './deck/deckStore'
 import { mediaCache } from './deck/SlideRender'
+import { polishCharts } from './deck/chartFixes'
+import { scalingForChart } from './deck/SlideRender'
 import { pdfKey, usePdfs } from './pdf/pdfStore'
 
 const fontCss = new WeakMap<PresentationData, string>()
@@ -57,12 +59,18 @@ async function slidePng(pid: string, deck: string, slideNumber: number): Promise
   const slide = pres.slides[slideNumber - 1]
   if (!slide) throw new Error(`slide ${slideNumber} does not exist (the deck has ${pres.slides.length})`)
   const host = document.createElement('div')
+  host.className = 'pptx-render'
   host.style.cssText = `position:fixed;left:-20000px;top:0;width:${pres.width}px;height:${pres.height}px;overflow:hidden;background:#fff`
   document.body.appendChild(host)
-  const handle = renderSlide(pres, slide, { mediaUrlCache: mediaCache(key, pres) })
+  const charts = new Set<never>()
+  const handle = renderSlide(pres, slide, { mediaUrlCache: mediaCache(key, pres), chartInstances: charts as never })
   host.appendChild(handle.element)
   try {
     await handle.ready
+    await new Promise((r) => requestAnimationFrame(r))
+    polishCharts(charts, (dom) => scalingForChart(pres, slide, dom))
+    // ECharts animates its first draw — let it finish before capturing.
+    await new Promise((r) => setTimeout(r, charts.size ? 900 : 0))
     await document.fonts.ready
     await Promise.all(
       [...host.querySelectorAll('img')].map((img) => (img.complete ? null : new Promise((r) => { img.onload = img.onerror = r }))),

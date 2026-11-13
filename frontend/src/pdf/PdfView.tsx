@@ -16,6 +16,7 @@ import { useApp } from '../store/appStore'
 import { useChat } from '../store/chatStore'
 import { api } from '../api/client'
 import { prepareImage } from '../deck/images'
+import { useInnerWidth } from '../components/useInnerWidth'
 
 /** Render one page into a canvas at a CSS width. */
 export const PageCanvas = memo(function PageCanvas({ doc, index, width, version }: { doc: PDFDocumentProxy; index: number; width: number; version: number }) {
@@ -105,7 +106,8 @@ function PageRail({ session, width, busy }: { session: PdfSession; width: number
   const [dragOver, setDragOver] = useState<number | null>(null)
   const notes = useNotes((s) => s.notes)
   const n = session.doc!.numPages
-  const thumbW = Math.max(80, width - 44)
+  const listRef = useRef<HTMLDivElement>(null)
+  const thumbW = Math.max(60, Math.floor(useInnerWidth(listRef, width - 16) - 32))
   const move = async (from: number, to: number) => {
     const dest = from < to ? to - 1 : to
     if (dest === from) return
@@ -118,7 +120,7 @@ function PageRail({ session, width, busy }: { session: PdfSession; width: number
   }
   return (
     <div className="flex h-full flex-col bg-paper" style={{ width }}>
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto p-2">
         {Array.from({ length: n }, (_, i) => {
           const open = notes.filter((x) => x.deck === session.path && x.status === 'open' && x.slideIndex === i + 1).length
           return (
