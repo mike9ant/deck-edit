@@ -17,7 +17,7 @@ turn can be reverted with one click.
 ## Running
 
 ```bash
-./run.sh setup     # once: Python env for the agent (python-pptx, pymupdf, pypdf) + npm install
+./run.sh setup     # once: Python env for the agent (python-pptx, pymupdf, pypdf, openpyxl) + npm install
 ./run.sh           # build and start → http://127.0.0.1:3101
 ./run.sh dev       # hot-reload frontend on http://127.0.0.1:5180
 ./run.sh test      # backend + frontend unit tests
@@ -83,6 +83,12 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
     re-created on the target's matching layout with its shapes and images ("use destination theme")
   - undo/redo (⌘Z / ⇧⌘Z) for all of it
 - **PDF** — page rail, reorder/duplicate/delete pages, drop an image onto a page, undo/redo.
+- **Spreadsheets** (.xlsx / .xlsm) — read-only preview: sheet tabs, formatted values (number
+  formats, dates, percentages, currency), column widths, merged cells and basic styling; click a
+  cell to see its address and formula/value (the agent is told which sheet/cell you're on). Formulas
+  show their last computed result; files saved by scripts (openpyxl) have none until Excel
+  recalculates, so those cells show the formula. Charts, images and pivot tables aren't shown.
+  The agent edits spreadsheets with openpyxl (installed by `./run.sh setup`).
 - **Claude conversations on this computer** (library icon in the chat tabs): every Cowork session,
   Claude desktop Code session and Claude Code CLI session, newest first — search titles, folders
   and full transcripts, read a transcript, copy files a Cowork session produced into the project,
@@ -91,18 +97,22 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
   parsed defensively, see `backend/src/conversations.rs`). Found on macOS, Windows (incl. Microsoft
   Store installs) and Linux; Claude Code's `CLAUDE_CONFIG_DIR` is honored, and
   `PDFEDIT_CLAUDE_DESKTOP_DIR` adds another desktop-app folder. Agent settings shows what was found.
-- **Notes for the agent** — "Note" at the right of the toolbar (apart from the edit tools); **Select**
+- **Notes for the agent** — "Note for AI" (or "Draw for AI") at the right of the toolbar (apart from the edit tools); **Select**
   (or Esc) goes back to selecting shapes. Its ▾ menu picks how to place one:
   *Pin at a point* (click), or *Draw on the slide* — circle, underline or arrow at an area
   freehand (several strokes per note; a single click still pins). A drawn note reaches the agent
   as the area it covers (% of the slide, circled vs. marked) plus the shapes under it, and
   `screenshot_slide` with `show_notes` shows the agent the marks themselves.
-  **Act now** (in the note box, ⌘⇧Enter) pins the note and immediately asks the agent, in the open
+  **Pin note** (⌘Enter) is the main action; **Act now** (on the left of the note box, ⌘⇧Enter) pins the note and immediately asks the agent, in the open
   chat, to handle it — no need to type the request.
+  Notes also work on **spreadsheets** (pin or draw on the grid — anchored to cells, so they stay
+  with the content; the agent gets the cell(s) and what they contain) and on **selected text** in
+  text/code/Markdown files (select, then **Note for AI** in the header — the agent gets the lines and the
+  quoted text, which stays highlighted while the note is open; the header lists the file's notes).
   Open notes are sent with every message; the agent resolves them (you see them flip to
   resolved with its one-line summary) and can pin its own notes for you.
 - **Agent chats** — tabs of Claude Code conversations. Each message automatically tells
-  the agent which deck/slide you're on, what's selected, and the edits you made since its
+  the agent which deck/slide you're on, what's selected, which other files are open in tabs, and the edits you made since its
   last turn (already saved). The deck reloads as the agent saves; slides it changed get a
   dot in the rail.
   - **You can keep editing while the agent works.** Decks: your edits are *held* (the agent

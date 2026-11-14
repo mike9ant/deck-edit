@@ -166,17 +166,19 @@ function DraftPopover({ draft, onSave, onCancel, flipX, flipY }: { draft: NoteDr
           if (e.key === 'Escape') onCancel()
         }}
       />
-      <div className="mt-2 flex justify-end gap-2">
-        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
-        <button className="btn-ghost border border-hair" disabled={busy || !text.trim()} onClick={() => void save()} title="Pin it — the agent sees it with your next message (⌘Enter)">Pin note</button>
+      {/* Pin is the main action; "Act now" (pin + ask the agent right away) sits apart on the left. */}
+      <div className="mt-2 flex items-center gap-2">
         <button
-          className="btn-primary"
+          className="btn-ghost border border-hair text-amber-900"
           disabled={busy || !text.trim() || agentBusy}
           onClick={() => void save(true)}
           title={agentBusy ? 'The agent is working — pin the note now, or act when its turn ends' : 'Pin it and have the agent handle it right away (⌘⇧Enter)'}
         >
           <Zap size={13} /> Act now
         </button>
+        <span className="flex-1" />
+        <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+        <button className="btn-primary" disabled={busy || !text.trim()} onClick={() => void save()} title="Pin it — the agent sees it with your next message (⌘Enter)">Pin note</button>
       </div>
     </div>
   )
@@ -240,8 +242,18 @@ function MarkInfo({ shapes, hint }: { shapes?: string[]; hint?: boolean }) {
   )
 }
 
-/** The message "Act now" sends: the note itself (place, drawn area, shapes) reaches the agent in the context block. */
-export function actNowPrompt(note: Note, unit: 'slide' | 'page'): string {
-  const where = note.strokes?.length ? ' (the area I marked)' : note.shapeName ? ` (on "${note.shapeName}")` : ''
-  return `Please act on the note I just pinned on ${unit} ${note.slideIndex}${where} — note ${note.id}: "${note.text}". Make the change now, then resolve the note.`
+/** The message "Act now" sends: the note itself (place, drawn area, shapes/cells, quote) reaches the agent in the context block. */
+export function actNowPrompt(note: Note, unit: 'slide' | 'page' | 'sheet' | 'text'): string {
+  const clip = (t: string, n = 120) => (t.length > n ? `${t.slice(0, n - 1)}…` : t)
+  let place: string
+  if (unit === 'text') {
+    const lines = note.lines ? ` (line${/[–-]/.test(note.lines) ? 's' : ''} ${note.lines})` : ''
+    place = `in ${note.deck}${lines}, on the text "${clip(note.quote ?? '')}"`
+  } else if (unit === 'sheet') {
+    place = `on sheet "${note.slideId}" of ${note.deck}${note.strokes?.length ? ' (the cells I marked)' : note.shapeName ? ` (${note.shapeName})` : ''}`
+  } else {
+    const where = note.strokes?.length ? ' (the area I marked)' : note.shapeName ? ` (on "${note.shapeName}")` : ''
+    place = `on ${unit} ${note.slideIndex}${where}`
+  }
+  return `Please act on the note I just pinned ${place} — note ${note.id}: "${note.text}". Make the change now, then resolve the note.`
 }

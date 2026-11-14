@@ -18,6 +18,9 @@ export async function buildTurnContext(consume: boolean): Promise<TurnContext> {
   // Text edits: write pending autosaves first so the agent reads the latest.
   await flushTextSaves()
   const ctx = await viewContext(projectId, consume)
+  const { tabs, activePath } = useApp.getState()
+  const others = tabs.filter((t) => t !== activePath)
+  if (others.length) ctx.openTabs = others
   const text = textEditLines(projectId, consume)
   if (text.length) ctx.userChanges = [...(ctx.userChanges ?? []), ...text]
   return ctx

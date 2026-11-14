@@ -272,6 +272,8 @@ async fn call_tool(state: &AppState, chat_id: &str, name: &str, args: &Value) ->
                 shape_name: None,
                 strokes: Vec::new(),
                 shapes: Vec::new(),
+                quote: None,
+                lines: None,
                 text: s("text"),
                 author: "agent".into(),
                 created_at: chrono::Utc::now().to_rfc3339(),

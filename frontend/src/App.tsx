@@ -14,6 +14,7 @@ import { ChatPanel } from './chat/ChatPanel'
 import { DeckView } from './deck/DeckView'
 import { PdfView } from './pdf/PdfView'
 import { ImageView, MarkdownView, OtherView, TextView } from './viewers/Viewers'
+import { SheetView } from './viewers/SheetView'
 import { docKind, useApp } from './store/appStore'
 import { useChat } from './store/chatStore'
 import { useNotes } from './store/notesStore'
@@ -153,6 +154,7 @@ function DocArea({ pid }: { pid: string }) {
     case 'markdown': return <MarkdownView key={activePath} pid={pid} path={activePath} />
     case 'text': return <TextView key={activePath} pid={pid} path={activePath} />
     case 'image': return <ImageView key={activePath} pid={pid} path={activePath} />
+    case 'sheet': return <SheetView key={activePath} pid={pid} path={activePath} />
     default: return <OtherView pid={pid} path={activePath} />
   }
 }

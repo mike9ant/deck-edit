@@ -7,14 +7,16 @@
  * changes on disk (e.g. the agent edits a script or a speaker-notes .md).
  */
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Eye, ExternalLink, Loader2, Pencil } from 'lucide-react'
 import clsx from 'clsx'
 import { api } from '../api/client'
 import { useFileVersion } from '../store/fileVersions'
 import { useChat } from '../store/chatStore'
 import { useApp } from '../store/appStore'
-import { CodeEditor, useTextDoc, type SaveStatus } from './TextEditor'
+import { CodeEditor, useTextDoc, type SaveStatus, type TextSelection } from './TextEditor'
+import { TextNoteTools } from '../notes/TextNotes'
+import { useNotes } from '../store/notesStore'
 import { MarkdownEditable } from './MarkdownEditable'
 
 type MdMode = 'preview' | 'edit'
@@ -57,6 +59,18 @@ function TextDoc({ pid, path, mode, tools }: { pid: string; path: string; mode: 
   const { doc, status, error, change, flush, current } = useTextDoc(pid, path)
   const busy = useChat((s) => !!s.busyProjects[pid])
   const changed = useApp((s) => s.changed.includes(path))
+  const [selection, setSelection] = useState<TextSelection | null>(null)
+  const allNotes = useNotes((s) => s.notes)
+  const marks = allNotes.filter((n) => n.deck === path && n.quote && n.status === 'open').map((n) => ({ quote: n.quote!, line: n.slideIndex }))
+  const revealRef = useRef<((quote: string, line?: number) => void) | null>(null)
+  const reveal = (quote: string, line?: number) => {
+    if (mode === 'edit') return revealRef.current?.(quote, line)
+    // Formatted view: scroll the highlighted text into view.
+    const art = document.querySelector('.md-editable')
+    const w = art && document.createTreeWalker(art, NodeFilter.SHOW_TEXT)
+    const probe = quote.replace(/[*_`~]/g, '').split('\n')[0].slice(0, 40)
+    for (let n = w?.nextNode(); n; n = w!.nextNode()) if (n.textContent?.includes(probe)) return (n.parentElement as HTMLElement).scrollIntoView({ block: 'center' })
+  }
   if (error && !doc) return <div className="p-6 text-sm text-red-700">{error}</div>
   if (!doc) return <Loading />
   return (
@@ -65,6 +79,7 @@ function TextDoc({ pid, path, mode, tools }: { pid: string; path: string; mode: 
         {tools}
         <span className="truncate text-xs text-ink-3">{path}</span>
         <div className="ml-auto flex items-center gap-2 text-xs text-ink-3">
+          <TextNoteTools path={path} selection={selection} onReveal={reveal} />
           <StatusLabel status={status} changed={changed} />
           <button className="tool-btn" title="Open with the default app" onClick={() => void api.openExternal(pid, path)}><ExternalLink size={14} /> Open</button>
         </div>
@@ -75,10 +90,10 @@ function TextDoc({ pid, path, mode, tools }: { pid: string; path: string; mode: 
         </div>
       )}
       {mode === 'edit' ? (
-        <CodeEditor path={path} doc={doc} initialText={current()} readOnly={false} onChange={change} onSave={() => void flush()} />
+        <CodeEditor path={path} doc={doc} initialText={current()} readOnly={false} onSelection={setSelection} marks={marks} revealRef={revealRef} onChange={change} onSave={() => void flush()} />
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <MarkdownEditable text={current()} editable onChange={change} />
+          <MarkdownEditable text={current()} editable onChange={change} onSelection={setSelection} marks={marks} />
         </div>
       )}
     </div>

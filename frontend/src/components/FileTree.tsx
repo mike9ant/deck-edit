@@ -14,7 +14,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ChevronRight, File, FileImage, FileText, Folder, FolderPlus, Loader2, PanelLeftClose, Presentation, RefreshCw, FileType2, Trash2, Upload,
+  ChevronRight, File, FileImage, FileSpreadsheet, FileText, Folder, FolderPlus, Loader2, PanelLeftClose, Presentation, RefreshCw, FileType2, Trash2, Upload,
 } from 'lucide-react'
 import clsx from 'clsx'
 import type { TreeNode } from '../api/types'
@@ -34,6 +34,7 @@ const icon = (path: string) => {
     case 'markdown':
     case 'text': return <FileText size={14} className="text-ink-3" />
     case 'image': return <FileImage size={14} className="text-emerald-600" />
+    case 'sheet': return <FileSpreadsheet size={14} className="text-green-700" />
     default: return <File size={14} className="text-ink-3" />
   }
 }
@@ -90,6 +91,21 @@ export function FileTree() {
     setOpen(new Set(tree.filter((n) => n.kind === 'dir').map((n) => n.path)))
     setSelected([])
   }, [projectId, tree])
+
+  // The file in view (switching tabs) is selected here too: its folders open, its row scrolled into view.
+  // The panel may have been collapsed meanwhile — this runs again when it reopens.
+  useEffect(() => {
+    if (!activePath || !tree.length) return
+    const parts = activePath.split('/')
+    const dirs = parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/'))
+    if (dirs.some((d) => !open.has(d))) setOpen((o) => new Set([...o, ...dirs]))
+    setSelected((sel) => (sel.length === 1 && sel[0] === activePath) || sel.includes(activePath) ? sel : [activePath])
+    requestAnimationFrame(() => {
+      const row = listRef.current?.querySelector(`[title="${CSS.escape(activePath)}"][draggable]`)
+      row?.scrollIntoView({ block: 'nearest' })
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePath, tree])
 
   const rows = useMemo(() => visible(tree, open), [tree, open])
   const byPath = useMemo(() => new Map(rows.map((n) => [n.path, n])), [rows])

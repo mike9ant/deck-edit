@@ -555,6 +555,10 @@ fn compose_prompt(state: &AppState, project_id: &str, root: &Path, text: &str, c
     } else if let Some(f) = ctx.and_then(|c| c.get("openFile")).and_then(|v| v.as_str()) {
         out.push_str(&format!("The user has open: {f}\n"));
     }
+    if let Some(tabs) = ctx.and_then(|c| c.get("openTabs")).and_then(|v| v.as_array()).filter(|a| !a.is_empty()) {
+        let names: Vec<&str> = tabs.iter().filter_map(|t| t.as_str()).take(20).collect();
+        out.push_str(&format!("Other files open in tabs (the user may refer to them): {}\n", names.join(", ")));
+    }
     if let Some(changes) = ctx.and_then(|c| c.get("userChanges")).and_then(|v| v.as_array()).filter(|a| !a.is_empty()) {
         out.push_str("Edits the user made in the app since your last turn (already saved to disk — build on them, don't undo them):\n");
         for c in changes.iter().take(40) {
@@ -571,7 +575,7 @@ fn compose_prompt(state: &AppState, project_id: &str, root: &Path, text: &str, c
         .filter(|n| n.status == "open")
         .collect();
     if !notes.is_empty() {
-        out.push_str("Open notes the user pinned on slides (address the ones relevant to this request; call resolve_note with a one-line summary for each note you handle):\n");
+        out.push_str("Open notes the user pinned — on slides, PDF pages, spreadsheet cells or selected text (address the ones relevant to this request; call resolve_note with a one-line summary for each note you handle):\n");
         for n in notes.iter().take(30) {
             out.push_str(&format!("- [note {}] {} (by {}): \"{}\"\n", n.id, n.describe_place(), n.author, n.text));
         }
@@ -604,6 +608,7 @@ Editing PowerPoint files:
 - Write scratch scripts to /tmp, not into the project folder.
 - The user's past Claude conversations (Claude Code CLI, the Claude desktop app's Code sessions, and Cowork) can be searched with the `deck` tools `search_conversations` and read with `read_conversation` (pass `query` to get just the relevant parts). When the user mentions an earlier conversation, a Cowork session, or text like `[Conversation: … — id cowork:…]`, use these instead of searching the disk yourself. Cowork output files are listed by `read_conversation`; ask before copying them into the project.
 - Speaker notes are shown and edited in the app under each slide. Read/write them with python-pptx (`slide.notes_slide.notes_text_frame.text`); keep the user's notes unless asked to change them.
+- Spreadsheets (.xlsx): read/write them with openpyxl (installed; same Python). The app shows them as a read-only preview. openpyxl doesn't calculate formulas — a formula you write shows as the formula in the preview (and gets its value when the user opens the file in Excel); for figures the user should see right away, also write the computed value somewhere or tell them.
 - The user may keep editing while you work. In decks, their edits are held and re-applied on top of your saved version after your turn (just save normally; they're reported to you next turn). Text/Markdown files may change between your reads: if an edit fails because the file changed, re-read it and apply your change to the current text — don't overwrite theirs.
 - Copying slides BETWEEN decks: the user can do it in the app (mini-slides ⌘C in one deck, ⌘V in the other — it re-creates the slide on the target's matching layout). If asked to do it yourself, add a slide on a matching layout of the target, copy the source shapes' XML into it, and copy every image they reference (with its relationship) — never modify the source deck.
 - For PDFs, pymupdf (`import fitz`) and pypdf are installed.

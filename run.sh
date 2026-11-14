@@ -1,6 +1,6 @@
 #!/bin/bash
 # PPTX Edit — run script
-#   ./run.sh setup            Python env (.venv with python-pptx, pymupdf, pypdf) + npm install
+#   ./run.sh setup            Python env (.venv with python-pptx, pymupdf, pypdf, openpyxl) + npm install
 #   ./run.sh                  Build everything and (re)start the server  → http://127.0.0.1:3101
 #   ./run.sh build            Just build (backend release + frontend dist)
 #   ./run.sh dev              Backend in background + Vite dev server (hot reload) → http://127.0.0.1:5180
@@ -29,7 +29,7 @@ setup() {
     say "Creating Python env (.venv)"
     python3 -m venv "$ROOT/.venv"
   fi
-  "$ROOT/.venv/bin/pip" install -q --upgrade python-pptx pymupdf pypdf pillow
+  "$ROOT/.venv/bin/pip" install -q --upgrade python-pptx pymupdf pypdf pillow openpyxl
   say "Installing frontend packages"
   (cd "$FRONTEND" && npm install --no-audit --no-fund)
 }

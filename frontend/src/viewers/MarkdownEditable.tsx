@@ -33,6 +33,36 @@ import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useApp } from '../store/appStore'
 import { rebase } from './textMerge'
+import { findQuote, type QuoteMark, type TextSelection } from './TextEditor'
+
+/** A DOM range for `text` in the rendered view (matching across text nodes). */
+function domRangeOf(root: HTMLElement, text: string): Range | null {
+  if (!text) return null
+  const nodes: Text[] = []
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  for (let n = w.nextNode() as Text | null; n; n = w.nextNode() as Text | null) nodes.push(n)
+  const all = nodes.map((n) => n.data).join('')
+  let i = all.indexOf(text)
+  // A quote taken from the Markdown source may carry markup the rendered text doesn't.
+  if (i < 0) text = text.replace(/[*_`~]/g, '').replace(/^#+\s*|^>\s*|^[-+]\s+/gm, '')
+  if (i < 0) i = all.indexOf(text)
+  if (i < 0 || !text) return null
+  const at = (pos: number): [Text, number] => {
+    let acc = 0
+    for (const n of nodes) {
+      if (pos <= acc + n.length) return [n, pos - acc]
+      acc += n.length
+    }
+    const last = nodes[nodes.length - 1]
+    return [last, last.length]
+  }
+  const r = document.createRange()
+  const [a, ao] = at(i)
+  const [b, bo] = at(i + text.length)
+  r.setStart(a, ao)
+  r.setEnd(b, bo)
+  return r
+}
 import {
   applyRunEdits, deleteLineAt, insertLineAfter, lineStartOf, listItemContentStart, mapPos, nextListMarker, tableCellArea,
   rehypeSourceText, runSourceMap, sameVisibleText, toggleMarkRange, unwrapMark, type Mark, type RunContext, type RunEdit } from './mdSourceEdit'
@@ -172,8 +202,18 @@ function contextOf(el: HTMLElement): RunContext {
   return /^h\d$/.test(tag) ? 'heading' : tag === 'td' || tag === 'th' ? 'cell' : 'text'
 }
 
-export function MarkdownEditable({ text, editable, onChange }: { text: string; editable: boolean; onChange(next: string): void }) {
+export function MarkdownEditable({ text, editable, onChange, onSelection, marks = [] }: {
+  text: string
+  editable: boolean
+  onChange(next: string): void
+  /** The selected text (and its lines in the source), or null. */
+  onSelection?(s: TextSelection | null): void
+  /** Text of open notes, highlighted. */
+  marks?: QuoteMark[]
+}) {
   const [generation, setGeneration] = useState(0)
+  const onSelectionRef = useRef(onSelection)
+  onSelectionRef.current = onSelection
   const [bar, setBar] = useState<{ x: number; y: number; kind: 'format' | 'copy'; bold: boolean; italic: boolean } | null>(null)
   const articleRef = useRef<HTMLElement>(null)
   const pendingFormat = useRef<(Pos & { mark: Mark }) | null>(null)
@@ -604,6 +644,14 @@ export function MarkdownEditable({ text, editable, onChange }: { text: string; e
     const update = () => {
       const sel = getSelection()
       const r = sel?.rangeCount ? sel.getRangeAt(0) : null
+      // Report the selection inside the document (for a note on it), with its lines in the Markdown source.
+      if (r && articleRef.current?.contains(r.commonAncestorContainer)) {
+        const t = r.collapsed ? '' : sel!.toString().trim()
+        const src = rendered.current
+        const at = t ? findQuote(src, t) ?? findQuote(src, t.split('\n')[0]) : null
+        const line = at ? src.slice(0, at.from).split('\n').length : 1
+        onSelectionRef.current?.(t ? { text: t, fromLine: line, toLine: line + (at ? src.slice(at.from, at.to).split('\n').length - 1 : 0) } : null)
+      }
       if (!editable || !r || r.collapsed || !articleRef.current?.contains(r.commonAncestorContainer)) return setBar(null)
       const host = hostOf(r.startContainer)
       const kind = host && host.isContentEditable && hostOf(r.endContainer) === host ? 'format' : 'copy'
@@ -672,6 +720,18 @@ export function MarkdownEditable({ text, editable, onChange }: { text: string; e
       },
     }
   }, [editable])
+
+  // Highlight the text open notes are about (CSS Custom Highlight API — no DOM changes).
+  const marksKey = JSON.stringify(marks)
+  useEffect(() => {
+    const reg = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS?.highlights
+    const H = (globalThis as { Highlight?: new (...r: Range[]) => unknown }).Highlight
+    if (!reg || !H || !articleRef.current) return
+    const ranges = marks.map((m) => domRangeOf(articleRef.current!, m.quote)).filter((r): r is Range => !!r)
+    reg.set('note-quote', new H(...ranges))
+    return () => { reg.delete('note-quote') }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marksKey, generation, source])
 
   // Rendered once per source/generation, so React never touches a block while it's being typed in.
   const content = useMemo(

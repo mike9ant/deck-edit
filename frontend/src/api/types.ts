@@ -24,8 +24,11 @@ export interface Note {
   shapeName?: string
   /** A freehand mark instead of a point: polylines of [x, y] slide fractions; x/y is then the pin's spot. */
   strokes?: Stroke[]
-  /** Shapes the drawn mark covers (slides only). */
+  /** Shapes the drawn mark covers (slides), or the contents of the cells it covers (spreadsheets). */
   shapes?: string[]
+  /** A note on selected text in a text/code/Markdown file: the text, and its lines ("12" / "12–14"). */
+  quote?: string
+  lines?: string
   text: string
   author: 'user' | 'agent'
   createdAt: string
@@ -67,6 +70,8 @@ export interface TurnContext {
   selection?: { name: string; text?: string }[]
   userChanges?: string[]
   openFile?: string
+  /** Other open tabs, besides the one in view. */
+  openTabs?: string[]
 }
 
 export interface Turn {

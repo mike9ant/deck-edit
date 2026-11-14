@@ -8,12 +8,13 @@ import { create } from 'zustand'
 import { api } from '../api/client'
 import type { Project, TreeNode } from '../api/types'
 
-export type DocKind = 'pptx' | 'pdf' | 'markdown' | 'text' | 'image' | 'other'
+export type DocKind = 'pptx' | 'pdf' | 'markdown' | 'text' | 'image' | 'sheet' | 'other'
 
 export function docKind(path: string): DocKind {
   const ext = path.split('.').pop()?.toLowerCase() ?? ''
   if (ext === 'pptx' || ext === 'potx') return 'pptx'
   if (ext === 'pdf') return 'pdf'
+  if (ext === 'xlsx' || ext === 'xlsm') return 'sheet'
   if (ext === 'md' || ext === 'markdown') return 'markdown'
   if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return 'image'
   if (['txt', 'csv', 'json', 'py', 'js', 'ts', 'yaml', 'yml', 'toml', 'html', 'css', 'log', 'xml', 'sh'].includes(ext))

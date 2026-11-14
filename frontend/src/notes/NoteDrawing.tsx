@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronDown, MapPin, MessageSquarePlus, MousePointer2, PenLine } from 'lucide-react'
+import { BotMessageSquare, Check, ChevronDown, MapPin, MousePointer2, PenLine } from 'lucide-react'
 import clsx from 'clsx'
 import type { Stroke } from '../api/types'
 import { useNotes, type NoteTool } from '../store/notesStore'
@@ -22,22 +22,22 @@ export type Box = { x1: number; y1: number; x2: number; y2: number }
 
 const TOOLS: { id: NoteTool; label: string; hint: string; icon: typeof MapPin }[] = [
   { id: 'pin', label: 'Pin at a point', hint: 'Click where the note goes', icon: MapPin },
-  { id: 'draw', label: 'Draw on the slide', hint: 'Circle or mark an area — the agent focuses there', icon: PenLine },
+  { id: 'draw', label: 'Draw a mark', hint: 'Circle or mark an area — the agent focuses there', icon: PenLine },
 ]
 
 export function NoteToolButton({ active, onToggle }: { active: boolean; onToggle(): void }) {
   const tool = useNotes((s) => s.tool)
   const setTool = useNotes((s) => s.setTool)
   const [menu, setMenu] = useState(false)
-  const Icon = tool === 'draw' ? PenLine : MessageSquarePlus
+  const Icon = tool === 'draw' ? PenLine : BotMessageSquare
   return (
     <div className="relative flex items-center">
       <button
         className={clsx('tool-btn rounded-r-none pr-1.5', active && 'bg-amber-100 text-amber-900')}
         onClick={onToggle}
-        title={tool === 'draw' ? 'Draw a note for the agent: circle or mark an area of the slide' : 'Pin a note for the agent (click on the slide)'}
+        title={tool === 'draw' ? 'Draw a note for the AI agent: circle or mark an area' : 'Pin a note for the AI agent: click where it goes'}
       >
-        <Icon size={15} /> {tool === 'draw' ? 'Draw note' : 'Note'}
+        <Icon size={15} /> {tool === 'draw' ? 'Draw for AI' : 'Note for AI'}
       </button>
       <button
         className={clsx('tool-btn rounded-l-none px-1', active && 'bg-amber-100 text-amber-900')}
@@ -50,6 +50,7 @@ export function NoteToolButton({ active, onToggle }: { active: boolean; onToggle
         <>
           <div className="fixed inset-0 z-40" onMouseDown={() => setMenu(false)} />
           <div className="absolute right-0 top-8 z-50 w-64 rounded-lg border border-hair bg-white p-1 shadow-xl">
+            <div className="px-2 pb-1 pt-1.5 text-[11px] font-medium text-ink-3">Notes for the AI agent</div>
             {TOOLS.map((t) => (
               <button
                 key={t.id}

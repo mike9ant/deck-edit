@@ -45,6 +45,12 @@ pub struct Note {
     /// first, as `name — "text excerpt"`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shapes: Vec<String>,
+    /// A note on selected text in a text/code/Markdown file: the text it's about…
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quote: Option<String>,
+    /// …and its lines ("12" or "12–14").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<String>,
     pub text: String,
     /// "user" | "agent"
     pub author: String,
@@ -96,6 +102,28 @@ impl Note {
 
     /// One line for the agent: where the note is and what it covers.
     pub fn describe_place(&self) -> String {
+        if let Some(q) = &self.quote {
+            let q: String = q.chars().take(400).collect();
+            let lines = self.lines.as_deref().map(|l| format!(" line{} {l}", if l.contains('–') || l.contains('-') { "s" } else { "" })).unwrap_or_default();
+            return format!("{}{lines}, on the text: \"{q}\"", self.deck);
+        }
+        if is_sheet(&self.deck) {
+            // Positions are in cell units: column/row number + the fraction into that cell.
+            let mut out = format!("{} sheet \"{}\"", self.deck, self.slide_id);
+            if let Some(r) = self.region() {
+                let range = format!("{}:{}", cell_ref(r.x1, r.y1), cell_ref(r.x2, r.y2));
+                out.push_str(&format!(", {} the cells {range}", if r.closed { "circled" } else { "marked (open stroke: underline/arrow/line)" }));
+                if !self.shapes.is_empty() {
+                    out.push_str(&format!(", covering {}", self.shapes.join("; ")));
+                }
+            } else {
+                out.push_str(&format!(" at cell {}", cell_ref(self.x, self.y)));
+                if let Some(s) = &self.shape_name {
+                    out.push_str(&format!(" ({s})"));
+                }
+            }
+            return out;
+        }
         let unit = if self.deck.to_lowercase().ends_with(".pdf") { "page" } else { "slide" };
         let mut out = format!("{} {unit} {}", self.deck, self.slide_index);
         if let Some(r) = self.region() {
@@ -118,8 +146,31 @@ impl Note {
     }
 }
 
-/// Keep stored drawings bounded and on the slide.
-fn clean_strokes(strokes: Vec<Vec<[f64; 2]>>) -> Vec<Vec<[f64; 2]>> {
+pub fn is_sheet(deck: &str) -> bool {
+    let d = deck.to_lowercase();
+    d.ends_with(".xlsx") || d.ends_with(".xlsm")
+}
+
+/// 1 → A, 27 → AA.
+fn col_name(mut n: u32) -> String {
+    let mut s = Vec::new();
+    while n > 0 {
+        s.push(b'A' + ((n - 1) % 26) as u8);
+        n = (n - 1) / 26;
+    }
+    s.reverse();
+    String::from_utf8(s).unwrap_or_default()
+}
+
+/// A position in cell units (column + fraction, row + fraction) → "B7".
+fn cell_ref(x: f64, y: f64) -> String {
+    format!("{}{}", col_name(x.floor().max(1.0) as u32), y.floor().max(1.0) as u32)
+}
+
+/// Keep stored drawings bounded: on the slide (fractions 0..1), or — on a
+/// spreadsheet, where positions are in cell units — just non-negative.
+fn clean_strokes(strokes: Vec<Vec<[f64; 2]>>, unit_square: bool) -> Vec<Vec<[f64; 2]>> {
+    let lim = |v: f64| if unit_square { v.clamp(0.0, 1.0) } else { v.max(0.0) };
     strokes
         .into_iter()
         .take(30)
@@ -127,7 +178,7 @@ fn clean_strokes(strokes: Vec<Vec<[f64; 2]>>) -> Vec<Vec<[f64; 2]>> {
             s.into_iter()
                 .filter(|p| p[0].is_finite() && p[1].is_finite())
                 .take(500)
-                .map(|p| [p[0].clamp(0.0, 1.0), p[1].clamp(0.0, 1.0)])
+                .map(|p| [lim(p[0]), lim(p[1])])
                 .collect::<Vec<_>>()
         })
         .filter(|s| !s.is_empty())
@@ -285,6 +336,10 @@ struct CreateBody {
     strokes: Vec<Vec<[f64; 2]>>,
     #[serde(default)]
     shapes: Vec<String>,
+    #[serde(default)]
+    quote: Option<String>,
+    #[serde(default)]
+    lines: Option<String>,
     text: String,
 }
 
@@ -294,15 +349,18 @@ async fn create(
     Json(b): Json<CreateBody>,
 ) -> Result<Json<Note>> {
     state.projects.get(&id)?;
+    let sheet = is_sheet(&b.deck);
     let note = Note {
         id: uuid::Uuid::new_v4().to_string()[..8].to_string(),
         deck: b.deck,
         slide_id: b.slide_id,
         slide_index: b.slide_index,
-        x: b.x.clamp(0.0, 1.0),
-        y: b.y.clamp(0.0, 1.0),
+        x: if sheet { b.x.max(0.0) } else { b.x.clamp(0.0, 1.0) },
+        y: if sheet { b.y.max(0.0) } else { b.y.clamp(0.0, 1.0) },
         shape_name: b.shape_name,
-        strokes: clean_strokes(b.strokes),
+        strokes: clean_strokes(b.strokes, !sheet),
+        quote: b.quote.map(|q| q.chars().take(2000).collect()),
+        lines: b.lines,
         shapes: b.shapes.into_iter().take(12).collect(),
         text: b.text,
         author: "user".into(),
@@ -410,6 +468,8 @@ mod tests {
             shape_name: Some("Title 1".into()),
             strokes,
             shapes: vec!["Chart 4".into()],
+            quote: None,
+            lines: None,
             text: "bigger".into(),
             author: "user".into(),
             created_at: String::new(),
@@ -452,7 +512,40 @@ mod tests {
 
     #[test]
     fn strokes_are_clamped_and_bounded() {
-        let s = clean_strokes(vec![vec![[-0.5, 2.0], [f64::NAN, 0.1], [0.4, 0.4]], vec![]]);
+        let s = clean_strokes(vec![vec![[-0.5, 2.0], [f64::NAN, 0.1], [0.4, 0.4]], vec![]], true);
         assert_eq!(s, vec![vec![[0.0, 1.0], [0.4, 0.4]]]);
+    }
+}
+
+#[cfg(test)]
+mod sheet_and_text_tests {
+    use super::*;
+
+    fn base(deck: &str) -> Note {
+        Note {
+            id: "n".into(), deck: deck.into(), slide_id: "Summary".into(), slide_index: 1, x: 2.4, y: 7.5,
+            shape_name: Some("B7 = \"$3,584,568\"".into()), strokes: vec![], shapes: vec![], quote: None, lines: None,
+            text: "check".into(), author: "user".into(), created_at: String::new(), status: "open".into(),
+            resolution: None, resolved_at: None, resolved_by: None,
+        }
+    }
+
+    #[test]
+    fn sheet_notes_name_cells() {
+        let n = base("model.xlsx");
+        assert_eq!(n.describe_place(), "model.xlsx sheet \"Summary\" at cell B7 (B7 = \"$3,584,568\")");
+        let mut d = base("model.xlsx");
+        d.strokes = vec![vec![[2.2, 4.1], [4.8, 4.1], [4.8, 9.6], [2.2, 9.6], [2.25, 4.2], [2.2, 4.15], [2.2, 4.1], [2.21, 4.1], [2.2, 4.12]]];
+        d.shapes = vec!["B4 \"$2,500,000\"".into()];
+        assert_eq!(d.describe_place(), "model.xlsx sheet \"Summary\", circled the cells B4:D9, covering B4 \"$2,500,000\"");
+        assert_eq!(col_name(28), "AB");
+    }
+
+    #[test]
+    fn text_notes_quote_their_text() {
+        let mut n = base("notes.md");
+        n.quote = Some("Medicine should be engineered".into());
+        n.lines = Some("12–14".into());
+        assert_eq!(n.describe_place(), "notes.md lines 12–14, on the text: \"Medicine should be engineered\"");
     }
 }

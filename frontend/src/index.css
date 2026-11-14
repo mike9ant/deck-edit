@@ -63,3 +63,12 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
 .md-editable [data-md-block] [data-md-block]:hover {
   outline-color: transparent;
 }
+
+/* Text that an open note is about (text/Markdown editors). */
+.cm-note-quote {
+  background: rgb(251 191 36 / 0.3);
+  border-bottom: 2px solid rgb(245 158 11 / 0.8);
+}
+::highlight(note-quote) {
+  background-color: rgb(251 191 36 / 0.35);
+}

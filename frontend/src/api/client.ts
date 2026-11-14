@@ -112,7 +112,7 @@ export const api = {
   notes: (pid: string) => json<Note[]>('GET', `/projects/${pid}/notes`),
   addNote: (
     pid: string,
-    n: { deck: string; slideId: string; slideIndex: number; x: number; y: number; shapeName?: string; strokes?: Stroke[]; shapes?: string[]; text: string },
+    n: { deck: string; slideId: string; slideIndex: number; x: number; y: number; shapeName?: string; strokes?: Stroke[]; shapes?: string[]; quote?: string; lines?: string; text: string },
   ) => json<Note>('POST', `/projects/${pid}/notes`, n),
   updateNote: (pid: string, id: string, body: Partial<Pick<Note, 'text' | 'x' | 'y' | 'status' | 'slideIndex' | 'slideId'>>) =>
     json<Note>('PATCH', `/projects/${pid}/notes/${id}`, body),

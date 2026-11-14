@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { basicSetup } from 'codemirror'
 import { Annotation, Compartment, EditorState, Transaction, type Extension } from '@codemirror/state'
-import { EditorView, keymap } from '@codemirror/view'
+import { Decoration, EditorView, keymap } from '@codemirror/view'
 import { indentWithTab } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
 import { json } from '@codemirror/lang-json'
@@ -160,9 +160,47 @@ export interface TextDocState {
   mine?: string
 }
 
-export function CodeEditor({ path, doc, initialText, readOnly, onChange, onSave }: {
+/** The selected text and its lines (1-based). */
+export interface TextSelection {
+  text: string
+  fromLine: number
+  toLine: number
+}
+/** Text a note is about, to highlight (found near its line). */
+export interface QuoteMark {
+  quote: string
+  line?: number
+}
+
+/** Where `quote` occurs in `doc`, preferring the occurrence nearest `line`. */
+export function findQuote(doc: string, quote: string, line?: number): { from: number; to: number } | null {
+  if (!quote) return null
+  let best: { from: number; d: number } | null = null
+  for (let i = doc.indexOf(quote), n = 0; i >= 0 && n < 200; i = doc.indexOf(quote, i + 1), n++) {
+    const at = doc.slice(0, i).split('\n').length
+    const d = line ? Math.abs(at - line) : n
+    if (!best || d < best.d) best = { from: i, d }
+  }
+  return best ? { from: best.from, to: best.from + quote.length } : null
+}
+
+const quoteMark = Decoration.mark({ class: 'cm-note-quote' })
+const quoteDecorations = (marks: QuoteMark[]) =>
+  EditorView.decorations.compute(['doc'], (state) => {
+    const text = state.doc.toString()
+    const ranges = marks.map((m) => findQuote(text, m.quote, m.line)).filter((r): r is { from: number; to: number } => !!r && r.to > r.from)
+    return Decoration.set(ranges.map((r) => quoteMark.range(r.from, r.to)), true)
+  })
+
+export function CodeEditor({ path, doc, initialText, readOnly, onChange, onSave, onSelection, marks = [], revealRef }: {
   path: string
   doc: TextDocState
+  /** The selection changed (null: nothing selected). */
+  onSelection?(s: TextSelection | null): void
+  /** Text of open notes, highlighted. */
+  marks?: QuoteMark[]
+  /** Set to a function that selects and scrolls to a quote. */
+  revealRef?: React.MutableRefObject<((quote: string, line?: number) => void) | null>
   /** What to show on mount — the latest text, which may include edits made since `doc` was loaded. */
   initialText: string
   readOnly: boolean
@@ -172,8 +210,11 @@ export function CodeEditor({ path, doc, initialText, readOnly, onChange, onSave 
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
   const ro = useRef(new Compartment())
-  const handlers = useRef({ onChange, onSave })
-  handlers.current = { onChange, onSave }
+  const marksComp = useRef(new Compartment())
+  const handlers = useRef({ onChange, onSave, onSelection })
+  handlers.current = { onChange, onSave, onSelection }
+  const marksRef = useRef(marks)
+  marksRef.current = marks
 
   const readOnlyRef = useRef(readOnly)
   readOnlyRef.current = readOnly
@@ -191,8 +232,13 @@ export function CodeEditor({ path, doc, initialText, readOnly, onChange, onSave 
         ...languageFor(path),
         wraps(path) ? EditorView.lineWrapping : [],
         ro.current.of(editable(readOnlyRef.current)),
+        marksComp.current.of(quoteDecorations(marksRef.current)),
         EditorView.updateListener.of((u) => {
           if (u.docChanged && !u.transactions.some((t) => t.annotation(fromDisk))) handlers.current.onChange(u.state.doc.toString())
+          if (u.selectionSet || u.docChanged) {
+            const m = u.state.selection.main
+            handlers.current.onSelection?.(m.empty ? null : { text: u.state.sliceDoc(m.from, m.to), fromLine: u.state.doc.lineAt(m.from).number, toLine: u.state.doc.lineAt(m.to).number })
+          }
         }),
         EditorView.theme({
           '&': { height: '100%', fontSize: '13px', backgroundColor: '#fff' },
@@ -231,6 +277,24 @@ export function CodeEditor({ path, doc, initialText, readOnly, onChange, onSave 
   useEffect(() => {
     view.current?.dispatch({ effects: ro.current.reconfigure(editable(readOnly)) })
   }, [readOnly])
+
+  const marksKey = JSON.stringify(marks)
+  useEffect(() => {
+    view.current?.dispatch({ effects: marksComp.current.reconfigure(quoteDecorations(marks)) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marksKey])
+
+  useEffect(() => {
+    if (!revealRef) return
+    revealRef.current = (quote, line) => {
+      const v = view.current
+      const r = v && findQuote(v.state.doc.toString(), quote, line)
+      if (!v || !r) return
+      v.dispatch({ selection: { anchor: r.from, head: r.to }, effects: EditorView.scrollIntoView(r.from, { y: 'center' }) })
+      v.focus()
+    }
+    return () => { revealRef.current = null }
+  }, [revealRef])
 
   return <div ref={host} className="min-h-0 flex-1 overflow-hidden" />
 }
