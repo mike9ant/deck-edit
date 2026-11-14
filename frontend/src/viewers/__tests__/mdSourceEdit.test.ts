@@ -3,7 +3,7 @@ import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import remarkGfm from 'remark-gfm'
 import remarkRehype from 'remark-rehype'
-import { applyRunEdits, rehypeSourceText, runSourceMap, sameVisibleText, toggleMarkRange, unwrapMark, wrapMark, type Mark, type RunContext } from '../mdSourceEdit'
+import { applyRunEdits, deleteLineAt, insertLineAfter, listItemContentStart, mapPos, nextListMarker, tableCellArea, rehypeSourceText, runSourceMap, sameVisibleText, toggleMarkRange, unwrapMark, wrapMark, type Mark, type RunContext } from '../mdSourceEdit'
 
 type Run = { s: number; e: number; v: string; ctx: RunContext }
 
@@ -136,5 +136,31 @@ describe('toggling part of (or across the edge of) a bold/italic section', () =>
     expect(toggle('Some **old** bold text.', 'bold', 'strong', false)).toBe('Some **old bold** text.')
     expect(toggle('x **a** y', 'x', 'strong', false)).toBe('**x a** y')
     expect(toggle('**a**, b', 'b', 'strong', false)).toBe('**a**, **b**')
+  })
+})
+
+describe('list and table structure helpers', () => {
+  it('finds list markers and where an item’s text goes', () => {
+    const src = '- a\n-\n3. c\n- [x] d\n'
+    expect(nextListMarker(src, 0)).toBe('-')
+    expect(nextListMarker(src, src.indexOf('3.'))).toBe('4.')
+    expect(nextListMarker(src, src.indexOf('- [x]'))).toBe('- [ ]')
+    expect(listItemContentStart(src, 0)).toEqual({ pos: 2, space: false })
+    expect(listItemContentStart(src, 4)).toEqual({ pos: 5, space: true })
+    expect(listItemContentStart(src, src.indexOf('- [x]'))).toEqual({ pos: src.indexOf('d'), space: false })
+  })
+  it('finds table cell areas, with or without outer pipes, skipping escaped and code pipes', () => {
+    const row = '| a | b \\| c | `x|y` |'
+    const cells = [0, 1, 2].map((i) => { const [s, e] = tableCellArea(row, 0, i)!; return row.slice(s, e) })
+    expect(cells).toEqual([' a ', ' b \\| c ', ' `x|y` '])
+    const bare = 'a | b'
+    expect([0, 1].map((i) => { const [s, e] = tableCellArea(bare, 0, i)!; return bare.slice(s, e) })).toEqual(['a ', ' b'])
+    expect(tableCellArea('|  |  |', 0, 0)).toEqual([1, 3])
+  })
+  it('inserts and deletes whole lines, and maps positions through edits', () => {
+    expect(insertLineAfter('a\nb', 0, 'X')).toEqual({ src: 'a\nX\nb', at: 2 })
+    expect(deleteLineAt('a\nX\nb', 2)).toBe('a\nb')
+    expect(deleteLineAt('a\nX', 2)).toBe('a')
+    expect(mapPos('abc def', [{ s: 0, e: 3, text: 'abcd', ctx: 'text' }], 4)).toBe(5)
   })
 })

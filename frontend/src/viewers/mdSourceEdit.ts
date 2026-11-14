@@ -29,6 +29,8 @@ type HNode = {
 /** Where text can be edited: blocks, plus the inline formatting inside them. */
 const TEXT_PARENTS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'td', 'th', 'strong', 'em', 'del', 'a'])
 /** Containers whose whitespace-only text is just source layout (editable blocks would show it as blank lines). */
+/** Elements whose source range is exposed as data-hs/data-he (list items, table rows/cells, blocks) — for structural edits. */
+const HS_TAGS = new Set(['li', 'tr', 'td', 'th', 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
 /** Formatted elements whose source range is exposed (for removing their delimiters). */
 const MARKS = new Set(['strong', 'em'])
 const LAYOUT_PARENTS = new Set(['li', 'ul', 'ol', 'table', 'thead', 'tbody', 'tr', 'blockquote'])
@@ -44,6 +46,9 @@ export function rehypeSourceText() {
     }
     const walk = (node: HNode) => {
       if (!node.children || node.tagName === 'code' || node.tagName === 'pre') return
+      if (node.tagName && HS_TAGS.has(node.tagName) && node.position?.start.offset != null && node.position.end.offset != null) {
+        node.properties = { ...node.properties, dataHs: node.position.start.offset, dataHe: node.position.end.offset }
+      }
       if (node.tagName && MARKS.has(node.tagName) && node.position?.start.offset != null && node.position.end.offset != null) {
         node.properties = { ...node.properties, dataFs: node.position.start.offset, dataFe: node.position.end.offset }
       }
@@ -254,4 +259,66 @@ export function toggleMarkRange(src: string, a: number, b: number, marks: MarkRa
     at = Math.max(at, op.e)
   }
   return out + src.slice(at)
+}
+
+// ── structural edits: list items and table rows ────────────────────────────
+
+export const lineStartOf = (src: string, pos: number) => src.lastIndexOf('\n', pos - 1) + 1
+export const lineEndOf = (src: string, pos: number) => {
+  const i = src.indexOf('\n', pos)
+  return i < 0 ? src.length : i
+}
+
+/** A position in `src` after `edits` were applied (edits ending at or before it shift it). */
+export function mapPos(src: string, edits: RunEdit[], pos: number): number {
+  let d = 0
+  for (const ed of edits) if (ed.e <= pos) d += writeRun(src, ed.s, ed.e, ed.text, ed.ctx).length - (ed.e - ed.s)
+  return pos + d
+}
+
+/** Where a list item's text goes, after its marker (and task box); `space`: a space must come first. */
+export function listItemContentStart(src: string, hs: number): { pos: number; space: boolean } | null {
+  const m = src.slice(hs).match(/^(?:[-*+]|\d+[.)])(?: \[[ xX]\])?/)
+  if (!m) return null
+  const pos = hs + m[0].length
+  return src[pos] === ' ' || src[pos] === '\t' ? { pos: pos + 1, space: false } : { pos, space: true }
+}
+
+/** The marker for a new item after the one starting at `hs`: same bullet, next number, an empty task box if it had one. */
+export function nextListMarker(src: string, hs: number): string | null {
+  const m = src.slice(hs).match(/^(?:([-*+])|(\d+)([.)]))( \[[ xX]\])?/)
+  if (!m) return null
+  return (m[1] ?? `${Number(m[2]) + 1}${m[3]}`) + (m[4] ? ' [ ]' : '')
+}
+
+/** Source range of the content of cell `col` in the table row starting at `rowStart` (between its pipes). */
+export function tableCellArea(src: string, rowStart: number, col: number): [number, number] | null {
+  const end = lineEndOf(src, rowStart)
+  const pipes: number[] = []
+  let code = false
+  for (let i = rowStart; i < end; i++) {
+    if (src[i] === '\\') {
+      i++
+      continue
+    }
+    if (src[i] === '`') code = !code
+    if (src[i] === '|' && !code) pipes.push(i)
+  }
+  const bounds = src[rowStart] === '|' ? pipes : [rowStart - 1, ...pipes]
+  if (col + 1 < bounds.length) return [bounds[col] + 1, bounds[col + 1]]
+  if (col + 1 === bounds.length && bounds[col] + 1 <= end) return [bounds[col] + 1, end] // no trailing pipe
+  return null
+}
+
+/** Remove the whole line containing `pos` (and its line break). */
+export function deleteLineAt(src: string, pos: number): string {
+  const s = lineStartOf(src, pos)
+  const e = lineEndOf(src, pos)
+  return e < src.length ? src.slice(0, s) + src.slice(e + 1) : src.slice(0, Math.max(0, s - 1)) + src.slice(e)
+}
+
+/** Insert a new line right after the line containing `pos`; returns the new source and where the new line starts. */
+export function insertLineAfter(src: string, pos: number, line: string): { src: string; at: number } {
+  const e = lineEndOf(src, pos)
+  return { src: src.slice(0, e) + '\n' + line + src.slice(e), at: e + 1 }
 }

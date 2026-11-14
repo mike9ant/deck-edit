@@ -7,7 +7,7 @@
 import { create } from 'zustand'
 import { api, type OutgoingImage } from '../api/client'
 import type { ApprovalMode, Chat, ChatSummary, Posture, ServerEvent, TurnContext } from '../api/types'
-import { setBusyProbe } from '../deck/deckStore'
+import { flushHeldEdits, setBusyProbe } from '../deck/deckStore'
 import { useApp } from './appStore'
 
 interface ChatState {
@@ -270,3 +270,9 @@ export const useChat = create<ChatState>((set, get) => {
 })
 
 setBusyProbe((pid) => !!useChat.getState().busyProjects[pid])
+
+// A turn ended: save the deck edits the user made while the agent worked (held, then replayed onto its version).
+useChat.subscribe((s, prev) => {
+  if (s.busyProjects === prev.busyProjects) return
+  for (const pid of Object.keys(prev.busyProjects)) if (prev.busyProjects[pid] && !s.busyProjects[pid]) void flushHeldEdits(pid)
+})

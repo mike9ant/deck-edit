@@ -3,7 +3,10 @@
  * paragraph, heading, list item or table cell and type. Enter (or clicking
  * away) commits, Escape cancels, ↑ on a block's first line / ↓ on its last
  * moves to the previous/next block (in a table: the cell above/below), ← at
- * a cell's start / → at its end to the previous/next cell; ⌘Z / ⇧⌘Z outside a block undo/redo
+ * a cell's start / → at its end to the previous/next cell. In a list, Enter
+ * at the end of an item adds one below and Backspace in an empty item removes
+ * it; in a table, Enter at the end of a row's last cell adds a row below and
+ * Backspace in the empty first cell of an empty row removes the row; ⌘Z / ⇧⌘Z outside a block undo/redo
  * committed edits (history resets when the file changes on disk).
  *
  * Blocks become editable only when clicked (or a selection is made inside
@@ -29,24 +32,71 @@ import clsx from 'clsx'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useApp } from '../store/appStore'
-import { applyRunEdits, rehypeSourceText, runSourceMap, sameVisibleText, toggleMarkRange, unwrapMark, type Mark, type RunContext, type RunEdit } from './mdSourceEdit'
+import { rebase } from './textMerge'
+import {
+  applyRunEdits, deleteLineAt, insertLineAfter, lineStartOf, listItemContentStart, mapPos, nextListMarker, tableCellArea,
+  rehypeSourceText, runSourceMap, sameVisibleText, toggleMarkRange, unwrapMark, type Mark, type RunContext, type RunEdit } from './mdSourceEdit'
 
 interface Snapshot {
   /** The block element it was taken from (a re-render replaces it). */
   host: HTMLElement
   runs: Map<string, { s: number; e: number; v: string }>
   outside: string
+  /** List items / table cells with no text: typing into them goes into their source slot. */
+  empty: HTMLElement[]
+}
+
+/** The list item or table cell a node belongs to (its innermost). */
+const slotOf = (n: Node | null): HTMLElement | null => (n instanceof Element ? n : n?.parentElement ?? null)?.closest<HTMLElement>('li, td, th') ?? null
+
+/** Text nodes of a list item / cell's own text (not those of nested lists). */
+function ownTextNodes(el: HTMLElement): Text[] {
+  const out: Text[] = []
+  const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  for (let n = w.nextNode() as Text | null; n; n = w.nextNode() as Text | null) if (slotOf(n) === el) out.push(n)
+  return out
+}
+const ownText = (el: HTMLElement) => ownTextNodes(el).map((n) => n.data).join('')
+
+/** The caret's offset within a list item / cell's own text. */
+function ownOffset(el: HTMLElement, node: Node, off: number): number {
+  const before = document.createRange()
+  before.setStart(el, 0)
+  before.setEnd(node, off)
+  let acc = 0
+  for (const n of ownTextNodes(el)) {
+    if (n === node) return acc + off
+    if (before.intersectsNode(n)) acc += n.length
+  }
+  return acc
+}
+
+/** A caret at the start / end of an element's own text (inside it even when empty). */
+function caretIn(el: HTMLElement, at: 'start' | 'end'): Range {
+  const nodes = el.matches('li, td, th') ? ownTextNodes(el) : []
+  const r = document.createRange()
+  const n = at === 'start' ? nodes[0] : nodes[nodes.length - 1]
+  if (n) r.setStart(n, at === 'start' ? 0 : n.length)
+  else {
+    r.selectNodeContents(el)
+    r.collapse(true)
+  }
+  r.collapse(true)
+  return r
 }
 
 const runKey = (el: HTMLElement) => `${el.dataset.s}:${el.dataset.e}`
 const runSpans = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('span[data-s]')]
 
 /** Text in a block that isn't inside a source-mapped run (inline code, typed into a gap…). */
-function outsideText(host: HTMLElement): string {
+function outsideText(host: HTMLElement, skip?: Set<HTMLElement>): string {
   let out = ''
   const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT)
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-    if (!(n.parentElement?.closest('span[data-s]'))) out += n.textContent
+    if (n.parentElement?.closest('span[data-s]')) continue
+    const slot = skip && slotOf(n)
+    if (slot && skip.has(slot)) continue
+    out += n.textContent
   }
   return out
 }
@@ -87,6 +137,24 @@ function allMarked(host: HTMLElement, a: number, b: number, mark: Mark): boolean
   return true
 }
 
+/** The screen rect of a block's first (or last) line of text: its first (last) character's box. */
+function edgeLineRect(host: HTMLElement, last: boolean): DOMRect | null {
+  const w = document.createTreeWalker(host, NodeFilter.SHOW_TEXT)
+  let node: Text | null = null
+  for (let n = w.nextNode() as Text | null; n; n = w.nextNode() as Text | null) {
+    if (!n.data.trim()) continue
+    node = n
+    if (!last) break
+  }
+  if (!node) return null
+  const r = document.createRange()
+  const i = last ? node.data.trimEnd().length - 1 : node.data.length - node.data.trimStart().length
+  r.setStart(node, i)
+  r.setEnd(node, i + 1)
+  const rects = r.getClientRects()
+  return rects.length ? rects[last ? rects.length - 1 : 0] : null
+}
+
 /** A collapsed range at a screen point (where a click landed). */
 function caretAt(x: number, y: number): Range | null {
   const doc = document as Document & { caretPositionFromPoint?(x: number, y: number): { offsetNode: Node; offset: number } | null }
@@ -110,6 +178,8 @@ export function MarkdownEditable({ text, editable, onChange }: { text: string; e
   const articleRef = useRef<HTMLElement>(null)
   const pendingFormat = useRef<(Pos & { mark: Mark }) | null>(null)
   const restoreSel = useRef<Pos | null>(null)
+  /** After a structural edit: the list item / table row (by its new source start) to put the caret in. */
+  const focusAt = useRef<{ tag: 'li' | 'tr'; hs: number; cell?: number; at: 'start' | 'end' } | null>(null)
   const snapshot = useRef<Snapshot | null>(null)
   const undo = useRef<string[]>([])
   const redo = useRef<string[]>([])
@@ -120,14 +190,34 @@ export function MarkdownEditable({ text, editable, onChange }: { text: string; e
   rendered.current = source
   const ours = useRef(text)
   useEffect(() => {
-    if (text !== ours.current) {
-      undo.current = []
-      redo.current = []
-      ours.current = text
-      snapshot.current = null
-      setSource(text)
-      setGeneration((g) => g + 1)
+    if (text === ours.current) return
+    // The file changed on disk (the agent). Typing in the focused block isn't saved yet: merge it
+    // onto the new text, then put the caret back in that block.
+    let next = text
+    let caret: Pos | null = null
+    const snap = snapshot.current
+    if (snap?.host.isConnected) {
+      const edits = collect(snap.host, snap)
+      if (edits?.length) {
+        const r = rebase(rendered.current, applyRunEdits(rendered.current, edits), text)
+        next = r.text
+        if (!r.clean) toast('Part of your typing overlapped the agent’s edit and couldn’t be merged — check that spot.')
+      }
+      const sel = getSelection()
+      if (sel?.rangeCount && snap.host.contains(sel.anchorNode)) {
+        const r = sel.getRangeAt(0)
+        caret = { block: hosts().indexOf(snap.host), start: textOffset(snap.host, r.startContainer, r.startOffset), end: textOffset(snap.host, r.endContainer, r.endOffset) }
+      }
     }
+    undo.current = []
+    redo.current = []
+    ours.current = next
+    snapshot.current = null
+    restoreSel.current = caret
+    setSource(next)
+    setGeneration((g) => g + 1)
+    if (next !== text) onChange(next) // save the merged text
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [text])
 
   const toast = (t: string) => useApp.getState().toast(t, 'error')
@@ -211,7 +301,10 @@ export function MarkdownEditable({ text, editable, onChange }: { text: string; e
     let cr = r.getClientRects()[0] ?? r.getBoundingClientRect()
     if (!cr.height) cr = new DOMRect(hr.left, dir < 0 ? hr.top : hr.bottom - 1, 0, 1)
     const lh = parseFloat(getComputedStyle(host).lineHeight) || 20
-    if (dir < 0 ? cr.top - hr.top > lh * 0.75 : hr.bottom - cr.bottom > lh * 0.75) return false
+    // Only from the text's first (↑) / last (↓) line — measured on the text itself, not the block's
+    // box: a table cell can be taller than its text when a neighbouring cell wraps.
+    const edge = edgeLineRect(host, dir > 0)
+    if (edge && Math.abs((dir < 0 ? cr.top - edge.top : cr.bottom - edge.bottom)) > lh / 2) return false
     let target = verticalTarget(host, dir)
     if (!target) return false
     // Entering a table from above/below: the cell under the caret.
@@ -222,7 +315,9 @@ export function MarkdownEditable({ text, editable, onChange }: { text: string; e
     target.scrollIntoView({ block: 'nearest' })
     const tr = target.getBoundingClientRect()
     const x = Math.min(Math.max(cr.left, tr.left + 1), tr.right - 1)
-    const y = dir < 0 ? tr.bottom - Math.min(lh / 2, tr.height / 2) : tr.top + Math.min(lh / 2, tr.height / 2)
+    // Aim at the target's last (↑) / first (↓) line of text — not its box, which can be taller.
+    const line = edgeLineRect(target, dir < 0)
+    const y = line ? line.top + line.height / 2 : dir < 0 ? tr.bottom - Math.min(lh / 2, tr.height / 2) : tr.top + Math.min(lh / 2, tr.height / 2)
     let caret = caretAt(x, y)
     if (!caret || hostOf(caret.startContainer) !== target) caret = edgeCaret(target, dir < 0)
     moveInto(host, target, caret)
@@ -259,17 +354,11 @@ export function MarkdownEditable({ text, editable, onChange }: { text: string; e
     useApp.getState().toast(asMarkdown ? 'Copied the Markdown of the selected blocks.' : 'Copied the selected text.')
   }
 
-  const commit = (host: HTMLElement): 'none' | 'committed' | 'failed' => {
-    const snap = snapshot.current
-    snapshot.current = null
-    if (!snap || snap.host !== host) return 'none'
+  /** The source edits for what was typed in a block since it was focused; null if it can't be mapped back. */
+  const collect = (host: HTMLElement, snap: Snapshot): RunEdit[] | null => {
+    const src = rendered.current
     // Never write through stale positions: every recorded run must still be what the file has there.
-    for (const r of snap.runs.values()) {
-      if (!runSourceMap(rendered.current, r.s, r.e, r.v)) {
-        setGeneration((g) => g + 1)
-        return 'failed'
-      }
-    }
+    for (const r of snap.runs.values()) if (!runSourceMap(src, r.s, r.e, r.v)) return null
     const edits: RunEdit[] = []
     const seen = new Set<string>()
     for (const span of runSpans(host)) {
@@ -283,7 +372,31 @@ export function MarkdownEditable({ text, editable, onChange }: { text: string; e
     }
     // A run deleted entirely (the browser drops its emptied span).
     for (const [k, orig] of snap.runs) if (!seen.has(k)) edits.push({ s: orig.s, e: orig.e, text: '', ctx: 'text' })
-    if (outsideText(host) !== snap.outside) {
+    if (outsideText(host, new Set(snap.empty)) !== snap.outside) return null
+    // Text typed into a list item / cell that was empty goes into its slot in the source.
+    for (const el of snap.empty) {
+      const t = ownText(el).replace(/\u00a0/g, ' ')
+      if (!el.isConnected || !t.trim()) continue
+      if (el.tagName === 'LI') {
+        const c = listItemContentStart(src, Number(el.dataset.hs))
+        if (!c) return null
+        edits.push({ s: c.pos, e: c.pos, text: (c.space ? ' ' : '') + t.trim(), ctx: 'text' })
+      } else {
+        const row = el.parentElement as HTMLTableRowElement
+        const area = tableCellArea(src, Number(row.dataset.hs), (el as HTMLTableCellElement).cellIndex)
+        if (!area) return null
+        edits.push({ s: area[0], e: area[1], text: ` ${t.trim()} `, ctx: 'cell' })
+      }
+    }
+    return edits
+  }
+
+  const commit = (host: HTMLElement): 'none' | 'committed' | 'failed' => {
+    const snap = snapshot.current
+    snapshot.current = null
+    if (!snap || snap.host !== host) return 'none'
+    const edits = collect(host, snap)
+    if (!edits) {
       toast('That edit crossed formatting the formatted view can’t map back — switch to the Markdown tab for it.')
       setGeneration((g) => g + 1)
       return 'failed'
@@ -293,12 +406,98 @@ export function MarkdownEditable({ text, editable, onChange }: { text: string; e
     return 'committed'
   }
 
+  // ── lists and tables: Enter adds an item / row, Backspace in an empty one removes it ──
+  /** Typed edits of the focused block, applied — the base for a structural edit. */
+  const typedBase = (host: HTMLElement) => {
+    const snap = snapshot.current?.host === host ? snapshot.current : null
+    const edits = snap ? collect(host, snap) : []
+    return edits && { edits, base: applyRunEdits(rendered.current, edits) }
+  }
+  const caretSlot = (host: HTMLElement) => {
+    const sel = getSelection()
+    if (!sel?.rangeCount || !sel.isCollapsed) return null
+    const r = sel.getRangeAt(0)
+    const slot = slotOf(r.startContainer)
+    return slot && host.contains(slot) ? { slot, offset: ownOffset(slot, r.startContainer, r.startOffset) } : null
+  }
+  const structural = (next: string) => {
+    snapshot.current = null
+    publish(next)
+  }
+
+  const structuralEnter = (host: HTMLElement): boolean => {
+    const c = caretSlot(host)
+    if (!c || c.offset !== ownText(c.slot).length) return false
+    const src = rendered.current
+    if (c.slot.tagName === 'LI') {
+      const li = c.slot
+      if ([...li.children].some((ch) => ch.tagName === 'P')) return false // a "loose" item: its paragraphs edit as usual
+      const hs = Number(li.dataset.hs)
+      const marker = nextListMarker(src, hs)
+      const tb = typedBase(host)
+      if (!marker || !tb) return false
+      const ownSpans = [...li.querySelectorAll<HTMLElement>('span[data-s]')].filter((sp) => slotOf(sp) === li)
+      const ownEnd = ownSpans.length ? Math.max(...ownSpans.map((sp) => Number(sp.dataset.e))) : hs
+      const hsN = mapPos(src, tb.edits, hs)
+      const prefix = tb.base.slice(lineStartOf(tb.base, hsN), hsN).replace(/[^\s>]/g, ' ')
+      // A new item at the same level right under this item's text (its sub-items, if any, follow the new one).
+      const { src: next, at } = insertLineAfter(tb.base, mapPos(src, tb.edits, ownEnd), `${prefix}${marker} `)
+      focusAt.current = { tag: 'li', hs: at + prefix.length, at: 'start' }
+      structural(next)
+      return true
+    }
+    const cell = c.slot as HTMLTableCellElement
+    const row = cell.parentElement as HTMLTableRowElement
+    if (cell.cellIndex !== row.cells.length - 1) return false
+    const tb = typedBase(host)
+    if (!tb) return false
+    const rs = mapPos(src, tb.edits, Number(row.dataset.hs))
+    let after = rs
+    if (row.parentElement?.tagName === 'THEAD') after = Math.min(tb.base.length, tb.base.indexOf('\n', rs) + 1 || tb.base.length) // below the delimiter row
+    const prefix = tb.base.slice(lineStartOf(tb.base, rs), rs)
+    const { src: next, at } = insertLineAfter(tb.base, after, `${prefix}|${'  |'.repeat(row.cells.length)}`)
+    focusAt.current = { tag: 'tr', hs: at + prefix.length, cell: 0, at: 'start' }
+    structural(next)
+    return true
+  }
+
+  const structuralBackspace = (host: HTMLElement): boolean => {
+    const c = caretSlot(host)
+    if (!c || c.offset !== 0 || ownText(c.slot) !== '') return false
+    const src = rendered.current
+    if (c.slot.tagName === 'LI') {
+      const li = c.slot
+      if (li.querySelector('ul, ol, p')) return false
+      const tb = typedBase(host)
+      if (!tb) return false
+      const prev = li.previousElementSibling?.tagName === 'LI' ? (li.previousElementSibling as HTMLElement) : li.parentElement?.closest<HTMLElement>('li') ?? null
+      if (prev) focusAt.current = { tag: 'li', hs: Number(prev.dataset.hs), at: 'end' }
+      else {
+        const list = hosts()
+        const before = list[list.indexOf(host) - 1]
+        if (before) restoreSel.current = { block: list.indexOf(host) - 1, start: (before.textContent ?? '').length, end: (before.textContent ?? '').length }
+      }
+      structural(deleteLineAt(tb.base, mapPos(src, tb.edits, Number(li.dataset.hs))))
+      return true
+    }
+    const cell = c.slot as HTMLTableCellElement
+    const row = cell.parentElement as HTMLTableRowElement
+    if (cell.cellIndex !== 0 || row.parentElement?.tagName !== 'TBODY' || [...row.cells].some((x) => ownText(x).trim())) return false
+    const table = row.closest('table')!
+    const prevRow = (row.previousElementSibling as HTMLTableRowElement | null) ?? table.tHead?.rows[table.tHead.rows.length - 1] ?? null
+    const tb = typedBase(host)
+    if (!tb || !prevRow) return false
+    focusAt.current = { tag: 'tr', hs: Number(prevRow.dataset.hs), cell: -1, at: 'end' }
+    structural(deleteLineAt(tb.base, mapPos(src, tb.edits, Number(row.dataset.hs))))
+    return true
+  }
+
   // ── bold / italic ───────────────────────────────────────────────────────
   const hasTyping = (host: HTMLElement) => {
     const snap = snapshot.current?.host === host ? snapshot.current : null
-    const spans = runSpans(host)
-    return spans.some((sp) => (sp.textContent ?? '').replace(/\u00a0/g, ' ') !== sp.dataset.v) ||
-      (!!snap && (snap.runs.size !== spans.length || outsideText(host) !== snap.outside))
+    if (!snap) return false
+    const edits = collect(host, snap)
+    return edits === null || edits.length > 0
   }
 
   const format = (mark: Mark) => {
@@ -370,6 +569,18 @@ export function MarkdownEditable({ text, editable, onChange }: { text: string; e
       const host = hosts()[pf.block]
       if (host) applyFormat(host, pf, pf.mark)
       return
+    }
+    const fa = focusAt.current
+    focusAt.current = null
+    if (fa) {
+      let el = articleRef.current?.querySelector<HTMLElement>(`${fa.tag}[data-hs="${fa.hs}"]`) ?? null
+      if (el instanceof HTMLTableRowElement && fa.cell != null) el = el.cells[fa.cell < 0 ? el.cells.length - 1 : fa.cell] ?? null
+      const host = el && hostOf(el)
+      if (el && host) {
+        snapshot.current = null
+        activate(host, caretIn(el, fa.at))
+        return
+      }
     }
     const rs = restoreSel.current
     restoreSel.current = null
@@ -500,6 +711,7 @@ export function MarkdownEditable({ text, editable, onChange }: { text: string; e
           host,
           runs: new Map(runSpans(host).map((sp) => [runKey(sp), { s: Number(sp.dataset.s), e: Number(sp.dataset.e), v: sp.dataset.v ?? '' }])),
           outside: outsideText(host),
+          empty: [...(host.matches('li, td, th') ? [host] : []), ...host.querySelectorAll<HTMLElement>('li, td, th')].filter((el) => !ownText(el).trim()),
         }
       }}
       onBlur={(e) => {
@@ -537,7 +749,10 @@ export function MarkdownEditable({ text, editable, onChange }: { text: string; e
           if (moveHorizontal(host, e.key === 'ArrowLeft' ? -1 : 1)) e.preventDefault()
         } else if (e.key === 'Enter') {
           e.preventDefault()
+          if (!e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && structuralEnter(host)) return
           host.blur()
+        } else if (e.key === 'Backspace' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+          if (structuralBackspace(host)) e.preventDefault()
         } else if (e.key === 'Escape') {
           e.preventDefault()
           snapshot.current = null

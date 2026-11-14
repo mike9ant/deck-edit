@@ -11,6 +11,14 @@
  * Live reload: a watcher event for the open deck that isn't our own save
  * re-reads the file, keeps the user on the same slide (by stable slide id)
  * and flags the slides whose XML changed, so the rail can badge them.
+ *
+ * Editing during an agent turn ("held edits"): the agent rewrites the whole
+ * file (python-pptx), so the user's edits made while it works aren't saved —
+ * they're held. Each agent save reloads its version and REPLAYS the held
+ * edits on top (slide references translated through the stable slide ids,
+ * since python-pptx renumbers slide parts); when the turn ends the result is
+ * saved once. An edit whose slide/shape the agent removed is skipped, and
+ * slides both changed are reported (`flushHeldEdits`).
  */
 
 import { create } from 'zustand'
@@ -24,6 +32,14 @@ import { useApp } from '../store/appStore'
 import { repairPackage } from './packageHygiene'
 import { readSlideIds, slideTitle, slideXmlBySldId } from './deckModel'
 
+/** How to apply an edit again onto a freshly loaded deck: data, or a function given the slide ids it refers to. */
+export type Replay =
+  | { kind: 'op'; op: EditOperation }
+  | { kind: 'custom'; run: (pres: PresentationData, slideIds: string[]) => Promise<() => void>; slideIds: string[] }
+  | { kind: 'tx'; fn: TxFn; slideIds: string[] }
+
+type TxFn = (run: (op: EditOperation) => Promise<EditResult>, pres: PresentationData, slideIds: string[]) => Promise<unknown>
+
 export interface UndoEntry {
   undo: () => void
   /** Re-applies the edit (a single op, or a whole transaction). */
@@ -31,6 +47,11 @@ export interface UndoEntry {
   description: string
   /** Consecutive edits with the same key (e.g. nudging one shape) read as one change for the agent. */
   coalesceKey?: string
+  replay: Replay
+  /** The slide part this edit created, if any (later held edits may refer to it). */
+  created?: string
+  /** Stable ids (sldId) of the slides it changed — to spot slides the agent changed too. */
+  stable: string[]
 }
 
 export interface DeckSession {
@@ -59,6 +80,12 @@ export interface DeckSession {
   externallyChanged: string[]
   externalAt: number
   lastSlideXml: Map<string, string>
+  /** Undo index where edits made during the running agent turn begin (held, not saved); null when none. */
+  heldFrom: number | null
+  /** Stable ids of slides the agent changed while edits were held. */
+  agentChangedWhileHeld: string[]
+  /** Undo-stack length the file on disk reflects (edits beyond it aren't saved yet). */
+  savedAt: number
 }
 
 interface DeckStore {
@@ -77,8 +104,8 @@ interface DeckStore {
    * An edit the engine doesn't model (speaker notes): `run` changes the package
    * and returns its undo. Saved, undoable and reported to the agent like any other.
    */
-  applyCustom(key: string, description: string, run: () => Promise<() => void>, coalesceKey?: string): Promise<boolean>
-  transaction<T>(key: string, description: string, fn: (run: (op: EditOperation) => Promise<EditResult>, pres: PresentationData) => Promise<T>): Promise<T | undefined>
+  applyCustom(key: string, description: string, run: (pres: PresentationData, slideIds: string[]) => Promise<() => void>, coalesceKey?: string, slideIds?: string[]): Promise<boolean>
+  transaction<T>(key: string, description: string, fn: (run: (op: EditOperation) => Promise<EditResult>, pres: PresentationData, slideIds: string[]) => Promise<T>, slideIds?: string[]): Promise<T | undefined>
   undo(key: string): void
   redo(key: string): Promise<void>
   setSlide(key: string, index: number): void
@@ -95,11 +122,29 @@ const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const fontHandles = new Map<string, ReturnType<typeof loadEmbeddedFonts>>()
 const SAVE_DEBOUNCE_MS = 600
 
-/** Set by the chat store: is an agent turn running in this project (editing is paused)? */
+/** Set by the chat store: is an agent turn running in this project (edits are held, not saved)? */
 export let isProjectBusy: (pid: string) => boolean = () => false
 export const setBusyProbe = (f: (pid: string) => boolean) => {
   isProjectBusy = f
 }
+
+/** An op with its slide references translated (`map` → null: that slide is gone). */
+function remapOp(op: EditOperation, map: (id: string) => string | null): EditOperation | null {
+  if (op.type === 'batch') {
+    const ops = op.operations.map((o) => remapOp(o, map))
+    return ops.some((o) => !o) ? null : { ...op, operations: ops as EditOperation[] }
+  }
+  const out = { ...op } as Record<string, unknown>
+  for (const k of ['slideId', 'afterSlideId']) {
+    if (typeof out[k] !== 'string') continue
+    const m = map(out[k] as string)
+    if (m === null) return null
+    out[k] = m
+  }
+  return out as unknown as EditOperation
+}
+
+const reloadChains = new Map<string, Promise<void>>()
 
 async function parse(bytes: ArrayBuffer): Promise<PresentationData> {
   const files = await readPptx(bytes, { keepSourcePackage: true })
@@ -119,9 +164,155 @@ export const useDecks = create<DeckStore>((set, get) => {
     api.putDeckMap(s.pid, s.path, slides).catch(() => {})
   }
 
+  const redoFor = (key: string, r: Replay, description: string, coalesceKey?: string): (() => Promise<unknown>) =>
+    r.kind === 'op' ? () => get().apply(key, r.op, description, coalesceKey)
+      : r.kind === 'custom' ? () => get().applyCustom(key, description, r.run, coalesceKey, r.slideIds)
+        : () => get().transaction(key, description, r.fn, r.slideIds)
+
+  /** A new undo entry; an edit made while the agent works starts (or extends) the held run. */
+  const pushEdit = (key: string, entry: Omit<UndoEntry, 'redo' | 'stable'> & { touched: string[] }, extra: Partial<DeckSession>) => {
+    const cur = get().sessions[key]!
+    const { touched, ...rest } = entry
+    const stable = touched.map((id) => cur.sldIds.get(id)).filter((x): x is string => !!x)
+    patch(key, {
+      ...extra,
+      dirty: true,
+      heldFrom: cur.heldFrom ?? (isProjectBusy(cur.pid) ? cur.undo.length : null),
+      undo: [...cur.undo, { ...rest, stable, redo: redoFor(key, entry.replay, entry.description, entry.coalesceKey) }],
+      redo: [],
+    })
+  }
+
+  /** Apply held edits onto a freshly loaded deck. Returns the rebuilt entries and the edits that couldn't apply. */
+  const replayHeld = async (key: string, held: UndoEntry[], step: Map<string, string | null>, pres: PresentationData) => {
+    const map = (id: string) => (step.has(id) ? step.get(id)! : id)
+    const entries: UndoEntry[] = []
+    const skipped: string[] = []
+    for (const e of held) {
+      try {
+        const r = e.replay
+        let undo: () => void
+        let replay: Replay
+        let created: string | undefined
+        if (r.kind === 'op') {
+          const op = remapOp(r.op, map)
+          if (!op) throw new Error('its slide was removed')
+          const res = await applyEdit(pres, op)
+          ;({ undo } = res)
+          created = res.createdSlideId
+          replay = { kind: 'op', op }
+        } else {
+          const ids = r.slideIds.map(map)
+          if (ids.some((x) => x === null)) throw new Error('its slide was removed')
+          if (r.kind === 'custom') {
+            undo = await r.run(pres, ids as string[])
+            replay = { ...r, slideIds: ids as string[] }
+          } else {
+            const undos: (() => void)[] = []
+            const rollback = () => [...undos].reverse().forEach((u) => u())
+            try {
+              await r.fn(async (op) => { const x = await applyEdit(pres, op); undos.push(x.undo); return x }, pres, ids as string[])
+            } catch (err) {
+              try { rollback() } catch { /* best effort */ }
+              throw err
+            }
+            undo = rollback
+            replay = { ...r, slideIds: ids as string[] }
+          }
+        }
+        if (e.created && created) step.set(e.created, created)
+        entries.push({ ...e, undo, replay, created, redo: redoFor(key, replay, e.description, e.coalesceKey) })
+      } catch {
+        skipped.push(e.description)
+      }
+    }
+    return { entries, skipped }
+  }
+
   const scheduleSave = (key: string) => {
     clearTimeout(saveTimers.get(key))
     saveTimers.set(key, setTimeout(() => void get().saveNow(key), SAVE_DEBOUNCE_MS))
+  }
+
+  const reloadOnce = async (key: string, external: boolean): Promise<void> => {
+    const s0 = get().sessions[key]
+    if (!s0) return
+    patch(key, { loading: !s0.pres })
+    // A save from python-pptx/PowerPoint can be observed mid-write; retry briefly.
+    let lastErr: unknown
+    for (let attempt = 0; attempt < 6; attempt++) {
+      try {
+        const { bytes, etag } = await api.readFile(s0.pid, s0.path)
+        const keep = bytes.slice(0)
+        const pres = await parse(bytes)
+        if (!fontHandles.has(key)) fontHandles.set(key, loadEmbeddedFonts(pres))
+        await fontHandles.get(key)!.ready
+        const [sldIds, slideXml] = await Promise.all([readSlideIds(keep), slideXmlBySldId(keep)])
+        const s = get().sessions[key]
+        if (!s) return
+        // Stay on the same slide (by stable id) across the reload.
+        const prevSlide = s.pres?.slides[s.slideIndex]
+        const prevSid = prevSlide ? s.sldIds.get(prevSlide.id) : undefined
+        let slideIndex = Math.min(s.slideIndex, pres.slides.length - 1)
+        if (prevSid) {
+          const i = pres.slides.findIndex((sl) => sldIds.get(sl.id) === prevSid)
+          if (i >= 0) slideIndex = i
+        }
+        const changed: string[] = []
+        if (external) for (const [sid, xml] of slideXml) if (s.lastSlideXml.get(sid) !== xml) changed.push(sid)
+        // Edits held during the agent's turn: replay them onto its version.
+        const holding = external && s.heldFrom != null && s.heldFrom < s.undo.length
+        let entries: UndoEntry[] = []
+        const skipped: string[] = []
+        if (holding) {
+          // Old slide part → its part in the new file, by stable id (python-pptx renumbers slide parts).
+          const byStable = new Map([...sldIds].map(([path, sid]) => [sid, path]))
+          const step = new Map<string, string | null>()
+          for (const [path, sid] of s.sldIds) step.set(path, byStable.get(sid) ?? null)
+          let consumed = s.heldFrom!
+          for (;;) {
+            // Edits made while this replay ran are picked up too.
+            const cur = get().sessions[key]
+            if (!cur || cur.undo.length <= consumed) break
+            const r = await replayHeld(key, cur.undo.slice(consumed), step, pres)
+            consumed = cur.undo.length
+            entries = [...entries, ...r.entries]
+            skipped.push(...r.skipped)
+          }
+          if (skipped.length) {
+            useApp.getState().toast(
+              `${skipped.length} of your edits couldn't be re-applied on top of the agent's changes (the slide or shape is gone): ${skipped.slice(0, 3).join('; ')}${skipped.length > 3 ? '…' : ''}`,
+              'error',
+            )
+          }
+        }
+        const version = s.version + 1
+        const slideVersions: Record<string, number> = {}
+        for (const sl of pres.slides) slideVersions[sl.id] = version
+        const s1 = get().sessions[key] ?? s
+        const next: DeckSession = {
+          ...s1, pres, etag, loading: false, error: null, version, slideVersions, slideIndex: Math.max(0, slideIndex),
+          selection: external ? [] : s1.selection,
+          // An external change invalidates the undo history (it describes the old file) — except the
+          // held edits, which were just replayed onto the new file.
+          undo: external ? entries : s1.undo, redo: external ? [] : s1.redo, turnBaseline: external ? 0 : s1.turnBaseline,
+          heldFrom: external ? (entries.length ? 0 : null) : s1.heldFrom,
+          agentChangedWhileHeld: holding ? [...new Set([...s1.agentChangedWhileHeld, ...changed])] : s1.agentChangedWhileHeld,
+          dirty: external ? entries.length > 0 : false, sldIds, lastSlideXml: slideXml,
+          savedAt: external ? 0 : s1.savedAt,
+          externallyChanged: external ? changed : s1.externallyChanged,
+          externalAt: external ? Date.now() : s1.externalAt,
+        }
+        set({ sessions: { ...get().sessions, [key]: next } })
+        publishMap(next)
+        return
+      } catch (e) {
+        lastErr = e
+        if (e instanceof ApiError && e.status === 404) break
+        await new Promise((r) => setTimeout(r, 400 + attempt * 300))
+      }
+    }
+    patch(key, { loading: false, error: `Couldn't open the deck: ${(lastErr as Error)?.message ?? lastErr}` })
   }
 
   return {
@@ -134,59 +325,17 @@ export const useDecks = create<DeckStore>((set, get) => {
         key, pid, path, pres: null, etag: '', loading: true, error: null, version: 0, slideVersions: {},
         slideIndex: 0, selection: [], undo: [], redo: [], turnBaseline: 0, dirty: false, saving: false,
         sldIds: new Map(), externallyChanged: [], externalAt: 0, lastSlideXml: new Map(),
+        heldFrom: null, agentChangedWhileHeld: [], savedAt: 0,
       }
       set({ sessions: { ...get().sessions, [key]: s } })
       await get().reload(key, false)
     },
 
-    async reload(key, external) {
-      const s0 = get().sessions[key]
-      if (!s0) return
-      patch(key, { loading: !s0.pres })
-      // A save from python-pptx/PowerPoint can be observed mid-write; retry briefly.
-      let lastErr: unknown
-      for (let attempt = 0; attempt < 6; attempt++) {
-        try {
-          const { bytes, etag } = await api.readFile(s0.pid, s0.path)
-          const keep = bytes.slice(0)
-          const pres = await parse(bytes)
-          if (!fontHandles.has(key)) fontHandles.set(key, loadEmbeddedFonts(pres))
-          await fontHandles.get(key)!.ready
-          const [sldIds, slideXml] = await Promise.all([readSlideIds(keep), slideXmlBySldId(keep)])
-          const s = get().sessions[key]
-          if (!s) return
-          // Stay on the same slide (by stable id) across the reload.
-          const prevSlide = s.pres?.slides[s.slideIndex]
-          const prevSid = prevSlide ? s.sldIds.get(prevSlide.id) : undefined
-          let slideIndex = Math.min(s.slideIndex, pres.slides.length - 1)
-          if (prevSid) {
-            const i = pres.slides.findIndex((sl) => sldIds.get(sl.id) === prevSid)
-            if (i >= 0) slideIndex = i
-          }
-          const changed: string[] = []
-          if (external) for (const [sid, xml] of slideXml) if (s.lastSlideXml.get(sid) !== xml) changed.push(sid)
-          const version = s.version + 1
-          const slideVersions: Record<string, number> = {}
-          for (const sl of pres.slides) slideVersions[sl.id] = version
-          const next: DeckSession = {
-            ...s, pres, etag, loading: false, error: null, version, slideVersions, slideIndex: Math.max(0, slideIndex),
-            selection: external ? [] : s.selection,
-            // An external change invalidates the undo history (it describes the old file).
-            undo: external ? [] : s.undo, redo: external ? [] : s.redo, turnBaseline: external ? 0 : s.turnBaseline,
-            dirty: false, sldIds, lastSlideXml: slideXml,
-            externallyChanged: external ? changed : s.externallyChanged,
-            externalAt: external ? Date.now() : s.externalAt,
-          }
-          set({ sessions: { ...get().sessions, [key]: next } })
-          publishMap(next)
-          return
-        } catch (e) {
-          lastErr = e
-          if (e instanceof ApiError && e.status === 404) break
-          await new Promise((r) => setTimeout(r, 400 + attempt * 300))
-        }
-      }
-      patch(key, { loading: false, error: `Couldn't open the deck: ${(lastErr as Error)?.message ?? lastErr}` })
+    reload(key, external) {
+      // One reload at a time per deck: a replay must start from the previous one's result.
+      const next = (reloadChains.get(key) ?? Promise.resolve()).then(() => reloadOnce(key, external))
+      reloadChains.set(key, next.catch(() => {}))
+      return next
     },
 
     close(key) {
@@ -199,10 +348,6 @@ export const useDecks = create<DeckStore>((set, get) => {
     async apply(key, op, description, coalesceKey) {
       const s = get().sessions[key]
       if (!s?.pres) return
-      if (isProjectBusy(s.pid)) {
-        useApp.getState().toast('The agent is working on this project — editing resumes when its turn ends.')
-        return
-      }
       try {
         const res = await applyEdit(s.pres, op)
         const cur = get().sessions[key]!
@@ -210,11 +355,7 @@ export const useDecks = create<DeckStore>((set, get) => {
         const slideVersions = { ...cur.slideVersions }
         for (const id of res.affectedSlideIds) slideVersions[id] = version
         if (res.createdSlideId) slideVersions[res.createdSlideId] = version
-        patch(key, {
-          version, slideVersions, dirty: true,
-          undo: [...cur.undo, { undo: res.undo, redo: () => get().apply(key, op, description, coalesceKey), description, coalesceKey }],
-          redo: [],
-        })
+        pushEdit(key, { undo: res.undo, description, coalesceKey, replay: { kind: 'op', op }, created: res.createdSlideId, touched: res.affectedSlideIds }, { version, slideVersions })
         scheduleSave(key)
         return res.createdNodeIds ?? (res.createdSlideId ? [res.createdSlideId] : [])
       } catch (e) {
@@ -226,7 +367,6 @@ export const useDecks = create<DeckStore>((set, get) => {
     undo(key) {
       const s = get().sessions[key]
       if (!s?.pres || !s.undo.length) return
-      if (isProjectBusy(s.pid)) return
       const entry = s.undo[s.undo.length - 1]
       try {
         entry.undo()
@@ -241,6 +381,8 @@ export const useDecks = create<DeckStore>((set, get) => {
         version, slideVersions, dirty: true, selection: [],
         undo: s.undo.slice(0, -1), redo: [...s.redo, entry],
         turnBaseline: Math.min(s.turnBaseline, s.undo.length - 1),
+        heldFrom: s.heldFrom != null && s.heldFrom >= s.undo.length - 1 ? null : s.heldFrom,
+        savedAt: Math.min(s.savedAt, s.undo.length - 1),
         slideIndex: Math.min(s.slideIndex, s.pres.slides.length - 1),
       })
       scheduleSave(key)
@@ -255,22 +397,13 @@ export const useDecks = create<DeckStore>((set, get) => {
       patch(key, { redo: redoRest })
     },
 
-    async applyCustom(key, description, runEdit, coalesceKey) {
+    async applyCustom(key, description, runEdit, coalesceKey, slideIds = []) {
       const s = get().sessions[key]
       if (!s?.pres) return false
-      if (isProjectBusy(s.pid)) {
-        useApp.getState().toast('The agent is working on this project — editing resumes when its turn ends.')
-        return false
-      }
       try {
-        const undo = await runEdit()
+        const undo = await runEdit(s.pres, slideIds)
         const cur = get().sessions[key]!
-        patch(key, {
-          version: cur.version + 1,
-          dirty: true,
-          undo: [...cur.undo, { undo, redo: () => get().applyCustom(key, description, runEdit, coalesceKey), description, coalesceKey }],
-          redo: [],
-        })
+        pushEdit(key, { undo, description, coalesceKey, replay: { kind: 'custom', run: runEdit, slideIds }, touched: slideIds }, { version: cur.version + 1 })
         scheduleSave(key)
         return true
       } catch (e) {
@@ -279,13 +412,9 @@ export const useDecks = create<DeckStore>((set, get) => {
       }
     },
 
-    async transaction(key, description, fn) {
+    async transaction(key, description, fn, slideIds = []) {
       const s = get().sessions[key]
       if (!s?.pres) return
-      if (isProjectBusy(s.pid)) {
-        useApp.getState().toast('The agent is working on this project — editing resumes when its turn ends.')
-        return
-      }
       const pres = s.pres
       const undos: (() => void)[] = []
       const run = async (op: EditOperation) => {
@@ -296,7 +425,7 @@ export const useDecks = create<DeckStore>((set, get) => {
       const rollback = () => [...undos].reverse().forEach((u) => u())
       let result: Awaited<ReturnType<typeof fn>>
       try {
-        result = await fn(run, pres)
+        result = await fn(run, pres, slideIds)
       } catch (e) {
         try { rollback() } catch { /* best effort */ }
         console.error(e)
@@ -308,13 +437,8 @@ export const useDecks = create<DeckStore>((set, get) => {
       if (!undos.length) return result
       const cur = get().sessions[key]!
       const version = cur.version + 1
-      patch(key, {
-        version,
-        slideVersions: Object.fromEntries(pres.slides.map((sl) => [sl.id, version])),
-        dirty: true,
-        undo: [...cur.undo, { undo: rollback, redo: () => get().transaction(key, description, fn), description }],
-        redo: [],
-      })
+      pushEdit(key, { undo: rollback, description, replay: { kind: 'tx', fn: fn as TxFn, slideIds }, touched: slideIds },
+        { version, slideVersions: Object.fromEntries(pres.slides.map((sl) => [sl.id, version])) })
       scheduleSave(key)
       return result
     },
@@ -334,23 +458,29 @@ export const useDecks = create<DeckStore>((set, get) => {
       clearTimeout(saveTimers.get(key))
       const s = get().sessions[key]
       if (!s?.pres || !s.dirty) return
+      // While the agent works, edits are held (it rewrites the whole file); flushHeldEdits saves them after.
+      if (isProjectBusy(s.pid)) return
       if (s.saving) {
         scheduleSave(key)
         return
       }
       patch(key, { saving: true, dirty: false })
+      const upTo = s.undo.length
       try {
         const raw = await writePptx(s.pres)
         const { bytes } = await repairPackage(raw)
         const { etag } = await api.writeFile(s.pid, s.path, bytes, s.etag)
         const [sldIds, slideXml] = await Promise.all([readSlideIds(bytes), slideXmlBySldId(bytes)])
-        patch(key, { etag, saving: false, sldIds, lastSlideXml: slideXml })
+        patch(key, { etag, saving: false, sldIds, lastSlideXml: slideXml, heldFrom: null, agentChangedWhileHeld: [], savedAt: upTo })
         publishMap(get().sessions[key]!)
       } catch (e) {
         patch(key, { saving: false })
         if (e instanceof ApiError && e.status === 409) {
-          useApp.getState().toast('The file changed on disk (agent or PowerPoint) — reloaded it. Your last edit was not saved.', 'error')
+          // Changed on disk meanwhile: take that version and re-apply this edit run on top, then save again.
+          const cur = get().sessions[key]!
+          patch(key, { heldFrom: cur.heldFrom ?? Math.min(cur.savedAt, cur.undo.length) })
           await get().reload(key, true)
+          if (get().sessions[key]?.dirty) scheduleSave(key)
         } else {
           patch(key, { dirty: true })
           useApp.getState().toast(`Save failed: ${(e as Error).message}`, 'error')
@@ -388,4 +518,24 @@ export function handleDeckFileEvent(pid: string, path: string, etag: string | nu
   if (!s || etag === null) return
   if (writer === CLIENT_ID || etag === s.etag) return
   void useDecks.getState().reload(key, true)
+}
+
+/**
+ * The agent's turn ended: save the edits held during it (already replayed onto
+ * its latest version), and say which slides both of you changed.
+ */
+export async function flushHeldEdits(pid: string) {
+  for (const s of Object.values(useDecks.getState().sessions)) {
+    if (s.pid !== pid || s.heldFrom == null) continue
+    await (reloadChains.get(s.key) ?? Promise.resolve())
+    const cur = useDecks.getState().sessions[s.key]
+    if (!cur?.pres || cur.heldFrom == null) continue
+    const held = cur.undo.slice(cur.heldFrom)
+    const both = new Set(held.flatMap((e) => e.stable).filter((sid) => cur.agentChangedWhileHeld.includes(sid)))
+    if (both.size) {
+      const nums = cur.pres.slides.map((sl, i) => (both.has(cur.sldIds.get(sl.id) ?? '') ? i + 1 : 0)).filter(Boolean)
+      useApp.getState().toast(`You and the agent both changed slide${nums.length > 1 ? 's' : ''} ${nums.join(', ')} — your edits were applied on top of its changes; worth a look.`)
+    }
+    await useDecks.getState().saveNow(s.key)
+  }
 }

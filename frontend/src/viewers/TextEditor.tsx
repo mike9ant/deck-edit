@@ -2,15 +2,17 @@
  * Editable text documents (Markdown, .txt, code/config files) on CodeMirror 6.
  *
  * `useTextDoc` owns the file: it loads it, autosaves edits shortly after you
- * stop typing (etag-guarded, like decks — a file changed on disk meanwhile is
- * reloaded instead of overwritten), reloads when the agent or another app
- * changes it, and reports saved edits to the agent (textEdits.ts). While an
- * agent turn runs the editor is read-only, as decks are.
+ * stop typing (etag-guarded: never overwrites a change made on disk meanwhile),
+ * and reports saved edits to the agent (textEdits.ts). It stays editable while
+ * the agent works: when the agent (or another app) changes the file, your
+ * not-yet-saved typing is merged onto its version (textMerge.ts) and saved,
+ * and the editor takes the change in as minimal edits — your cursor stays put
+ * and ⌘Z undoes only your own typing.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { basicSetup } from 'codemirror'
-import { Compartment, EditorState, type Extension } from '@codemirror/state'
+import { Annotation, Compartment, EditorState, Transaction, type Extension } from '@codemirror/state'
 import { EditorView, keymap } from '@codemirror/view'
 import { indentWithTab } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
@@ -25,6 +27,10 @@ import { ApiError, api } from '../api/client'
 import { useFileVersion } from '../store/fileVersions'
 import { useApp } from '../store/appStore'
 import { markTextEdited, registerTextSaver } from './textEdits'
+import { rebase, textChanges } from './textMerge'
+
+/** Marks the editor transaction that takes in a change from disk (not the user's typing). */
+const fromDisk = Annotation.define<boolean>()
 
 export type SaveStatus = 'saved' | 'dirty' | 'saving' | 'error'
 
@@ -50,8 +56,8 @@ const wraps = (path: string) => ['md', 'markdown', 'txt', 'csv', 'log'].includes
 
 export function useTextDoc(pid: string, path: string) {
   const version = useFileVersion(pid, path)
-  /** Text loaded from disk; `rev` bumps when the editor must take it over. */
-  const [doc, setDoc] = useState<{ text: string; rev: number } | null>(null)
+  /** Text the editor must take over (`rev` bumps); `mine` is the editor text it was merged from. */
+  const [doc, setDoc] = useState<TextDocState | null>(null)
   const [status, setStatus] = useState<SaveStatus>('saved')
   const [error, setError] = useState<string | null>(null)
   const cur = useRef('')
@@ -60,8 +66,9 @@ export function useTextDoc(pid: string, path: string) {
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const inflight = useRef<Promise<void> | null>(null)
   const loaded = useRef(false)
+  const flushRef = useRef<() => Promise<void>>(() => Promise.resolve())
 
-  const load = useCallback(async (fromDisk: boolean) => {
+  const load = useCallback(async (onDiskChange: boolean) => {
     if (inflight.current) await inflight.current
     const r = await api.readText(pid, path)
     if (r.etag && r.etag === etag.current) return // our own save, or nothing new
@@ -70,13 +77,21 @@ export function useTextDoc(pid: string, path: string) {
       saved.current = r.text
       return
     }
-    const lost = fromDisk && cur.current !== saved.current
+    // Typing not saved yet: re-apply it on top of the new version.
+    const mine = cur.current
+    let text = r.text
+    let clean = true
+    if (onDiskChange && loaded.current && mine !== saved.current) ({ text, clean } = rebase(saved.current, mine, r.text))
     saved.current = r.text
-    cur.current = r.text
+    cur.current = text
     loaded.current = true
-    setDoc((d) => ({ text: r.text, rev: (d?.rev ?? 0) + 1 }))
-    setStatus('saved')
-    if (lost) useApp.getState().toast(`${path} changed on disk — reloaded it (your last unsaved edit was replaced).`, 'error')
+    setDoc((d) => ({ text, rev: (d?.rev ?? 0) + 1, mine }))
+    if (text !== r.text) {
+      setStatus('dirty')
+      clearTimeout(timer.current)
+      timer.current = setTimeout(() => void flushRef.current(), 300)
+    } else setStatus('saved')
+    if (!clean) useApp.getState().toast(`Part of your typing in ${path} overlapped the agent's edit and couldn't be merged — check that spot.`, 'error')
   }, [pid, path])
 
   useEffect(() => {
@@ -99,11 +114,10 @@ export function useTextDoc(pid: string, path: string) {
         setStatus(cur.current === text ? 'saved' : 'dirty')
       } catch (e) {
         if (e instanceof ApiError && e.status === 409) {
+          // Changed on disk meanwhile (the agent): merge this typing onto that version; it saves again.
           etag.current = ''
           inflight.current = null
-          useApp.getState().toast(`${path} changed on disk before your edit was saved — reloaded it.`, 'error')
-          saved.current = cur.current = '\u0000' // force the reload to replace the editor
-          await load(false)
+          await load(true)
         } else {
           setStatus('error')
           useApp.getState().toast(`Couldn't save ${path}: ${(e as Error).message}`, 'error')
@@ -126,7 +140,6 @@ export function useTextDoc(pid: string, path: string) {
   // Pending edits are written before an agent turn, when leaving the file, and
   // a closing tab warns about them.
   useEffect(() => registerTextSaver(`${pid}:${path}`, flush), [pid, path, flush])
-  const flushRef = useRef(flush)
   flushRef.current = flush
   useEffect(() => () => void flushRef.current(), [])
   useEffect(() => {
@@ -140,9 +153,16 @@ export function useTextDoc(pid: string, path: string) {
   return { doc, status, error, change, flush, current: () => cur.current }
 }
 
+export interface TextDocState {
+  text: string
+  rev: number
+  /** The editor's text this was merged from (typing after that is merged again on arrival). */
+  mine?: string
+}
+
 export function CodeEditor({ path, doc, initialText, readOnly, onChange, onSave }: {
   path: string
-  doc: { text: string; rev: number }
+  doc: TextDocState
   /** What to show on mount — the latest text, which may include edits made since `doc` was loaded. */
   initialText: string
   readOnly: boolean
@@ -172,7 +192,7 @@ export function CodeEditor({ path, doc, initialText, readOnly, onChange, onSave 
         wraps(path) ? EditorView.lineWrapping : [],
         ro.current.of(editable(readOnlyRef.current)),
         EditorView.updateListener.of((u) => {
-          if (u.docChanged) handlers.current.onChange(u.state.doc.toString())
+          if (u.docChanged && !u.transactions.some((t) => t.annotation(fromDisk))) handlers.current.onChange(u.state.doc.toString())
         }),
         EditorView.theme({
           '&': { height: '100%', fontSize: '13px', backgroundColor: '#fff' },
@@ -194,14 +214,18 @@ export function CodeEditor({ path, doc, initialText, readOnly, onChange, onSave 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
 
-  // The file changed on disk: take over its text with a fresh undo history (so
-  // ⌘Z can't bring back the stale version), keeping the cursor where it was.
+  // The file changed on disk: take its text in as minimal edits kept out of the undo history,
+  // so the cursor stays put and ⌘Z undoes only the user's own typing.
   const firstRev = useRef(doc.rev)
   useEffect(() => {
     const v = view.current
-    if (!v || doc.rev === firstRev.current || v.state.doc.toString() === doc.text) return
-    v.setState(makeState(doc.text, v.state.selection.main.head))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (!v || doc.rev === firstRev.current) return
+    const now = v.state.doc.toString()
+    // Typed more since the merge was computed: merge that too.
+    const target = doc.mine !== undefined && now !== doc.mine ? rebase(doc.mine, now, doc.text).text : doc.text
+    if (now === target) return
+    v.dispatch({ changes: textChanges(now, target), annotations: [fromDisk.of(true), Transaction.addToHistory.of(false)] })
+    if (target !== doc.text) handlers.current.onChange(target)
   }, [doc])
 
   useEffect(() => {

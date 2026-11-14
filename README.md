@@ -48,7 +48,10 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
     In **Formatted**, click any paragraph, heading, list item or table cell and type (Enter or
     clicking away commits, Esc cancels, ↑/↓ at a block's first/last line moves to the previous/next
     block — in a table the cell above/below — and ←/→ at a cell's start/end to the previous/next
-    cell, ⌘Z/⇧⌘Z undo/redo). Blocks turn editable only when clicked, so dragging across
+    cell, ⌘Z/⇧⌘Z undo/redo). In a list, Enter at the end of an item adds one below (same level,
+    next number / empty task box) and Backspace in an empty item removes it; in a table, Enter at
+    the end of a row's last cell adds a blank row below and Backspace in the empty first cell of
+    an empty row removes it. Each writes just that line of the file. Blocks turn editable only when clicked, so dragging across
     paragraphs still selects normally — the bar over such a selection has **Copy** (text) and
     **Copy Markdown** (the source of the blocks it touches). **Bold / italic** toggle with ⌘B / ⌘I
     or the small bar over a selection (`**`/`*` added around it; with the caret in bold/italic text,
@@ -89,8 +92,14 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
   resolved with its one-line summary) and can pin its own notes for you.
 - **Agent chats** — tabs of Claude Code conversations. Each message automatically tells
   the agent which deck/slide you're on, what's selected, and the edits you made since its
-  last turn (already saved). While the agent works, editing pauses and the deck reloads
-  as it saves; slides it changed get a dot in the rail.
+  last turn (already saved). The deck reloads as the agent saves; slides it changed get a
+  dot in the rail.
+  - **You can keep editing while the agent works.** Decks: your edits are *held* (the agent
+    rewrites the whole file), re-applied on top of each version it saves, and saved once its
+    turn ends; an edit whose slide/shape it removed is skipped, and slides you both changed are
+    pointed out. Text/Markdown: your typing is merged with its changes as they land
+    (`viewers/textMerge.ts`) and saved; if part of it overlapped the agent's edit, you're told.
+    PDFs stay read-only during a turn.
   - The composer's chip shows how the next turn runs — `mode · model · effort · ⚡` — and
     opens a popover (as in ma-code-navigator) to pick:
     - **approval mode** (⇧Tab cycles): *manual* (approve every edit and command),

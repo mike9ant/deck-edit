@@ -26,7 +26,6 @@ import type { Stroke } from '../api/types'
 import { notesForSlide, useNotes } from '../store/notesStore'
 import { useApp } from '../store/appStore'
 import { api } from '../api/client'
-import { isProjectBusy } from './deckStore'
 
 type Rect = { x: number; y: number; w: number; h: number }
 type Handle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w'
@@ -61,7 +60,6 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
   const key = session.key
   const slideNo = session.slideIndex + 1
   const selection = session.selection
-  const busy = isProjectBusy(session.pid)
 
   const wrapRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
@@ -131,7 +129,6 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
 
   // ── text editing ────────────────────────────────────────────────────────
   const startEditing = (nodeId: string, at?: { x: number; y: number }) => {
-    if (busy) return
     const n = nodeById(nodeId)
     const el = nodeEl(nodeId)
     if (!n || !el || n.nodeType !== 'shape') return
@@ -317,7 +314,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     if (e.shiftKey || e.metaKey) sel = sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]
     else if (!sel.includes(id)) sel = [id]
     setSelection(key, sel)
-    if (!busy && sel.includes(id)) startMove(sel, e)
+    if (sel.includes(id)) startMove(sel, e)
     e.preventDefault()
   }
 
@@ -373,7 +370,6 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     }
     const mod = e.metaKey || e.ctrlKey
     if (e.key === 'Escape') { setSelection(key, []); setNoteMode(false); setDraft(null); return }
-    if (busy) return
     if ((e.key === 'Delete' || e.key === 'Backspace') && selection.length) { e.preventDefault(); void deleteSelection(); return }
     if (mod && e.key === 'c' && selection.length) { e.preventDefault(); void copySelection(); return }
     if (mod && e.key === 'x' && selection.length) { e.preventDefault(); void copySelection().then(deleteSelection); return }
@@ -391,7 +387,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
   // System-clipboard image paste (e.g. a screenshot).
   useEffect(() => {
     const onPaste = async (e: ClipboardEvent) => {
-      if (document.activeElement !== stageRef.current || busy) return
+      if (document.activeElement !== stageRef.current) return
       const file = [...(e.clipboardData?.files ?? [])].find((f) => f.type.startsWith('image/'))
       if (!file) return
       e.preventDefault()
@@ -420,7 +416,6 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
   const onDrop = async (e: React.DragEvent) => {
     e.preventDefault()
     setDropHint(false)
-    if (busy) return useApp.getState().toast('The agent is working — try again when its turn ends.')
     const at = toSlide(e.clientX, e.clientY)
     const treePath = e.dataTransfer.getData('application/x-pdfedit-path')
     if (treePath) {
@@ -435,8 +430,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
 
   registerActions({
     addTextBox: async () => {
-      if (busy) return
-      const created = await run(
+        const created = await run(
         { type: 'addTextBox', slideId: slide.id, text: 'New text', position: { x: pres.width * 0.3, y: pres.height * 0.42 }, size: { w: pres.width * 0.4, h: pres.height * 0.1 } },
         `Slide ${slideNo}: added a text box`,
       )
@@ -533,7 +527,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
               className={`absolute border ${editing?.nodeId === id ? 'border-dashed border-accent/70' : 'border-accent'}`}
               style={{ left: r.x * scale, top: r.y * scale, width: r.w * scale, height: r.h * scale, rotate: `${rotation}deg` }}
             >
-              {selection.length === 1 && !editing && !busy &&
+              {selection.length === 1 && !editing &&
                 HANDLES.map((h) => (
                   <div
                     key={h}

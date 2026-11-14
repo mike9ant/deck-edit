@@ -25,6 +25,7 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   const railW = useApp((s) => s.widths.rail)
   const setWidth = useApp((s) => s.setWidth)
   const changed = useApp((s) => s.changed.includes(path))
+  const held = session && session.heldFrom != null ? session.undo.length - session.heldFrom : 0
   const [noteMode, setNoteMode] = useState(false)
   const [showResolved, setShowResolved] = useState(false)
   const [dismissedAt, setDismissedAt] = useState(0)
@@ -75,10 +76,10 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col" onKeyDown={onKeyDown}>
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-hair bg-panel px-2">
-        <button className="icon-btn" title="Undo (⌘Z)" disabled={!session.undo.length || busy} onClick={() => undo(key)}><Undo2 size={16} /></button>
-        <button className="icon-btn" title="Redo (⇧⌘Z)" disabled={!session.redo.length || busy} onClick={() => void redo(key)}><Redo2 size={16} /></button>
+        <button className="icon-btn" title="Undo (⌘Z)" disabled={!session.undo.length} onClick={() => undo(key)}><Undo2 size={16} /></button>
+        <button className="icon-btn" title="Redo (⇧⌘Z)" disabled={!session.redo.length} onClick={() => void redo(key)}><Redo2 size={16} /></button>
         <div className="mx-1 h-5 w-px bg-hair" />
-        <button className="tool-btn" disabled={busy} onClick={() => actions.current.addTextBox()} title="Add a text box"><Type size={15} /> Text</button>
+        <button className="tool-btn" onClick={() => actions.current.addTextBox()} title="Add a text box"><Type size={15} /> Text</button>
         <NoteToolButton active={noteMode} onToggle={() => setNoteMode(!noteMode)} />
         <button className="icon-btn" onClick={() => setShowResolved(!showResolved)} title={showResolved ? 'Hide resolved notes' : 'Show resolved notes'}>
           {showResolved ? <Eye size={15} /> : <EyeOff size={15} />}
@@ -94,7 +95,10 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
       </div>
       {busy && (
         <div className="flex items-center gap-2 border-b border-violet-200 bg-violet-50 px-3 py-1.5 text-xs text-violet-900">
-          <Loader2 size={13} className="animate-spin" /> The agent is working. Editing is paused, and its changes appear here as it saves.
+          <Loader2 size={13} className="animate-spin" />
+          {held > 0
+            ? `The agent is working. Your ${held} edit${held > 1 ? 's are' : ' is'} held and re-applied on top of its changes; saved when it finishes.`
+            : 'The agent is working — its changes appear here as it saves. You can keep editing: your edits are re-applied on top of its changes.'}
         </div>
       )}
       {!busy && showChanged && changedNums.length > 0 && (

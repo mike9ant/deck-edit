@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import type { SlideData } from '@diceui/pptx-core'
-import { useDecks, type DeckSession, isProjectBusy } from './deckStore'
+import { useDecks, type DeckSession } from './deckStore'
 import { readNotes, writeNotes } from './speakerNotes'
 import { short } from './deckModel'
 
@@ -27,7 +27,6 @@ export function NotesPane({ session }: { session: DeckSession }) {
   const saved = useRef('')
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const area = useRef<HTMLTextAreaElement>(null)
-  const busy = isProjectBusy(session.pid)
   const slideNo = session.slideIndex + 1
 
   // Load the notes when the slide changes or the deck reloads — but never
@@ -58,8 +57,14 @@ export function NotesPane({ session }: { session: DeckSession }) {
       value.trim()
         ? `Slide ${slideNo}: edited the speaker notes${before.trim() ? '' : ' (new)'}: "${short(value, 160)}"`
         : `Slide ${slideNo}: cleared the speaker notes`,
-      () => writeNotes(pres, slide, value),
+      // Given the deck and slide id at (re)apply time: edits made while the agent works are replayed onto its version.
+      (p, [sid]) => {
+        const sl = p.slides.find((x) => x.id === sid)
+        if (!sl) throw new Error('the slide is gone')
+        return writeNotes(p, sl, value)
+      },
       `notes:${slide.id}`,
+      [slide.id],
     )
     if (ok) saved.current = value
     setSaving(false)
@@ -112,9 +117,9 @@ export function NotesPane({ session }: { session: DeckSession }) {
           ref={area}
           className="block w-full resize-none border-0 bg-white px-4 py-2 text-[13px] leading-relaxed text-ink outline-none placeholder:text-ink-3 disabled:bg-paper"
           style={{ height }}
-          placeholder={busy ? 'The agent is working — notes are read-only until its turn ends.' : 'Click to add speaker notes'}
+          placeholder="Click to add speaker notes"
           value={text}
-          disabled={busy || !slide}
+          disabled={!slide}
           onChange={(e) => onChange(e.target.value)}
           onBlur={() => void save(text)}
           onKeyDown={(e) => e.stopPropagation()}

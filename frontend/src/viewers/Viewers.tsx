@@ -71,14 +71,14 @@ function TextDoc({ pid, path, mode, tools }: { pid: string; path: string; mode: 
       </div>
       {busy && (
         <div className="border-b border-violet-200 bg-violet-50 px-3 py-1.5 text-xs text-violet-900">
-          The agent is working. Editing is paused, and its changes appear here as it saves.
+          The agent is working — its changes appear here as it saves. You can keep editing: your typing is merged with its changes.
         </div>
       )}
       {mode === 'edit' ? (
-        <CodeEditor path={path} doc={doc} initialText={current()} readOnly={busy} onChange={change} onSave={() => void flush()} />
+        <CodeEditor path={path} doc={doc} initialText={current()} readOnly={false} onChange={change} onSave={() => void flush()} />
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <MarkdownEditable text={current()} editable={!busy} onChange={change} />
+          <MarkdownEditable text={current()} editable onChange={change} />
         </div>
       )}
     </div>

@@ -9,7 +9,7 @@ import { memo, useEffect, useRef, useState } from 'react'
 import { Copy, CopyPlus, ClipboardPaste, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
 import { copyNodes, materializeSlide, type PresentationData, type SlideData } from '@diceui/pptx-core'
-import { useDecks, type DeckSession, isProjectBusy } from './deckStore'
+import { useDecks, type DeckSession } from './deckStore'
 import { SlideRender } from './SlideRender'
 import { getClipboard, setClipboard, type PortableSlide } from './clipboard'
 import { slideTitle } from './deckModel'
@@ -30,7 +30,6 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
   const dragIds = useRef<string[]>([])
   const listRef = useRef<HTMLDivElement>(null)
   const notes = useNotes((s) => s.notes)
-  const busy = isProjectBusy(session.pid)
   const thumbW = Math.max(60, Math.floor(useInnerWidth(listRef, width - 16) - 32))
   const current = pres.slides[session.slideIndex]
 
@@ -97,9 +96,10 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
     const created = await useDecks.getState().transaction(
       key,
       `Pasted ${n} slide${n > 1 ? 's' : ''} from "${c.deckName}" (${c.portable.map((p) => `"${p.title}"`).join(', ')}) after slide ${session.slideIndex + 1}`,
-      async (run, p) => {
+      // The anchor comes in as a slide id at (re)apply time — edits made while the agent works are replayed onto its version.
+      async (run, p, [anchorId]) => {
         const ids: string[] = []
-        let after = anchor.id
+        let after = anchorId
         for (const src of c.portable) {
           const layoutId = (src.layoutName && layoutByName.get(src.layoutName)) || anchor.layoutIndex
           const added = await run({ type: 'addSlide', layoutId, afterSlideId: after })
@@ -115,6 +115,7 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
         }
         return ids
       },
+      [anchor.id],
     )
     if (created?.length) {
       setSlide(key, session.slideIndex + 1)
@@ -145,7 +146,7 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
     setDragOver(null)
     const ids = dragIds.current
     dragIds.current = []
-    if (!ids.length || busy) return
+    if (!ids.length) return
     // Move in order so the block lands contiguously at toIndex.
     let target = toIndex
     const ordered = [...ids].sort((a, b) => indexOf(a) - indexOf(b))
@@ -166,7 +167,6 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
     const mod = e.metaKey || e.ctrlKey
     if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); setPicked([]); setSlide(key, session.slideIndex + 1) }
     else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); setPicked([]); setSlide(key, session.slideIndex - 1) }
-    if (busy) return
     if (mod && e.key === 'd') { e.preventDefault(); void duplicate() }
     else if (mod && e.key === 'c') { e.preventDefault(); void copy() }
     else if (mod && e.key === 'v') { e.preventDefault(); void paste() }
@@ -186,7 +186,7 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
             <div key={slide.id} data-slide-index={i}>
               <div className={clsx('mx-1 h-1 rounded', dragOver === i ? 'bg-accent' : 'bg-transparent')} />
               <div
-                draggable={!busy}
+                draggable
                 onDragStart={(e) => {
                   dragIds.current = isPicked ? picked : [slide.id]
                   e.dataTransfer.effectAllowed = 'move'
@@ -240,10 +240,10 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
         />
       </div>
       <div className="flex items-center justify-center gap-0.5 border-t border-hair px-1 py-1">
-        <button className="icon-btn" title="Duplicate (⌘D)" disabled={busy} onClick={() => void duplicate()}><CopyPlus size={15} /></button>
+        <button className="icon-btn" title="Duplicate (⌘D)" onClick={() => void duplicate()}><CopyPlus size={15} /></button>
         <button className="icon-btn" title="Copy slides (⌘C) — paste into this deck or another one" onClick={() => void copy()}><Copy size={15} /></button>
-        <button className="icon-btn" title="Paste slides after the current one (⌘V) — also from another deck" disabled={busy || getClipboard()?.kind !== 'slides'} onClick={() => void paste()}><ClipboardPaste size={15} /></button>
-        <button className="icon-btn" title="Delete (⌫)" disabled={busy} onClick={() => void remove()}><Trash2 size={15} /></button>
+        <button className="icon-btn" title="Paste slides after the current one (⌘V) — also from another deck" disabled={getClipboard()?.kind !== 'slides'} onClick={() => void paste()}><ClipboardPaste size={15} /></button>
+        <button className="icon-btn" title="Delete (⌫)" onClick={() => void remove()}><Trash2 size={15} /></button>
         {picked.length > 1 && <span className="ml-1 text-[11px] text-ink-3">{picked.length} selected</span>}
       </div>
     </div>
