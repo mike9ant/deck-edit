@@ -82,7 +82,9 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
   - **copy/paste slides between decks**: ⌘C in one deck's slide list, ⌘V in another's — each slide is
     re-created on the target's matching layout with its shapes and images ("use destination theme")
   - undo/redo (⌘Z / ⇧⌘Z) for all of it
-- **PDF** — page rail, reorder/duplicate/delete pages, drop an image onto a page, undo/redo.
+- **PDF** — page rail, reorder/duplicate/delete pages, drop an image onto a page, undo/redo. The page's
+  text is selectable: the bar over a selection copies it or puts a **note for the agent** on it (the
+  agent gets the page and the quoted text, which stays highlighted).
 - **Spreadsheets** (.xlsx / .xlsm) — read-only preview: sheet tabs, formatted values (number
   formats, dates, percentages, currency), column widths, merged cells and basic styling; click a
   cell to see its address and formula/value (the agent is told which sheet/cell you're on). Formulas
@@ -105,7 +107,8 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
   `screenshot_slide` with `show_notes` shows the agent the marks themselves.
   **Pin note** (⌘Enter) is the main action; **Act now** (on the left of the note box, ⌘⇧Enter) pins the note and immediately asks the agent, in the open
   chat, to handle it — no need to type the request.
-  Notes also work on **spreadsheets** (pin or draw on the grid — anchored to cells, so they stay
+  Notes work on slides, PDF pages (a pin, a drawn mark, or selected text) and **images** (pin or
+  draw). They also work on **spreadsheets** (pin or draw on the grid — anchored to cells, so they stay
   with the content; the agent gets the cell(s) and what they contain) and on **selected text** in
   text/code/Markdown files (select, then **Note for AI** in the header — the agent gets the lines and the
   quoted text, which stays highlighted while the note is open; the header lists the file's notes).

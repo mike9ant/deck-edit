@@ -7,8 +7,8 @@
  * changes on disk (e.g. the agent edits a script or a speaker-notes .md).
  */
 
-import { useRef, useState } from 'react'
-import { Eye, ExternalLink, Loader2, Pencil } from 'lucide-react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Eye, EyeOff, ExternalLink, Loader2, Pencil } from 'lucide-react'
 import clsx from 'clsx'
 import { api } from '../api/client'
 import { useFileVersion } from '../store/fileVersions'
@@ -16,7 +16,10 @@ import { useChat } from '../store/chatStore'
 import { useApp } from '../store/appStore'
 import { CodeEditor, useTextDoc, type SaveStatus, type TextSelection } from './TextEditor'
 import { TextNoteTools } from '../notes/TextNotes'
-import { useNotes } from '../store/notesStore'
+import { notesForSlide, useNotes } from '../store/notesStore'
+import { NotePins, actNowPrompt, type NoteDraft } from '../notes/NotePins'
+import { DrawLayer, NoteToolButton, SelectToolButton, pinFor, useEscapeEndsNoteMode } from '../notes/NoteDrawing'
+import { sendToAgent } from '../chat/sendToAgent'
 import { MarkdownEditable } from './MarkdownEditable'
 
 type MdMode = 'preview' | 'edit'
@@ -108,11 +111,91 @@ function StatusLabel({ status, changed }: { status: SaveStatus; changed: boolean
   return changed ? <span>Saved</span> : null
 }
 
+/**
+ * An image, with notes for the agent: pin a point or draw a mark on it
+ * (positions are fractions of the image, so they hold at any size).
+ */
 export function ImageView({ pid, path }: { pid: string; path: string }) {
   const version = useFileVersion(pid, path)
+  const wrap = useRef<HTMLDivElement>(null)
+  const [box, setBox] = useState({ w: 800, h: 600 })
+  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null)
+  const [noteMode, setNoteMode] = useState(false)
+  const [showResolved, setShowResolved] = useState(false)
+  const [draft, setDraft] = useState<NoteDraft | null>(null)
+  const noteTool = useNotes((s) => s.tool)
+  const allNotes = useNotes((s) => s.notes)
+  useEscapeEndsNoteMode(noteMode, setNoteMode)
+  useEffect(() => setDraft(null), [noteMode, noteTool])
+  useLayoutEffect(() => {
+    const el = wrap.current
+    if (!el) return
+    const ro = new ResizeObserver(() => setBox({ w: el.clientWidth, h: el.clientHeight }))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  // Fit the image into the view (never enlarged past its own size).
+  const fit = natural ? Math.min(1, (box.w - 48) / natural.w, (box.h - 48) / natural.h) : 0
+  const w = natural ? Math.max(1, Math.round(natural.w * fit)) : 0
+  const h = natural ? Math.max(1, Math.round(natural.h * fit)) : 0
+  const drawing = noteMode && noteTool === 'draw'
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-[#e9e8e4] p-6">
-      <img src={`${api.fileUrl(pid, path)}&v=${version}`} className="max-h-full max-w-full rounded shadow" alt={path} />
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-hair bg-panel px-2">
+        <SelectToolButton active={!noteMode} onSelect={() => setNoteMode(false)} />
+        <span className="ml-2 truncate text-xs text-ink-3">{natural ? `${natural.w} × ${natural.h}` : ''}</span>
+        <div className="ml-auto flex items-center gap-2 text-xs text-ink-3">
+          <NoteToolButton active={noteMode} onToggle={() => setNoteMode(!noteMode)} />
+          <button className="icon-btn" onClick={() => setShowResolved(!showResolved)} title={showResolved ? 'Hide resolved notes' : 'Show resolved notes'}>{showResolved ? <Eye size={15} /> : <EyeOff size={15} />}</button>
+          <div className="h-5 w-px bg-hair" />
+          <button className="tool-btn" title="Open with the default app" onClick={() => void api.openExternal(pid, path)}><ExternalLink size={14} /> Open</button>
+        </div>
+      </div>
+      <div ref={wrap} className="flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#e9e8e4]">
+        <div
+          className={clsx('relative shadow', noteMode && 'cursor-crosshair')}
+          style={{ width: w, height: h }}
+          onPointerDown={(e) => {
+            if (!noteMode || drawing) return
+            e.preventDefault() // the note box that opens takes the typing
+            const r = e.currentTarget.getBoundingClientRect()
+            setDraft({ x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height })
+          }}
+        >
+          <img
+            src={`${api.fileUrl(pid, path)}&v=${version}`}
+            alt={path}
+            draggable={false}
+            className="block h-full w-full rounded-[2px] select-none"
+            onLoad={(e) => setNatural({ w: e.currentTarget.naturalWidth || 800, h: e.currentTarget.naturalHeight || 600 })}
+          />
+          {drawing && (
+            <DrawLayer
+              width={w}
+              height={h}
+              onStroke={(st) => setDraft((d) => { const strokes = [...(d?.strokes ?? []), st]; return { ...pinFor(strokes), strokes } })}
+              onTap={(p) => setDraft((d) => (d?.strokes?.length ? d : p))}
+            />
+          )}
+          {natural && (
+            <NotePins
+              notes={notesForSlide(allNotes, path, '', 1)}
+              width={w}
+              height={h}
+              showResolved={showResolved}
+              draft={draft}
+              onCancelDraft={() => setDraft(null)}
+              onSaveDraft={async (text, actNow) => {
+                const d = draft!
+                setDraft(null)
+                const note = await useNotes.getState().add({ deck: path, slideId: '', slideIndex: 1, x: d.x, y: d.y, strokes: d.strokes, text })
+                setNoteMode(false)
+                if (actNow && note) await sendToAgent(actNowPrompt(note, 'image'))
+              }}
+            />
+          )}
+        </div>
+      </div>
     </div>
   )
 }

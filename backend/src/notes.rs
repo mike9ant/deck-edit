@@ -104,6 +104,9 @@ impl Note {
     pub fn describe_place(&self) -> String {
         if let Some(q) = &self.quote {
             let q: String = q.chars().take(400).collect();
+            if self.deck.to_lowercase().ends_with(".pdf") {
+                return format!("{} page {}, on the text: \"{q}\"", self.deck, self.slide_index);
+            }
             let lines = self.lines.as_deref().map(|l| format!(" line{} {l}", if l.contains('–') || l.contains('-') { "s" } else { "" })).unwrap_or_default();
             return format!("{}{lines}, on the text: \"{q}\"", self.deck);
         }
@@ -124,8 +127,8 @@ impl Note {
             }
             return out;
         }
-        let unit = if self.deck.to_lowercase().ends_with(".pdf") { "page" } else { "slide" };
-        let mut out = format!("{} {unit} {}", self.deck, self.slide_index);
+        let unit = if self.deck.to_lowercase().ends_with(".pdf") { "page" } else if is_image(&self.deck) { "image" } else { "slide" };
+        let mut out = if unit == "image" { format!("{} (image)", self.deck) } else { format!("{} {unit} {}", self.deck, self.slide_index) };
         if let Some(r) = self.region() {
             let pct = |v: f64| (v * 100.0).round() as i64;
             out.push_str(&format!(
@@ -141,9 +144,17 @@ impl Note {
             }
         } else if let Some(s) = &self.shape_name {
             out.push_str(&format!(" near \"{s}\""));
+        } else if unit != "slide" {
+            // A pin on a page or image: where it is.
+            out.push_str(&format!(", at x {}%, y {}% of the {unit} (from top-left)", (self.x * 100.0).round(), (self.y * 100.0).round()));
         }
         out
     }
+}
+
+pub fn is_image(deck: &str) -> bool {
+    let d = deck.to_lowercase();
+    [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].iter().any(|e| d.ends_with(e))
 }
 
 pub fn is_sheet(deck: &str) -> bool {
@@ -539,6 +550,28 @@ mod sheet_and_text_tests {
         d.shapes = vec!["B4 \"$2,500,000\"".into()];
         assert_eq!(d.describe_place(), "model.xlsx sheet \"Summary\", circled the cells B4:D9, covering B4 \"$2,500,000\"");
         assert_eq!(col_name(28), "AB");
+    }
+
+    #[test]
+    fn pdf_and_image_notes_say_where() {
+        let mut q = base("report.pdf");
+        q.slide_index = 4;
+        q.quote = Some("Revenue grew".into());
+        assert_eq!(q.describe_place(), "report.pdf page 4, on the text: \"Revenue grew\"");
+        let mut pin = base("report.pdf");
+        pin.shape_name = None;
+        pin.slide_index = 2;
+        pin.x = 0.4;
+        pin.y = 0.25;
+        assert_eq!(pin.describe_place(), "report.pdf page 2, at x 40%, y 25% of the page (from top-left)");
+        let mut img = base("team-photo.png");
+        img.shape_name = None;
+        img.x = 0.5;
+        img.y = 0.1;
+        assert_eq!(img.describe_place(), "team-photo.png (image), at x 50%, y 10% of the image (from top-left)");
+        img.strokes = vec![vec![[0.1, 0.2], [0.3, 0.6]]];
+        assert!(img.describe_place().starts_with("team-photo.png (image), marked (open stroke"));
+        assert!(img.describe_place().contains("of the image"));
     }
 
     #[test]

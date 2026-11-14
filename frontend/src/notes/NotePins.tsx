@@ -22,6 +22,8 @@ export interface NoteDraft {
   strokes?: Stroke[]
   /** Shapes the drawn mark covers. */
   shapes?: string[]
+  /** A note on selected text (PDF): the text. */
+  quote?: string
 }
 
 interface Props {
@@ -150,11 +152,12 @@ function DraftPopover({ draft, onSave, onCancel, flipX, flipY }: { draft: NoteDr
     <div data-note-popover className={popoverPos(flipX, flipY)} style={drag.style} onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
       <div {...drag.handle} className={clsx('-mx-3 -mt-3 mb-1 flex items-center gap-2 rounded-t-lg px-3 pb-1 pt-2 text-xs text-ink-3', drag.handle.className)} title="Drag to move">
         <span className="min-w-0 flex-1 truncate">
-          Note for the agent{draft.strokes?.length ? ' · on the area you marked' : draft.shapeName ? ` · on “${draft.shapeName}”` : ''}
+          Note for the agent{draft.quote ? ' · on the selected text' : draft.strokes?.length ? ' · on the area you marked' : draft.shapeName ? ` · on “${draft.shapeName}”` : ''}
         </span>
         <Grip />
       </div>
       {draft.strokes?.length ? <MarkInfo shapes={draft.shapes} hint /> : null}
+      {draft.quote ? <Quote text={draft.quote} /> : null}
       <textarea
         ref={ref}
         className="h-20 w-full resize-none rounded border border-hair p-2 text-sm outline-none focus:border-accent"
@@ -201,6 +204,7 @@ function NotePopover({ note, onClose, flipX, flipY }: { note: Note; onClose(): v
         <button className="text-ink-3 hover:text-ink" onClick={onClose}><X size={14} /></button>
       </div>
       {note.strokes?.length ? <MarkInfo shapes={note.shapes} /> : null}
+      {note.quote ? <Quote text={note.quote} /> : null}
       {editing ? (
         <textarea className="h-20 w-full resize-none rounded border border-hair p-2 outline-none focus:border-accent" value={text} onChange={(e) => setText(e.target.value)} autoFocus />
       ) : (
@@ -233,6 +237,10 @@ function NotePopover({ note, onClose, flipX, flipY }: { note: Note; onClose(): v
   )
 }
 
+function Quote({ text }: { text: string }) {
+  return <div className="mb-2 line-clamp-3 border-l-2 border-amber-400 bg-amber-50/60 px-2 py-1 text-[11px] text-ink-2">{text.length > 400 ? `${text.slice(0, 399)}…` : text}</div>
+}
+
 function MarkInfo({ shapes, hint }: { shapes?: string[]; hint?: boolean }) {
   return (
     <div className="mb-2 text-[11px] text-ink-3">
@@ -243,12 +251,16 @@ function MarkInfo({ shapes, hint }: { shapes?: string[]; hint?: boolean }) {
 }
 
 /** The message "Act now" sends: the note itself (place, drawn area, shapes/cells, quote) reaches the agent in the context block. */
-export function actNowPrompt(note: Note, unit: 'slide' | 'page' | 'sheet' | 'text'): string {
+export function actNowPrompt(note: Note, unit: 'slide' | 'page' | 'sheet' | 'text' | 'image'): string {
   const clip = (t: string, n = 120) => (t.length > n ? `${t.slice(0, n - 1)}…` : t)
   let place: string
   if (unit === 'text') {
     const lines = note.lines ? ` (line${/[–-]/.test(note.lines) ? 's' : ''} ${note.lines})` : ''
     place = `in ${note.deck}${lines}, on the text "${clip(note.quote ?? '')}"`
+  } else if (note.quote) {
+    place = `on page ${note.slideIndex} of ${note.deck}, on the text "${clip(note.quote)}"`
+  } else if (unit === 'image') {
+    place = `on the image ${note.deck}${note.strokes?.length ? ' (the area I marked)' : ''}`
   } else if (unit === 'sheet') {
     place = `on sheet "${note.slideId}" of ${note.deck}${note.strokes?.length ? ' (the cells I marked)' : note.shapeName ? ` (${note.shapeName})` : ''}`
   } else {

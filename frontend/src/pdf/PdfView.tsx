@@ -1,12 +1,16 @@
 /**
  * A PDF document: page rail + main page with notes, limited editing
  * (drag to reorder pages, duplicate, delete, drop an image onto a page).
+ *
+ * The page's text is selectable (pdf.js text layer) — to copy it, or to put
+ * a note for the agent on it; notes can also be pinned at a point or drawn.
+ * The text of open notes is highlighted.
  */
 
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { PDFDocumentProxy } from 'pdfjs-dist'
+import { TextLayer, type PDFDocumentProxy } from 'pdfjs-dist'
 import { degrees } from 'pdf-lib'
-import { CopyPlus, ExternalLink, Eye, EyeOff, Loader2, Redo2, Trash2, Undo2 } from 'lucide-react'
+import { BotMessageSquare, Copy, CopyPlus, ExternalLink, Eye, EyeOff, Loader2, Redo2, Trash2, Undo2 } from 'lucide-react'
 import clsx from 'clsx'
 import { usePdfs, pdfKey, type PdfSession } from './pdfStore'
 import { Splitter } from '../components/Splitter'
@@ -19,6 +23,7 @@ import { useChat } from '../store/chatStore'
 import { api } from '../api/client'
 import { prepareImage } from '../deck/images'
 import { useInnerWidth } from '../components/useInnerWidth'
+import { domRangeOf } from '../viewers/textRanges'
 
 /** Render one page into a canvas at a CSS width. */
 export const PageCanvas = memo(function PageCanvas({ doc, index, width, version }: { doc: PDFDocumentProxy; index: number; width: number; version: number }) {
@@ -47,6 +52,34 @@ export const PageCanvas = memo(function PageCanvas({ doc, index, width, version 
     }
   }, [doc, index, width, version])
   return <canvas ref={ref} style={{ width, height: width * aspect, display: 'block', background: '#fff' }} />
+})
+
+/** The page's text as an invisible, selectable layer over the canvas (pdf.js TextLayer). */
+const PageText = memo(function PageText({ doc, index, width, version, onReady }: { doc: PDFDocumentProxy; index: number; width: number; version: number; onReady(el: HTMLElement): void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    let layer: TextLayer | null = null
+    let cancelled = false
+    void (async () => {
+      const page = await doc.getPage(index + 1)
+      if (cancelled) return
+      const vp1 = page.getViewport({ scale: 1 })
+      const viewport = page.getViewport({ scale: width / vp1.width })
+      el.replaceChildren()
+      el.style.setProperty('--scale-factor', String(viewport.scale))
+      layer = new TextLayer({ textContentSource: await page.getTextContent(), container: el, viewport })
+      await layer.render().catch(() => {})
+      if (!cancelled) onReady(el)
+    })()
+    return () => {
+      cancelled = true
+      layer?.cancel()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doc, index, width, version])
+  return <div ref={ref} className="textLayer" />
 })
 
 export function PdfView({ pid, path }: { pid: string; path: string }) {
@@ -175,6 +208,26 @@ function PageStage({ session, noteMode, setNoteMode, showResolved, busy }: { ses
   const noteTool = useNotes((s) => s.tool)
   const drawing = noteMode && noteTool === 'draw'
   useEffect(() => setDraft(null), [noteMode, noteTool, session.pageIndex])
+  const stageRef = useRef<HTMLDivElement>(null)
+  const textRef = useRef<HTMLElement | null>(null)
+  const [textReady, setTextReady] = useState(0)
+  /** A text selection on the page: the bar over it offers a note or copy. */
+  const [pick, setPick] = useState<{ text: string; x: number; y: number; barX: number; barY: number } | null>(null)
+  useEffect(() => {
+    const update = () => {
+      const sel = window.getSelection()
+      const r = sel?.rangeCount ? sel.getRangeAt(0) : null
+      const stage = stageRef.current
+      if (!r || r.collapsed || !stage || !textRef.current?.contains(r.commonAncestorContainer)) return setPick(null)
+      const text = sel!.toString().trim()
+      if (!text) return setPick(null)
+      const rect = r.getBoundingClientRect()
+      const sr = stage.getBoundingClientRect()
+      setPick({ text, x: (rect.left - sr.left) / sr.width, y: (rect.top - sr.top) / sr.height, barX: rect.left + rect.width / 2, barY: rect.top })
+    }
+    document.addEventListener('selectionchange', update)
+    return () => document.removeEventListener('selectionchange', update)
+  }, [])
   useLayoutEffect(() => {
     const el = wrap.current!
     const ro = new ResizeObserver(() => setBox({ w: el.clientWidth, h: el.clientHeight }))
@@ -219,9 +272,37 @@ function PageStage({ session, noteMode, setNoteMode, showResolved, busy }: { ses
     })
   }
 
+  // Highlight the text of open notes on this page.
+  const pageNotes = notesForSlide(notes, session.path, '', pageNo)
+  const quotesKey = JSON.stringify(pageNotes.filter((n) => n.quote && n.status === 'open').map((n) => n.quote))
+  useEffect(() => {
+    const reg = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS?.highlights
+    const H = (globalThis as { Highlight?: new (...r: Range[]) => unknown }).Highlight
+    const el = textRef.current
+    if (!reg || !H || !el) return
+    const quotes = JSON.parse(quotesKey) as string[]
+    reg.set('note-quote', new H(...quotes.map((q) => domRangeOf(el, q)).filter((r): r is Range => !!r)))
+    return () => { reg.delete('note-quote') }
+  }, [quotesKey, textReady])
+
   return (
     <div ref={wrap} className="flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#e9e8e4]" onDragOver={(e) => e.preventDefault()} onDrop={(e) => void onDrop(e)}>
+      {pick && !noteMode && !draft && (
+        <div
+          className="fixed z-40 flex -translate-x-1/2 -translate-y-full gap-0.5 rounded-md border border-hair bg-white p-0.5 shadow-lg"
+          style={{ left: pick.barX, top: pick.barY - 6 }}
+          onMouseDown={(e) => e.preventDefault() /* keep the selection */}
+        >
+          <button className="tool-btn h-6" title="Add a note for the AI agent about this text" onClick={() => { setDraft({ x: pick.x, y: pick.y, quote: pick.text }); window.getSelection()?.removeAllRanges() }}>
+            <BotMessageSquare size={13} /> Note for AI
+          </button>
+          <button className="tool-btn h-6" title="Copy the text (⌘C)" onClick={() => { void navigator.clipboard.writeText(pick.text); useApp.getState().toast('Copied the selected text.') }}>
+            <Copy size={13} /> Copy
+          </button>
+        </div>
+      )}
       <div
+        ref={stageRef}
         data-page-stage
         className={clsx('relative shadow-lg', noteMode && 'cursor-crosshair')}
         style={{ width: w, height: h }}
@@ -233,6 +314,7 @@ function PageStage({ session, noteMode, setNoteMode, showResolved, busy }: { ses
         }}
       >
         <PageCanvas doc={session.doc!} index={session.pageIndex} width={w} version={session.version} />
+        <PageText doc={session.doc!} index={session.pageIndex} width={w} version={session.version} onReady={(el) => { textRef.current = el; setTextReady((n) => n + 1) }} />
         {drawing && (
           <DrawLayer
             width={w}
@@ -245,14 +327,14 @@ function PageStage({ session, noteMode, setNoteMode, showResolved, busy }: { ses
           />
         )}
         <NotePins
-          notes={notesForSlide(notes, session.path, '', pageNo)}
+          notes={pageNotes}
           width={w}
           height={h}
           showResolved={showResolved}
           draft={draft}
           onCancelDraft={() => setDraft(null)}
           onSaveDraft={async (text, actNow) => {
-            const note = await useNotes.getState().add({ deck: session.path, slideId: '', slideIndex: pageNo, x: draft!.x, y: draft!.y, strokes: draft!.strokes, text })
+            const note = await useNotes.getState().add({ deck: session.path, slideId: '', slideIndex: pageNo, x: draft!.x, y: draft!.y, strokes: draft!.strokes, quote: draft!.quote, text })
             setDraft(null)
             setNoteMode(false)
             if (actNow && note) await sendToAgent(actNowPrompt(note, 'page'))
