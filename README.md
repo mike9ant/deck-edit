@@ -34,6 +34,11 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
 
 - **Projects** — a project is a folder + its agent chats. Pick one in the top bar.
 - **Files** — the folder tree; open `.pptx`, `.pdf`, `.md`, text and image files in tabs.
+  Click selects (and previews a file), double-click opens it to stay; ⌘/⇧-click select several.
+  Rename in place by clicking the selected item again after a pause (or Enter / F2); drag items
+  onto a folder to move them; **New folder** and **Delete** (⌫, after a confirmation — files go to
+  the Trash, folders only when empty) are in the panel header, which also hides the panel. Open
+  tabs and notes follow renames and moves; long names are shortened in the middle.
   Everything reloads when the file changes on disk.
   - A newly opened file is a *preview* tab (italic title): opening another file replaces it. It
     stays open once you change the file (any edit, typing, a pinned note), the agent or another
@@ -68,7 +73,9 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
     pictures keep their aspect ratio), edit existing text in place (double-click or
     Enter — formatting of each run is kept; ⌘B / ⌘I / ⌘U toggle bold / italic / underline on the
     selection, or the word at the caret), copy/paste/duplicate/delete shapes
-    (also across slides and decks), add a text box, drop or paste images
+    (also across slides and decks), add a text box, drop or paste images; with 2+ shapes selected, toolbar buttons
+    align them (left / centers / right, tops / middles / bottoms) or distribute them with equal
+    gaps (3+), relative to the selection — one undo step each
   - **speaker notes** under the slide: a collapsible, resizable, editable panel. Edits save into the
     slide's notes page (formatting kept; a notes page — and a notes master, if the deck has none — is
     created when needed) and are reported to the agent like other edits
@@ -84,11 +91,14 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
   parsed defensively, see `backend/src/conversations.rs`). Found on macOS, Windows (incl. Microsoft
   Store installs) and Linux; Claude Code's `CLAUDE_CONFIG_DIR` is honored, and
   `PDFEDIT_CLAUDE_DESKTOP_DIR` adds another desktop-app folder. Agent settings shows what was found.
-- **Notes for the agent** — "Note" in the toolbar; its ▾ menu picks how to place one:
+- **Notes for the agent** — "Note" at the right of the toolbar (apart from the edit tools); **Select**
+  (or Esc) goes back to selecting shapes. Its ▾ menu picks how to place one:
   *Pin at a point* (click), or *Draw on the slide* — circle, underline or arrow at an area
   freehand (several strokes per note; a single click still pins). A drawn note reaches the agent
   as the area it covers (% of the slide, circled vs. marked) plus the shapes under it, and
   `screenshot_slide` with `show_notes` shows the agent the marks themselves.
+  **Act now** (in the note box, ⌘⇧Enter) pins the note and immediately asks the agent, in the open
+  chat, to handle it — no need to type the request.
   Open notes are sent with every message; the agent resolves them (you see them flip to
   resolved with its one-line summary) and can pin its own notes for you.
 - **Agent chats** — tabs of Claude Code conversations. Each message automatically tells

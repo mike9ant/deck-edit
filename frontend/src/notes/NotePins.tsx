@@ -7,10 +7,11 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { Check, MessageSquarePlus, RotateCcw, Trash2, X } from 'lucide-react'
+import { Check, GripHorizontal, MessageSquarePlus, RotateCcw, Trash2, X, Zap } from 'lucide-react'
 import clsx from 'clsx'
 import type { Note, Stroke } from '../api/types'
 import { useNotes } from '../store/notesStore'
+import { useChat } from '../store/chatStore'
 import { NOTE_COLORS, StrokesSvg } from './NoteDrawing'
 
 export interface NoteDraft {
@@ -30,7 +31,8 @@ interface Props {
   height: number
   showResolved: boolean
   draft: NoteDraft | null
-  onSaveDraft(text: string): Promise<void>
+  /** Pin the drafted note; `actNow`: also ask the agent to handle it right away. */
+  onSaveDraft(text: string, actNow: boolean): Promise<void>
   onCancelDraft(): void
 }
 
@@ -92,26 +94,65 @@ export function NotePins({ notes, width, height, showResolved, draft, onSaveDraf
   )
 }
 
+/**
+ * Drag a popover by its header. The offset is kept while it stays open; it
+ * can't be dragged out of the visible editing area (the nearest clipping ancestor).
+ */
+function useDraggable() {
+  const [offset, setOffset] = useState({ x: 0, y: 0 })
+  const onPointerDown = (e: React.PointerEvent<HTMLElement>) => {
+    if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return
+    const pop = e.currentTarget.closest<HTMLElement>('[data-note-popover]')
+    if (!pop) return
+    e.preventDefault()
+    let clip: HTMLElement | null = pop.parentElement
+    while (clip && getComputedStyle(clip).overflow === 'visible') clip = clip.parentElement
+    const bounds = (clip ?? document.body).getBoundingClientRect()
+    const start = { x: e.clientX, y: e.clientY, ox: offset.x, oy: offset.y }
+    const r0 = pop.getBoundingClientRect()
+    const move = (ev: PointerEvent) => {
+      // Keep the whole box inside the visible area.
+      const dx = Math.min(Math.max(ev.clientX - start.x, bounds.left - r0.left), bounds.right - r0.right)
+      const dy = Math.min(Math.max(ev.clientY - start.y, bounds.top - r0.top), bounds.bottom - r0.bottom)
+      setOffset({ x: start.ox + dx, y: start.oy + dy })
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+  return { style: { translate: `${offset.x}px ${offset.y}px` }, handle: { onPointerDown, className: 'cursor-move select-none' } }
+}
+
+const Grip = () => <GripHorizontal size={14} className="shrink-0 text-ink-3/60" aria-label="Drag to move" />
+
 function popoverPos(flipX: boolean, flipY: boolean) {
   return clsx('pointer-events-auto absolute z-30 w-72 rounded-lg border border-hair bg-white p-3 text-sm shadow-xl', flipX ? 'right-2' : 'left-2', flipY ? 'bottom-8' : 'top-2')
 }
 
-function DraftPopover({ draft, onSave, onCancel, flipX, flipY }: { draft: NoteDraft; onSave(t: string): Promise<void>; onCancel(): void; flipX: boolean; flipY: boolean }) {
+function DraftPopover({ draft, onSave, onCancel, flipX, flipY }: { draft: NoteDraft; onSave(t: string, actNow: boolean): Promise<void>; onCancel(): void; flipX: boolean; flipY: boolean }) {
+  const agentBusy = useChat((s) => !!s.pid && !!s.busyProjects[s.pid])
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
   // Back to the text after each stroke, so drawing then typing just works.
   useEffect(() => ref.current?.focus(), [draft.strokes?.length])
-  const save = async () => {
-    if (!text.trim()) return
+  const drag = useDraggable()
+  const save = async (actNow = false) => {
+    if (!text.trim() || (actNow && agentBusy)) return
     setBusy(true)
-    await onSave(text.trim())
+    await onSave(text.trim(), actNow)
     setBusy(false)
   }
   return (
-    <div className={popoverPos(flipX, flipY)} onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-      <div className="mb-1 text-xs text-ink-3">
-        Note for the agent{draft.strokes?.length ? ' · on the area you marked' : draft.shapeName ? ` · on “${draft.shapeName}”` : ''}
+    <div data-note-popover className={popoverPos(flipX, flipY)} style={drag.style} onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <div {...drag.handle} className={clsx('-mx-3 -mt-3 mb-1 flex items-center gap-2 rounded-t-lg px-3 pb-1 pt-2 text-xs text-ink-3', drag.handle.className)} title="Drag to move">
+        <span className="min-w-0 flex-1 truncate">
+          Note for the agent{draft.strokes?.length ? ' · on the area you marked' : draft.shapeName ? ` · on “${draft.shapeName}”` : ''}
+        </span>
+        <Grip />
       </div>
       {draft.strokes?.length ? <MarkInfo shapes={draft.shapes} hint /> : null}
       <textarea
@@ -121,13 +162,21 @@ function DraftPopover({ draft, onSave, onCancel, flipX, flipY }: { draft: NoteDr
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void save()
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void save(e.shiftKey)
           if (e.key === 'Escape') onCancel()
         }}
       />
       <div className="mt-2 flex justify-end gap-2">
         <button className="btn-ghost" onClick={onCancel}>Cancel</button>
-        <button className="btn-primary" disabled={busy || !text.trim()} onClick={() => void save()}>Pin note</button>
+        <button className="btn-ghost border border-hair" disabled={busy || !text.trim()} onClick={() => void save()} title="Pin it — the agent sees it with your next message (⌘Enter)">Pin note</button>
+        <button
+          className="btn-primary"
+          disabled={busy || !text.trim() || agentBusy}
+          onClick={() => void save(true)}
+          title={agentBusy ? 'The agent is working — pin the note now, or act when its turn ends' : 'Pin it and have the agent handle it right away (⌘⇧Enter)'}
+        >
+          <Zap size={13} /> Act now
+        </button>
       </div>
     </div>
   )
@@ -137,9 +186,11 @@ function NotePopover({ note, onClose, flipX, flipY }: { note: Note; onClose(): v
   const { update, remove } = useNotes()
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState(note.text)
+  const drag = useDraggable()
   return (
-    <div className={popoverPos(flipX, flipY)} onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-      <div className="mb-1 flex items-center gap-2 text-xs text-ink-3">
+    <div data-note-popover className={popoverPos(flipX, flipY)} style={drag.style} onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+      <div {...drag.handle} className={clsx('-mx-3 -mt-3 mb-1 flex items-center gap-2 rounded-t-lg px-3 pb-1 pt-2 text-xs text-ink-3', drag.handle.className)} title="Drag to move">
+        <Grip />
         <span className={clsx('rounded px-1.5 py-0.5 font-medium', note.author === 'agent' ? 'bg-violet-100 text-violet-800' : 'bg-amber-100 text-amber-900')}>
           {note.author === 'agent' ? 'Agent' : 'You'}
         </span>
@@ -187,4 +238,10 @@ function MarkInfo({ shapes, hint }: { shapes?: string[]; hint?: boolean }) {
       {hint && <div>Draw more strokes to extend the mark.</div>}
     </div>
   )
+}
+
+/** The message "Act now" sends: the note itself (place, drawn area, shapes) reaches the agent in the context block. */
+export function actNowPrompt(note: Note, unit: 'slide' | 'page'): string {
+  const where = note.strokes?.length ? ' (the area I marked)' : note.shapeName ? ` (on "${note.shapeName}")` : ''
+  return `Please act on the note I just pinned on ${unit} ${note.slideIndex}${where} — note ${note.id}: "${note.text}". Make the change now, then resolve the note.`
 }

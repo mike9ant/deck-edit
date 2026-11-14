@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { FolderPlus, Presentation, X } from 'lucide-react'
+import { FolderPlus, PanelLeftOpen, Presentation, X } from 'lucide-react'
 import clsx from 'clsx'
 import { TopBar, NewProjectDialog } from './components/TopBar'
 import { FileTree } from './components/FileTree'
@@ -26,7 +26,7 @@ import { handleScreenshot } from './screenshot'
 import { markChangedOnFileEvent } from './store/tabKeeping'
 
 export default function App() {
-  const { projectId, projects, loadProjects, widths, setWidth } = useApp()
+  const { projectId, projects, loadProjects, widths, setWidth, filesCollapsed, setFilesCollapsed } = useApp()
   const [loaded, setLoaded] = useState(false)
   const treeTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
 
@@ -84,8 +84,16 @@ export default function App() {
       <TopBar />
       {projectId ? (
         <div className="flex min-h-0 flex-1">
-          <div className="shrink-0" style={{ width: widths.tree }}><FileTree /></div>
-          <Splitter width={widths.tree} min={160} max={480} onChange={(w) => setWidth('tree', w)} />
+          {filesCollapsed ? (
+            <div className="flex w-8 shrink-0 flex-col items-center border-r border-hair bg-paper pt-1.5">
+              <button className="icon-btn" title="Show the files panel" onClick={() => setFilesCollapsed(false)}><PanelLeftOpen size={15} /></button>
+            </div>
+          ) : (
+            <>
+              <div className="shrink-0" style={{ width: widths.tree }}><FileTree /></div>
+              <Splitter width={widths.tree} min={160} max={480} onChange={(w) => setWidth('tree', w)} />
+            </>
+          )}
           <div className="flex min-w-0 flex-1 flex-col bg-panel">
             <DocTabs />
             <DocArea pid={projectId} />

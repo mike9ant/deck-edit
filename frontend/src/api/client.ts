@@ -83,6 +83,12 @@ export const api = {
     return res.json()
   },
   /** Add a file to the project (never overwrites — a taken name gets " (2)"). Returns the path written. */
+  /** New folder (a taken name gets " (2)"); returns its path. */
+  mkdir: (pid: string, path: string) => json<{ path: string }>('POST', `/projects/${pid}/mkdir`, { path }),
+  /** Rename or move one file/folder; never overwrites (409). Notes on moved decks follow. */
+  movePath: (pid: string, from: string, to: string) => json<{ path: string }>('POST', `/projects/${pid}/rename`, { from, to }),
+  /** Files to the system Trash; folders only when empty. */
+  deletePaths: (pid: string, paths: string[]) => json<{ deleted: string[] }>('POST', `/projects/${pid}/delete`, { paths }),
   async upload(pid: string, path: string, data: Blob): Promise<{ path: string }> {
     const res = await fetch(`/api/projects/${pid}/upload?${q(path)}`, {
       method: 'POST',

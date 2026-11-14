@@ -50,6 +50,13 @@ interface AppState {
   activePath: string | null
   widths: Widths
   toasts: Toast[]
+  /** The Files panel folded down to a thin strip. */
+  filesCollapsed: boolean
+  setFilesCollapsed(v: boolean): void
+  /** Files/folders were renamed or moved: open tabs (and kept/changed marks) follow. */
+  renameOpenPaths(pairs: [string, string][]): void
+  /** Files/folders were deleted: close their tabs. */
+  closeOpenPaths(paths: string[]): void
   loadProjects(): Promise<void>
   selectProject(id: string | null): Promise<void>
   refreshTree(): Promise<void>
@@ -90,6 +97,28 @@ export const useApp = create<AppState>((set, get) => ({
   activePath: null,
   widths: savedWidths(),
   toasts: [],
+  filesCollapsed: localStorage.getItem('pdfedit-files-collapsed') === '1',
+  setFilesCollapsed(v) {
+    localStorage.setItem('pdfedit-files-collapsed', v ? '1' : '0')
+    set({ filesCollapsed: v })
+  },
+  renameOpenPaths(pairs) {
+    const map = (p: string) => {
+      for (const [from, to] of pairs) {
+        if (p === from) return to
+        if (p.startsWith(`${from}/`)) return to + p.slice(from.length)
+      }
+      return p
+    }
+    const { tabs, kept, changed, activePath, projectId } = get()
+    const next = { tabs: tabs.map(map), kept: kept.map(map), changed: changed.map(map), activePath: activePath && map(activePath) }
+    set(next)
+    saveTabs(projectId, next.tabs, next.kept, next.activePath)
+  },
+  closeOpenPaths(paths) {
+    const gone = (p: string) => paths.some((d) => p === d || p.startsWith(`${d}/`))
+    for (const t of get().tabs.filter(gone)) get().closeTab(t)
+  },
 
   async loadProjects() {
     const projects = await api.projects()

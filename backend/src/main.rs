@@ -12,6 +12,7 @@ mod claude_cli;
 mod conversations;
 mod error;
 mod events;
+mod file_ops;
 mod files;
 mod mcp;
 mod notes;
@@ -96,6 +97,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/health", get(|| async { Json(serde_json::json!({ "ok": true })) }))
         .merge(projects::routes())
         .merge(files::routes())
+        .merge(file_ops::routes())
         .merge(events::routes())
         .merge(notes::routes())
         .merge(chat::routes())

@@ -6,12 +6,14 @@
  *
  * - `NoteToolButton` — the toolbar's "Note" split button: toggles note mode,
  *   and its ▾ menu picks Pin or Draw (remembered).
+ * - `SelectToolButton` — the pointer tool: back to selecting shapes (as does Esc,
+ *   see `useEscapeEndsNoteMode`).
  * - `DrawLayer` — captures strokes over the stage while drawing.
  * - `StrokesSvg` — renders strokes at any size.
  */
 
-import { useRef, useState } from 'react'
-import { Check, ChevronDown, MapPin, MessageSquarePlus, PenLine } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Check, ChevronDown, MapPin, MessageSquarePlus, MousePointer2, PenLine } from 'lucide-react'
 import clsx from 'clsx'
 import type { Stroke } from '../api/types'
 import { useNotes, type NoteTool } from '../store/notesStore'
@@ -47,7 +49,7 @@ export function NoteToolButton({ active, onToggle }: { active: boolean; onToggle
       {menu && (
         <>
           <div className="fixed inset-0 z-40" onMouseDown={() => setMenu(false)} />
-          <div className="absolute left-0 top-8 z-50 w-64 rounded-lg border border-hair bg-white p-1 shadow-xl">
+          <div className="absolute right-0 top-8 z-50 w-64 rounded-lg border border-hair bg-white p-1 shadow-xl">
             {TOOLS.map((t) => (
               <button
                 key={t.id}
@@ -71,6 +73,34 @@ export function NoteToolButton({ active, onToggle }: { active: boolean; onToggle
       )}
     </div>
   )
+}
+
+/** The pointer tool — highlighted while selecting shapes; clicking it leaves note mode. */
+export function SelectToolButton({ active, onSelect }: { active: boolean; onSelect(): void }) {
+  return (
+    <button
+      className={clsx('tool-btn', active && 'bg-accent-soft text-accent')}
+      onClick={onSelect}
+      title="Select (Esc) — click shapes to select, move and edit them"
+    >
+      <MousePointer2 size={15} /> Select
+    </button>
+  )
+}
+
+/** Esc leaves note mode, wherever the focus is (drawing keeps it off the slide). */
+export function useEscapeEndsNoteMode(noteMode: boolean, setNoteMode: (v: boolean) => void) {
+  useEffect(() => {
+    if (!noteMode) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      const t = e.target as HTMLElement | null
+      if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable)) return // a note being typed handles its own Esc
+      setNoteMode(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [noteMode, setNoteMode])
 }
 
 /** Captures strokes (as stage fractions) while the user draws. A tap is reported as a point. */

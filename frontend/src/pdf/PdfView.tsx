@@ -10,8 +10,9 @@ import { CopyPlus, ExternalLink, Eye, EyeOff, Loader2, Redo2, Trash2, Undo2 } fr
 import clsx from 'clsx'
 import { usePdfs, pdfKey, type PdfSession } from './pdfStore'
 import { Splitter } from '../components/Splitter'
-import { NotePins, type NoteDraft } from '../notes/NotePins'
-import { DrawLayer, NoteToolButton, pinFor } from '../notes/NoteDrawing'
+import { NotePins, actNowPrompt, type NoteDraft } from '../notes/NotePins'
+import { sendToAgent } from '../chat/sendToAgent'
+import { DrawLayer, NoteToolButton, SelectToolButton, pinFor, useEscapeEndsNoteMode } from '../notes/NoteDrawing'
 import { notesForSlide, useNotes } from '../store/notesStore'
 import { useApp } from '../store/appStore'
 import { useChat } from '../store/chatStore'
@@ -58,6 +59,7 @@ export function PdfView({ pid, path }: { pid: string; path: string }) {
   const changed = useApp((s) => s.changed.includes(path))
   const [noteMode, setNoteMode] = useState(false)
   const [showResolved, setShowResolved] = useState(false)
+  useEscapeEndsNoteMode(noteMode, setNoteMode)
 
   useEffect(() => {
     void open(pid, path)
@@ -84,10 +86,12 @@ export function PdfView({ pid, path }: { pid: string; path: string }) {
         <button className="icon-btn" title="Undo (⌘Z)" disabled={!session.undo.length || busy} onClick={() => void undo(key)}><Undo2 size={16} /></button>
         <button className="icon-btn" title="Redo (⇧⌘Z)" disabled={!session.redo.length || busy} onClick={() => void redo(key)}><Redo2 size={16} /></button>
         <div className="mx-1 h-5 w-px bg-hair" />
-        <NoteToolButton active={noteMode} onToggle={() => setNoteMode(!noteMode)} />
-        <button className="icon-btn" onClick={() => setShowResolved(!showResolved)} title="Show/hide resolved notes">{showResolved ? <Eye size={15} /> : <EyeOff size={15} />}</button>
+        <SelectToolButton active={!noteMode} onSelect={() => setNoteMode(false)} />
         <div className="ml-2 text-xs text-ink-3">Page {session.pageIndex + 1} / {session.doc!.numPages} · drop an image on the page to place it</div>
         <div className="ml-auto flex items-center gap-2 text-xs text-ink-3">
+          <NoteToolButton active={noteMode} onToggle={() => setNoteMode(!noteMode)} />
+          <button className="icon-btn" onClick={() => setShowResolved(!showResolved)} title={showResolved ? 'Hide resolved notes' : 'Show resolved notes'}>{showResolved ? <Eye size={15} /> : <EyeOff size={15} />}</button>
+          <div className="h-5 w-px bg-hair" />
           {session.saving ? 'Saving…' : changed ? 'Saved' : null}
           <button className="tool-btn" onClick={() => void api.openExternal(pid, path)}><ExternalLink size={14} /> Open</button>
         </div>
@@ -247,10 +251,11 @@ function PageStage({ session, noteMode, setNoteMode, showResolved, busy }: { ses
           showResolved={showResolved}
           draft={draft}
           onCancelDraft={() => setDraft(null)}
-          onSaveDraft={async (text) => {
-            await useNotes.getState().add({ deck: session.path, slideId: '', slideIndex: pageNo, x: draft!.x, y: draft!.y, strokes: draft!.strokes, text })
+          onSaveDraft={async (text, actNow) => {
+            const note = await useNotes.getState().add({ deck: session.path, slideId: '', slideIndex: pageNo, x: draft!.x, y: draft!.y, strokes: draft!.strokes, text })
             setDraft(null)
             setNoteMode(false)
+            if (actNow && note) await sendToAgent(actNowPrompt(note, 'page'))
           }}
         />
       </div>

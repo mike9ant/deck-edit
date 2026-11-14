@@ -17,12 +17,14 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { EditOperation, SlideData, SlideNode } from '@diceui/pptx-core'
 import { copyNodes } from '@diceui/pptx-core'
 import { useDecks, type DeckSession } from './deckStore'
+import { ALIGN_LABEL, alignPositions, type AlignKind } from './align'
 import { SlideRender, type SlideRenderHandle } from './SlideRender'
 import { beginEditing, domPointAt, paragraphsText, readParagraphs, readParagraphsAt, textContainer, type TextPoint } from './textEdit'
 import { nodeText, short } from './deckModel'
 import { getClipboard, setClipboard } from './clipboard'
 import { fitSize, prepareImage } from './images'
-import { NotePins, type NoteDraft } from '../notes/NotePins'
+import { NotePins, actNowPrompt, type NoteDraft } from '../notes/NotePins'
+import { sendToAgent } from '../chat/sendToAgent'
 import { DrawLayer, pinFor, strokesBox, type Box } from '../notes/NoteDrawing'
 import type { Stroke } from '../api/types'
 import { notesForSlide, useNotes } from '../store/notesStore'
@@ -40,8 +42,14 @@ interface Props {
   setNoteMode(v: boolean): void
   showResolved: boolean
   /** Imperative hook for the toolbar's "Add text box". */
-  registerActions(a: { addTextBox(): void }): void
+  registerActions(a: SlideActions): void
 }
+
+export interface SlideActions {
+  addTextBox(): void
+  align(kind: AlignKind): void
+}
+export type { AlignKind }
 
 const rectOf = (n: SlideNode): Rect => ({ x: n.position.x, y: n.position.y, w: n.size.w, h: n.size.h })
 const union = (rs: Rect[]): Rect => {
@@ -530,6 +538,16 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
         setTimeout(() => startEditing(created[0]), 50)
       }
     },
+    align: (kind) => {
+      const nodes = selection.map(nodeById).filter(Boolean) as SlideNode[]
+      const pos = alignPositions(nodes.map((n) => ({ id: n.id, ...rectOf(n) })), kind)
+      const ops: EditOperation[] = nodes
+        .filter((n) => { const p = pos.get(n.id); return p && (Math.abs(p.x - n.position.x) > 0.01 || Math.abs(p.y - n.position.y) > 0.01) })
+        .map((n) => ({ type: 'setNodeTransform', slideId: slide.id, nodeId: n.id, position: pos.get(n.id)! }))
+      if (!ops.length) return
+      void run(ops.length === 1 ? ops[0] : { type: 'batch', operations: ops },
+        `Slide ${slideNo}: ${ALIGN_LABEL[kind]} ${nodes.map((n) => `"${label(n)}"`).join(', ')}`)
+    },
   })
 
   // ── drawn notes ─────────────────────────────────────────────────────────
@@ -564,7 +582,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     setDraft({ x: p.x, y: p.y, shapeName: n ? label(n) : undefined })
   }
 
-  const saveDraft = async (text: string) => {
+  const saveDraft = async (text: string, actNow: boolean) => {
     if (!draft) return
     let sid = slideIdStable
     if (!sid) {
@@ -572,12 +590,13 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
       await saveNow(key)
       sid = useDecks.getState().sessions[key]?.sldIds.get(slide.id) ?? ''
     }
-    await useNotes.getState().add({
+    const note = await useNotes.getState().add({
       deck: session.path, slideId: sid, slideIndex: slideNo, x: draft.x, y: draft.y,
       shapeName: draft.shapeName, strokes: draft.strokes, shapes: draft.shapes, text,
     })
     setDraft(null)
     setNoteMode(false)
+    if (actNow && note) await sendToAgent(actNowPrompt(note, 'slide'))
   }
 
   // ── overlay geometry ────────────────────────────────────────────────────

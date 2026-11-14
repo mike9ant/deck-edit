@@ -5,13 +5,16 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { ExternalLink, Eye, EyeOff, Loader2, Redo2, Type, Undo2, Sparkles, X } from 'lucide-react'
+import {
+  AlignCenterHorizontal, AlignCenterVertical, AlignEndHorizontal, AlignEndVertical,
+  AlignStartHorizontal, AlignStartVertical, ExternalLink, Eye, EyeOff, Loader2, Redo2, Type, Undo2, Sparkles, X,
+} from 'lucide-react'
 import clsx from 'clsx'
 import { useDecks, deckKey } from './deckStore'
 import { SlideRail } from './SlideRail'
-import { SlideEditor } from './SlideEditor'
+import { SlideEditor, type AlignKind, type SlideActions } from './SlideEditor'
 import { NotesPane } from './NotesPane'
-import { NoteToolButton } from '../notes/NoteDrawing'
+import { NoteToolButton, SelectToolButton, useEscapeEndsNoteMode } from '../notes/NoteDrawing'
 import { Splitter } from '../components/Splitter'
 import { useApp } from '../store/appStore'
 import { useChat } from '../store/chatStore'
@@ -28,8 +31,9 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   const held = session && session.heldFrom != null ? session.undo.length - session.heldFrom : 0
   const [noteMode, setNoteMode] = useState(false)
   const [showResolved, setShowResolved] = useState(false)
+  useEscapeEndsNoteMode(noteMode, setNoteMode)
   const [dismissedAt, setDismissedAt] = useState(0)
-  const actions = useRef<{ addTextBox(): void }>({ addTextBox() {} })
+  const actions = useRef<SlideActions>({ addTextBox() {}, align() {} })
 
   useEffect(() => {
     void open(pid, path)
@@ -79,16 +83,20 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
         <button className="icon-btn" title="Undo (⌘Z)" disabled={!session.undo.length} onClick={() => undo(key)}><Undo2 size={16} /></button>
         <button className="icon-btn" title="Redo (⇧⌘Z)" disabled={!session.redo.length} onClick={() => void redo(key)}><Redo2 size={16} /></button>
         <div className="mx-1 h-5 w-px bg-hair" />
-        <button className="tool-btn" onClick={() => actions.current.addTextBox()} title="Add a text box"><Type size={15} /> Text</button>
-        <NoteToolButton active={noteMode} onToggle={() => setNoteMode(!noteMode)} />
-        <button className="icon-btn" onClick={() => setShowResolved(!showResolved)} title={showResolved ? 'Hide resolved notes' : 'Show resolved notes'}>
-          {showResolved ? <Eye size={15} /> : <EyeOff size={15} />}
-        </button>
+        <SelectToolButton active={!noteMode} onSelect={() => setNoteMode(false)} />
+        <button className="tool-btn" onClick={() => { setNoteMode(false); actions.current.addTextBox() }} title="Add a text box"><Type size={15} /> Text</button>
+        {session.selection.length >= 2 && <AlignTools count={session.selection.length} onAlign={(k) => actions.current.align(k)} />}
         <div className="ml-2 text-xs text-ink-3">
           Slide {session.slideIndex + 1} / {pres.slides.length}
           {session.selection.length > 0 && ` · ${session.selection.length} selected`}
         </div>
         <div className="ml-auto flex items-center gap-2 text-xs text-ink-3">
+          {/* Notes for the agent — not an editing tool, so they sit apart from the edit tools. */}
+          <NoteToolButton active={noteMode} onToggle={() => setNoteMode(!noteMode)} />
+          <button className="icon-btn" onClick={() => setShowResolved(!showResolved)} title={showResolved ? 'Hide resolved notes' : 'Show resolved notes'}>
+            {showResolved ? <Eye size={15} /> : <EyeOff size={15} />}
+          </button>
+          <div className="h-5 w-px bg-hair" />
           {session.saving ? <span className="flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Saving…</span> : session.dirty ? <span>Unsaved…</span> : changed ? <span>Saved</span> : null}
           <button className="tool-btn" title="Open this deck in PowerPoint" onClick={() => void api.openExternal(pid, path)}><ExternalLink size={14} /> PowerPoint</button>
         </div>
@@ -130,4 +138,61 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
 
 function Centered({ children, className }: { children: React.ReactNode; className?: string }) {
   return <div className={clsx('flex flex-1 items-center justify-center gap-2 text-sm text-ink-3', className)}>{children}</div>
+}
+
+/** "Spread out evenly": three bars over a double-headed arrow spanning them (the vertical one, rotated, has it on the side). */
+function DistributeIcon({ size = 15, vertical = false }: { size?: number; vertical?: boolean }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={vertical ? { transform: 'rotate(90deg)' } : undefined}>
+      <g fill="currentColor" stroke="none">
+        <rect x="3" y="2.5" width="2.4" height="12.5" rx="1" />
+        <rect x="10.8" y="2.5" width="2.4" height="12.5" rx="1" />
+        <rect x="18.6" y="2.5" width="2.4" height="12.5" rx="1" />
+      </g>
+      <path d="M3 20h18M5.5 17.5 3 20l2.5 2.5M18.5 17.5 21 20l-2.5 2.5" />
+    </svg>
+  )
+}
+const DistributeH = ({ size }: { size?: number }) => <DistributeIcon size={size} />
+const DistributeV = ({ size }: { size?: number }) => <DistributeIcon size={size} vertical />
+
+const ALIGN_GROUPS: { kind: AlignKind; title: string; icon: (p: { size?: number }) => React.ReactNode }[][] = [
+  [
+    { kind: 'left', title: 'Align left', icon: AlignStartVertical },
+    { kind: 'hcenter', title: 'Align centers', icon: AlignCenterVertical },
+    { kind: 'right', title: 'Align right', icon: AlignEndVertical },
+  ],
+  [
+    { kind: 'top', title: 'Align tops', icon: AlignStartHorizontal },
+    { kind: 'vcenter', title: 'Align middles', icon: AlignCenterHorizontal },
+    { kind: 'bottom', title: 'Align bottoms', icon: AlignEndHorizontal },
+  ],
+  [
+    { kind: 'hdistribute', title: 'Distribute horizontally — equal gaps (3+ shapes)', icon: DistributeH },
+    { kind: 'vdistribute', title: 'Distribute vertically — equal gaps (3+ shapes)', icon: DistributeV },
+  ],
+]
+
+/** Compact align/distribute buttons, shown while 2+ shapes are selected. */
+function AlignTools({ count, onAlign }: { count: number; onAlign(k: AlignKind): void }) {
+  return (
+    <div className="ml-1 flex items-center">
+      {ALIGN_GROUPS.map((group, gi) => (
+        <div key={gi} className="flex items-center">
+          <div className="mx-1 h-5 w-px bg-hair" />
+          {group.map(({ kind, title, icon: Icon }) => (
+            <button
+              key={kind}
+              className="icon-btn h-7 w-7"
+              title={title}
+              disabled={kind.endsWith('distribute') && count < 3}
+              onClick={() => onAlign(kind)}
+            >
+              <Icon size={15} />
+            </button>
+          ))}
+        </div>
+      ))}
+    </div>
+  )
 }

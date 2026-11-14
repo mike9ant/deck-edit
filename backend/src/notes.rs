@@ -187,6 +187,26 @@ impl NotesStore {
         Ok(out)
     }
 
+    /// A deck (or a folder of decks) was renamed/moved: its notes follow. Returns whether any changed.
+    pub fn rename_deck_paths(&self, project_id: &str, from: &str, to: &str) -> Result<bool> {
+        let _g = self.lock.lock().unwrap();
+        let mut notes = self.read(project_id);
+        let mut changed = false;
+        for n in notes.iter_mut() {
+            if n.deck == from {
+                n.deck = to.to_string();
+                changed = true;
+            } else if let Some(rest) = n.deck.strip_prefix(&format!("{from}/")) {
+                n.deck = format!("{to}/{rest}");
+                changed = true;
+            }
+        }
+        if changed {
+            self.write(project_id, &notes)?;
+        }
+        Ok(changed)
+    }
+
     pub fn remove(&self, project_id: &str, id: &str) -> Result<()> {
         let _g = self.lock.lock().unwrap();
         let mut notes = self.read(project_id);
