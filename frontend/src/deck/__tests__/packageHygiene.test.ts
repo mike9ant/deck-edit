@@ -1,5 +1,5 @@
 import JSZip from 'jszip'
-import { repairPackage } from '../packageHygiene'
+import { repairPackage, uniqueShapeIds } from '../packageHygiene'
 
 const R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 const rels = (items: [string, string, string][]) =>
@@ -58,5 +58,21 @@ describe('repairPackage', () => {
     const clean = await z.generateAsync({ type: 'uint8array' })
     const { bytes } = await repairPackage(clean)
     expect(bytes).toBe(clean)
+  })
+})
+
+
+describe('uniqueShapeIds', () => {
+  const sp = (id: number, name: string) => `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/></p:nvSpPr></p:sp>`
+  it('renumbers later duplicates, keeping the first, deterministically', () => {
+    const xml = `<p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/></p:nvGrpSpPr>${sp(11, 'A')}${sp(30, 'B')}${sp(11, 'C')}${sp(11, 'D')}${sp(30, 'E')}</p:spTree>`
+    const out = uniqueShapeIds(xml)
+    const ids = [...out.matchAll(/id="(\d+)" name="(\w*)"/g)].map((m) => `${m[2] || 'root'}=${m[1]}`)
+    expect(ids).toEqual(['root=1', 'A=11', 'B=30', 'C=31', 'D=32', 'E=33'])
+    expect(uniqueShapeIds(xml)).toBe(out)
+  })
+  it('leaves a slide without duplicates byte-for-byte', () => {
+    const xml = `<p:spTree>${sp(2, 'A')}${sp(3, 'B')}</p:spTree>`
+    expect(uniqueShapeIds(xml)).toBe(xml)
   })
 })

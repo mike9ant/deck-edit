@@ -162,3 +162,31 @@ export async function repairPackage(bytes: Uint8Array): Promise<{ bytes: Uint8Ar
   const out = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE', compressionOptions: { level: 6 } })
   return { bytes: out, report }
 }
+
+/**
+ * Give every shape on a slide a unique id (`p:cNvPr/@id`). Decks assembled by
+ * scripts (python-pptx copying shapes between slides) often repeat ids; the
+ * editor addresses shapes by id, so a repeated id would select — and edit —
+ * the first shape that has it instead of the one clicked. Like PowerPoint on
+ * open, the first shape keeps its id and later duplicates get the next free
+ * numbers, in document order (so the result is the same on every load).
+ * Applied to the parsed slide text only: a slide is saved with the new ids
+ * only when it's edited.
+ */
+export function uniqueShapeIds(slideXml: string): string {
+  const re = /(<p:cNvPr\b[^>]*?\bid=")(\d+)(")/g
+  const ids = [...slideXml.matchAll(re)].map((m) => Number(m[2]))
+  if (new Set(ids).size === ids.length) return slideXml
+  let next = Math.max(0, ...ids)
+  const seen = new Set<number>()
+  return slideXml.replace(re, (all, a: string, id: string, b: string) => {
+    const n = Number(id)
+    if (!seen.has(n)) {
+      seen.add(n)
+      return all
+    }
+    next += 1
+    seen.add(next)
+    return `${a}${next}${b}`
+  })
+}

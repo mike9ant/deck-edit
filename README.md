@@ -130,6 +130,9 @@ Decks are parsed and rendered with [`@diceui/pptx-core`](https://www.npmjs.com/p
 (animations, comments, embedded fonts, vendor extensions all survive). Speaker-notes
 pages, which the engine doesn't model, are repaired by `frontend/src/deck/packageHygiene.ts`
 (orphaned notes of deleted slides are dropped; duplicated slides get their own copy).
+Shapes repeating an id on a slide (common in script-built decks) are renumbered when the deck
+loads, as PowerPoint does — otherwise a click could select, and an edit change, the wrong shape;
+a slide is saved with the new ids only when you edit it.
 
 Saves are atomic (temp file + rename) and etag-guarded: if the file changed on disk
 since it was loaded (agent, PowerPoint), the save is refused and the deck reloads

@@ -29,7 +29,7 @@ import {
 import { loadEmbeddedFonts } from '@diceui/pptx-core/fonts'
 import { api, ApiError, CLIENT_ID } from '../api/client'
 import { useApp } from '../store/appStore'
-import { repairPackage } from './packageHygiene'
+import { repairPackage, uniqueShapeIds } from './packageHygiene'
 import { readSlideIds, slideTitle, slideXmlBySldId } from './deckModel'
 
 /** How to apply an edit again onto a freshly loaded deck: data, or a function given the slide ids it refers to. */
@@ -148,6 +148,9 @@ const reloadChains = new Map<string, Promise<void>>()
 
 async function parse(bytes: ArrayBuffer): Promise<PresentationData> {
   const files = await readPptx(bytes, { keepSourcePackage: true })
+  // Shapes are addressed by id: repeated ids (common in script-built decks) would make a click
+  // select — and an edit change — the wrong shape.
+  for (const [path, xml] of files.slides) files.slides.set(path, uniqueShapeIds(xml))
   return buildPresentation(files)
 }
 

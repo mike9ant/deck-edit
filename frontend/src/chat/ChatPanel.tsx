@@ -5,7 +5,7 @@
  * After a turn, the files it changed are listed with a one-click Revert.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
@@ -510,6 +510,7 @@ function Composer({ chat }: { chat: Chat }) {
   const [dragOver, setDragOver] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const textArea = useRef<HTMLTextAreaElement>(null)
+  useComposerAutoGrow(textArea, text)
   const composerInsert = useChat((s) => s.composerInsert)
   useEffect(() => {
     if (!composerInsert) return
@@ -641,7 +642,7 @@ function Composer({ chat }: { chat: Chat }) {
       {imageNote && <div className="mb-1 text-[11px] text-amber-800">{imageNote}</div>}
       <textarea
         ref={textArea}
-        className="h-20 w-full resize-none rounded-lg border border-hair bg-white p-2 text-sm outline-none focus:border-accent"
+        className="block w-full resize-none rounded-lg border border-hair bg-white p-2 text-sm outline-none focus:border-accent"
         placeholder={running ? 'The agent is working…' : 'Ask the agent to change the deck…  (Enter to send, Shift+Enter for a new line)'}
         value={text}
         onChange={(e) => setText(e.target.value)}
@@ -731,4 +732,40 @@ function NotesList({ onPick }: { onPick(): void }) {
       ))}
     </div>
   )
+}
+
+const COMPOSER_MIN_PX = 80
+
+/**
+ * The composer grows with what's typed — from 80 px up to 40% of the window
+ * (at most 320 px), then scrolls. Re-fits when the panel is resized.
+ */
+function useComposerAutoGrow(ref: React.RefObject<HTMLTextAreaElement | null>, text: string) {
+  const fit = useCallback(() => {
+    const ta = ref.current
+    if (!ta) return
+    const max = Math.max(COMPOSER_MIN_PX, Math.min(320, Math.round(window.innerHeight * 0.4)))
+    ta.style.height = 'auto'
+    const want = ta.scrollHeight + 2 // + borders
+    ta.style.height = `${Math.min(Math.max(want, COMPOSER_MIN_PX), max)}px`
+    ta.style.overflowY = want > max ? 'auto' : 'hidden'
+  }, [ref])
+  useLayoutEffect(fit, [fit, text])
+  useEffect(() => {
+    const ta = ref.current
+    if (!ta) return
+    let width = ta.clientWidth
+    const ro = new ResizeObserver(() => {
+      if (ta.clientWidth !== width) {
+        width = ta.clientWidth
+        fit()
+      }
+    })
+    ro.observe(ta)
+    window.addEventListener('resize', fit)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', fit)
+    }
+  }, [ref, fit])
 }
