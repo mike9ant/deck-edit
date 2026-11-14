@@ -66,7 +66,8 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
   - main slide: select (click, shift-click, marquee), move (drag or arrow keys,
     snapping to the slide and other shapes — hold ⌥ to disable), resize (handles;
     pictures keep their aspect ratio), edit existing text in place (double-click or
-    Enter — formatting of each run is kept), copy/paste/duplicate/delete shapes
+    Enter — formatting of each run is kept; ⌘B / ⌘I / ⌘U toggle bold / italic / underline on the
+    selection, or the word at the caret), copy/paste/duplicate/delete shapes
     (also across slides and decks), add a text box, drop or paste images
   - **speaker notes** under the slide: a collapsible, resizable, editable panel. Edits save into the
     slide's notes page (formatting kept; a notes page — and a notes master, if the deck has none — is

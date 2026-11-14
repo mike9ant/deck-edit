@@ -3,7 +3,9 @@
  * - select shapes (click, shift-click, marquee), move them (drag, arrow keys,
  *   with snapping to the slide and other shapes; hold Alt to disable),
  *   resize them (8 handles; pictures keep their aspect ratio on corners),
- * - edit existing text in place (double-click / Enter), keeping formatting,
+ * - edit existing text in place (double-click / Enter), keeping formatting;
+ *   ⌘B / ⌘I / ⌘U toggle bold / italic / underline on the selection (or the
+ *   word at the caret), written into the runs' formatting,
  * - copy/paste/duplicate/delete shapes, drop or paste images,
  * - pin notes for the agent, at a point or as a freehand mark around an area.
  *
@@ -16,7 +18,7 @@ import type { EditOperation, SlideData, SlideNode } from '@diceui/pptx-core'
 import { copyNodes } from '@diceui/pptx-core'
 import { useDecks, type DeckSession } from './deckStore'
 import { SlideRender, type SlideRenderHandle } from './SlideRender'
-import { beginEditing, paragraphsText, readParagraphs, textContainer } from './textEdit'
+import { beginEditing, domPointAt, paragraphsText, readParagraphs, readParagraphsAt, textContainer, type TextPoint } from './textEdit'
 import { nodeText, short } from './deckModel'
 import { getClipboard, setClipboard } from './clipboard'
 import { fitSize, prepareImage } from './images'
@@ -138,6 +140,89 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     beginEditing(container, at)
     setEditing({ nodeId, container, before: nodeText(n) })
   }
+
+  // ── bold / italic / underline while editing text ────────────────────────
+  /** After a formatting toggle re-renders the shape: re-enter editing with the same selection. */
+  const reselect = useRef<{ nodeId: string; start: TextPoint; end: TextPoint } | null>(null)
+
+  const toggleStyle = async (prop: 'bold' | 'italic' | 'underline') => {
+    if (!editing) return
+    const { nodeId, container, before } = editing
+    const sel = window.getSelection()
+    if (!sel?.rangeCount) return
+    const r = sel.getRangeAt(0)
+    if (!container.contains(r.startContainer) || !container.contains(r.endContainer)) return
+    const { paragraphs, positions } = readParagraphsAt(container, [[r.startContainer, r.startOffset], [r.endContainer, r.endOffset]])
+    let [start, end] = positions
+    if (!start || !end) return
+    const paraText = (i: number) => paragraphs[i]?.runs.map((x) => x.text).join('') ?? ''
+    if (start.p === end.p && start.o === end.o) {
+      // Just the caret: the word under it, like PowerPoint.
+      const t = paraText(start.p)
+      let a = start.o
+      let b = start.o
+      while (a > 0 && /[\p{L}\p{N}_'’-]/u.test(t[a - 1])) a--
+      while (b < t.length && /[\p{L}\p{N}_'’-]/u.test(t[b])) b++
+      if (a === b) return
+      start = { p: start.p, o: a }
+      end = { p: end.p, o: b }
+    }
+    // Word-style: if all of it already has the style, remove it; otherwise apply it.
+    const has = (el: Element) => {
+      const cs = getComputedStyle(el)
+      if (prop === 'bold') return (parseInt(cs.fontWeight, 10) || 400) >= 600
+      if (prop === 'italic') return cs.fontStyle === 'italic' || cs.fontStyle === 'oblique'
+      for (let e: Element | null = el; e && e !== container.parentElement; e = e.parentElement) if (getComputedStyle(e).textDecorationLine.includes('underline')) return true
+      return false
+    }
+    const texts: Element[] = []
+    const w = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
+    const probe = document.createRange()
+    probe.setStart(...(domPointAt(container, start, 'start') ?? [r.startContainer, r.startOffset]) as [Node, number])
+    probe.setEnd(...(domPointAt(container, end, 'end') ?? [r.endContainer, r.endOffset]) as [Node, number])
+    for (let n = w.nextNode(); n; n = w.nextNode()) {
+      // Only text actually inside the selection (not a neighbour it merely touches).
+      if (!probe.intersectsNode(n) || !n.textContent?.trim() || !n.parentElement) continue
+      if ((probe.startContainer === n && probe.startOffset >= (n.textContent ?? '').length) || (probe.endContainer === n && probe.endOffset === 0)) continue
+      texts.push(n.parentElement)
+    }
+    const on = !(texts.length && texts.every(has))
+
+    const ops: EditOperation[] = []
+    if (paragraphsText(paragraphs) !== before) ops.push({ type: 'setTextBody', slideId: slide.id, nodeId, paragraphs })
+    ops.push({
+      type: 'setTextStyle', slideId: slide.id, nodeId, style: { [prop]: on },
+      range: { start: { paragraphIndex: start.p, offset: start.o }, end: { paragraphIndex: end.p, offset: end.o } },
+    })
+    const picked = start.p === end.p ? paraText(start.p).slice(start.o, end.o) : `${paraText(start.p).slice(start.o)}…`
+    setEditing(null)
+    container.contentEditable = 'false'
+    reselect.current = { nodeId, start, end }
+    const n = nodeById(nodeId)
+    await run(ops.length === 1 ? ops[0] : { type: 'batch', operations: ops },
+      `Slide ${slideNo}: ${on ? 'made' : 'removed'} ${prop}${on ? '' : ' from'} "${short(picked, 60)}" in "${n ? label(n) : nodeId}"`)
+  }
+
+  useEffect(() => {
+    const rs = reselect.current
+    if (!rs) return
+    reselect.current = null
+    requestAnimationFrame(() => {
+      const el = nodeEl(rs.nodeId)
+      const c = el && textContainer(el)
+      if (!c) return
+      startEditing(rs.nodeId)
+      const a = domPointAt(c, rs.start, 'start')
+      const b = domPointAt(c, rs.end, 'end')
+      if (!a || !b) return
+      const range = document.createRange()
+      range.setStart(a[0], a[1])
+      range.setEnd(b[0], b[1])
+      window.getSelection()?.removeAllRanges()
+      window.getSelection()?.addRange(range)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session.version])
 
   const commitEditing = useCallback(async () => {
     if (!editing) return
@@ -365,6 +450,12 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (editing) {
       if (e.key === 'Escape') { e.preventDefault(); void commitEditing() }
+      // The browser's own bold/italic/underline would only change the page, not the file.
+      const k = e.key.toLowerCase()
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && (k === 'b' || k === 'i' || k === 'u')) {
+        e.preventDefault()
+        void toggleStyle(k === 'b' ? 'bold' : k === 'i' ? 'italic' : 'underline')
+      }
       e.stopPropagation()
       return
     }

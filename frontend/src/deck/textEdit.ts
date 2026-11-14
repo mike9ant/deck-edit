@@ -46,8 +46,40 @@ export const paragraphsText = (ps: { runs: { text: string }[] }[]) => ps.map((p)
 
 const isBlock = (el: Element) => el.tagName === 'DIV' || el.tagName === 'P' || el.tagName === 'LI'
 
+/** A position in a text body: paragraph index and character offset (as setTextStyle's TextPosition). */
+export interface TextPoint {
+  p: number
+  o: number
+}
+
 /** Read an edited container back into setTextBody paragraphs. */
 export function readParagraphs(container: HTMLElement): SetTextBodyParagraph[] {
+  return readParagraphsAt(container, []).paragraphs
+}
+
+/** A DOM point as a text node + offset (the start of the next text, or the end of the previous). */
+function textPoint(node: Node, off: number): [Node, number] | null {
+  if (node.nodeType === Node.TEXT_NODE) return [node, off]
+  const after = node.childNodes[off]
+  const w = document.createTreeWalker(node, NodeFilter.SHOW_TEXT)
+  if (after) {
+    w.currentNode = after
+    const t = after.nodeType === Node.TEXT_NODE ? after : w.nextNode()
+    if (t && node.contains(t)) return [t, 0]
+  }
+  let last: Node | null = null
+  for (let n = w.nextNode(); n; n = w.nextNode()) last = n
+  return last ? [last, (last.textContent ?? '').length] : null
+}
+
+/**
+ * Like readParagraphs, and also maps DOM points (e.g. the selection's ends) to
+ * positions in the paragraphs it returns — so a formatting change can be
+ * applied to exactly the selected characters after the text is written back.
+ */
+export function readParagraphsAt(container: HTMLElement, points: [Node, number][]): { paragraphs: SetTextBodyParagraph[]; positions: (TextPoint | null)[] } {
+  const targets = points.map(([n, o]) => textPoint(n, o))
+  const positions: (TextPoint | null)[] = points.map(() => null)
   const out: SetTextBodyParagraph[] = []
   let lastP = 0
   let current: { p: number; runs: SetTextBodyRun[] } | null = null
@@ -77,6 +109,12 @@ export function readParagraphs(container: HTMLElement): SetTextBodyParagraph[] {
 
   const walk = (node: Node, run: [number, number] | undefined) => {
     if (node.nodeType === Node.TEXT_NODE) {
+      targets.forEach((tp, k) => {
+        if (tp?.[0] !== node) return
+        if (!current) startParagraph(null)
+        const before = current!.runs.reduce((n, r) => n + r.text.length, 0)
+        positions[k] = { p: out.length - 1, o: before + (node.textContent ?? '').slice(0, tp[1]).replace(/​/g, '').length }
+      })
       const t = (node.textContent ?? '').replace(/​/g, '')
       if (t) pushText(t, run ?? inherited())
       return
@@ -112,7 +150,33 @@ export function readParagraphs(container: HTMLElement): SetTextBodyParagraph[] {
   // Drop empty runs, but never leave the body without a paragraph.
   for (const p of out) p.runs = p.runs.filter((r) => r.text.length > 0)
   if (!out.length) out.push({ sourceParagraphIndex: 0, runs: [] })
-  return out
+  return { paragraphs: out, positions }
+}
+
+/**
+ * The DOM point for a text position in a rendered text container (inverse of readParagraphsAt).
+ * At a boundary between two runs, `start` picks the beginning of the next run, `end` the end of the previous.
+ */
+export function domPointAt(container: HTMLElement, pos: TextPoint, bias: 'start' | 'end' = 'end'): [Node, number] | null {
+  const paras = [...container.querySelectorAll<HTMLElement>(`[${PPTX_ATTRS.paragraph}]`)].filter((el) => !el.parentElement?.closest(`[${PPTX_ATTRS.paragraph}]`))
+  const para = paras[pos.p]
+  if (!para) return null
+  let acc = 0
+  let last: [Node, number] | null = null
+  const w = document.createTreeWalker(para, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT)
+  for (let n = w.nextNode(); n; n = w.nextNode()) {
+    if (n instanceof Element) {
+      if (n.closest(`[${PPTX_ATTRS.bullet}]`)) continue
+      if (n.tagName === 'BR' && !n.hasAttribute(PPTX_ATTRS.emptyLine)) acc += 1
+      continue
+    }
+    if ((n.parentElement as Element | null)?.closest(`[${PPTX_ATTRS.bullet}]`)) continue
+    const len = (n.textContent ?? '').length
+    if (bias === 'start' ? pos.o < acc + len : pos.o <= acc + len) return [n, pos.o - acc]
+    acc += len
+    last = [n, len]
+  }
+  return last ?? [para, 0]
 }
 
 function sameRun(a?: [number, number], b?: [number, number]) {
