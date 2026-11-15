@@ -1,0 +1,16 @@
+[package]
+name = "pptx-edit-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Tauri desktop app for PPTX Edit"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+pdf-edit = { path = "../backend" }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+tracing = "0.1"

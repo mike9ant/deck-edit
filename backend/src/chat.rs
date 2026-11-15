@@ -604,8 +604,8 @@ fn compose_prompt(state: &AppState, project_id: &str, root: &Path, text: &str, c
 
 pub fn system_prompt(state: &AppState) -> String {
     let python = state
-        .python_bin
-        .as_ref()
+        .python
+        .bin()
         .map(|b| format!("`{}/python3`", b.display()))
         .unwrap_or_else(|| "`python3`".into());
     let agent_settings = state.settings.get();
@@ -717,6 +717,7 @@ async fn run_turn(
         emit(&state, &chat_id, &turn_id, json!({"kind": "notice", "text": "API key selected, but no Anthropic key is set (Settings or ANTHROPIC_API_KEY) — running on your Claude login instead."}));
     }
     let claude_bin = state.settings.claude_bin();
+    let python_bin = state.python.bin();
     let params = claude_cli::TurnParams {
         claude_bin: &claude_bin,
         root: &root,
@@ -733,7 +734,7 @@ async fn run_turn(
         port: state.port,
         chat_id: &chat_id,
         token: &state.token,
-        python_bin: state.python_bin.as_deref(),
+        python_bin: python_bin.as_deref(),
         user_mcp: settings.user_mcp,
         web_access: &settings.web_access,
     };

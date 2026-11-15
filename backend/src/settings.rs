@@ -250,7 +250,7 @@ async fn status(State(state): State<AppState>) -> Json<Value> {
             }),
         None => None,
     };
-    let python = state.python_bin.as_ref().map(|b| b.join("python3"));
+    let python = state.python.bin().map(|b| b.join("python3"));
     let pptx = match &python {
         Some(py) => run_capture(&py.to_string_lossy(), &["-c", "import pptx, fitz; print(pptx.__version__)"], 15)
             .await
@@ -266,7 +266,7 @@ async fn status(State(state): State<AppState>) -> Json<Value> {
         "cli": { "found": path.is_some(), "path": path, "version": version, "command": bin },
         "auth": auth,
         "apiKeyAvailable": state.settings.api_key().is_some(),
-        "python": { "path": python, "pythonPptx": pptx },
+        "python": { "path": python, "pythonPptx": pptx, "setup": state.python.status() },
         "conversations": conversations,
     }))
 }

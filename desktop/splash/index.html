@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>PPTX Edit</title>
+<style>
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: #f6f7f9;
+    color: #3d4452;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .wrap {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+  }
+  .spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid rgba(61, 99, 221, 0.2);
+    border-top-color: #3d63dd;
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  h1 { font-size: 17px; font-weight: 600; margin: 0; }
+  p { font-size: 13px; margin: 0; opacity: 0.7; }
+  #error { color: #b5495b; max-width: 440px; text-align: center; line-height: 1.5; display: none; opacity: 1; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="spinner" id="spinner"></div>
+    <h1>PPTX Edit</h1>
+    <p id="status">Starting&hellip;</p>
+    <p id="error"></p>
+  </div>
+  <script>
+    // The app calls this (window.eval) if its server fails to start.
+    window.__bootError = function (msg) {
+      document.getElementById('spinner').style.display = 'none';
+      document.getElementById('status').style.display = 'none';
+      var el = document.getElementById('error');
+      el.textContent = msg;
+      el.style.display = 'block';
+    };
+  </script>
+</body>
+</html>

@@ -89,7 +89,11 @@ function AgentSettings() {
               detail={[status.conversations.claudeCode.path, ...status.conversations.desktopApp.paths].join('  ·  ')}
             />
           )}
-          <Row ok={!!status?.python.pythonPptx} label={status?.python.pythonPptx ? `Python env ready (python-pptx ${status.python.pythonPptx})` : 'Python env missing — run ./run.sh setup'} detail={status?.python.path ?? undefined} />
+          <Row
+            ok={!!status?.python.pythonPptx}
+            label={status?.python.pythonPptx ? `Python env ready (python-pptx ${status.python.pythonPptx})` : (status?.python.setup ?? 'Python env missing — run ./run.sh setup')}
+            detail={status?.python.path ?? undefined}
+          />
           <label className="mt-2 block text-xs font-medium text-ink-2">CLI path <span className="font-normal text-ink-3">(empty = `claude` on PATH)</span></label>
           <div className="mt-1 flex gap-2">
             <input className="input flex-1 font-mono text-xs" value={path} onChange={(e) => setPath(e.target.value)} placeholder="/Users/you/.local/bin/claude" />

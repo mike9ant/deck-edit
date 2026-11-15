@@ -6,6 +6,7 @@ import clsx from 'clsx'
 import { useApp, currentProject } from '../store/appStore'
 import { api } from '../api/client'
 import { SettingsDialog } from '../chat/AgentSettings'
+import { askConfirm } from './confirmDialog'
 
 export function TopBar() {
   const { projects, projectId, selectProject, loadProjects } = useApp()
@@ -47,7 +48,7 @@ export function TopBar() {
                   className="ml-1 hidden text-ink-3 hover:text-red-600 group-hover:block"
                   title="Remove project (the folder is not touched)"
                   onClick={async () => {
-                    if (!confirm(`Remove project “${p.name}”? The folder and its files are not touched.`)) return
+                    if (!(await askConfirm(`Remove project “${p.name}”? The folder and its files are not touched.`, 'Remove'))) return
                     await api.deleteProject(p.id)
                     if (p.id === projectId) await selectProject(null)
                     await loadProjects()

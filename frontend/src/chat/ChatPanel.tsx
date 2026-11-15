@@ -13,6 +13,7 @@ import {
   Plus, RotateCcw, Send, Square, Terminal, Wrench, X, StickyNote, Pencil, Play, ImagePlus, Library,
 } from 'lucide-react'
 import clsx from 'clsx'
+import { askConfirm } from '../components/confirmDialog'
 import { useChat } from '../store/chatStore'
 import { useApp } from '../store/appStore'
 import { useNotes } from '../store/notesStore'
@@ -319,8 +320,8 @@ function TurnView({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; draft
               <button
                 className="flex items-center gap-1 rounded border border-hair bg-white px-2 py-0.5 hover:border-red-300 hover:text-red-700"
                 title="Restore these files to how they were before this turn (a backup of the current state is kept)"
-                onClick={() => {
-                  if (later && !confirm('Later turns also changed files. Reverting restores the folder to before this turn, undoing those too. Continue?')) return
+                onClick={async () => {
+                  if (later && !(await askConfirm('Later turns also changed files. Reverting restores the folder to before this turn, undoing those too. Continue?', 'Revert'))) return
                   void revert(chat.id, turn.id)
                 }}
               >

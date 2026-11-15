@@ -7,6 +7,7 @@
 #   ./run.sh stop             Stop the server started from this folder
 #   ./run.sh logs             Tail the server log
 #   ./run.sh test [frontend|backend]   Unit tests
+#   ./run.sh desktop          Build the macOS app, install it as /Applications/PPTX Edit.app and open it
 #
 # Env: PDFEDIT_PORT (default 3101), PDFEDIT_DATA_DIR (default ~/.pdf-edit),
 #      PDFEDIT_TEST_DECK=<path.pptx> enables the real-deck round-trip test.
@@ -34,10 +35,37 @@ setup() {
   (cd "$FRONTEND" && npm install --no-audit --no-fund)
 }
 
-build_backend() { say "Building backend"; (cd "$ROOT" && "$CARGO" build --release); }
+build_backend() { say "Building backend"; (cd "$ROOT" && "$CARGO" build --release -p pdf-edit); }
 build_frontend() {
   [ -d "$FRONTEND/node_modules" ] || (cd "$FRONTEND" && npm install --no-audit --no-fund)
   say "Building frontend"; (cd "$FRONTEND" && npm run build)
+}
+
+APP_NAME="PPTX Edit"
+APP_BUNDLE="$ROOT/target/release/bundle/macos/$APP_NAME.app"
+APP_INSTALLED="/Applications/$APP_NAME.app"
+
+# The desktop app (desktop/, Tauri) runs the server in-process and bundles
+# frontend/dist, so the frontend must be built first. No beforeBuildCommand:
+# tauri's spawned shell can break node on some setups.
+build_desktop() {
+  say "Building the desktop app (the first build downloads and compiles Tauri — a few minutes)"
+  (cd "$ROOT/desktop" && npx --yes @tauri-apps/cli@2 build)
+}
+
+# Quit a running copy (the single-instance plugin would just focus the old
+# build), replace the installed app, and open it.
+install_desktop() {
+  if pgrep -f pptx-edit-desktop >/dev/null 2>&1; then
+    say "Quitting the running app"
+    osascript -e "tell application \"$APP_NAME\" to quit" 2>/dev/null || true
+    for _ in $(seq 1 20); do pgrep -f pptx-edit-desktop >/dev/null 2>&1 || break; sleep 0.5; done
+    sleep 1  # let LaunchServices settle; an immediate re-open can fail with -600
+  fi
+  rm -rf "$APP_INSTALLED"
+  cp -R "$APP_BUNDLE" "$APP_INSTALLED"
+  say "Installed → $APP_INSTALLED  (logs: ~/.pdf-edit/logs/desktop.log)  · $(date '+%Y-%m-%d %H:%M:%S')"
+  open "$APP_INSTALLED"
 }
 
 stop() {
@@ -75,14 +103,15 @@ case "${1:-start}" in
     say "Vite dev server → http://127.0.0.1:5180  · $(date '+%Y-%m-%d %H:%M:%S')"
     cd "$FRONTEND" && PDFEDIT_BACKEND="http://127.0.0.1:$PORT" npx vite --host 127.0.0.1
     ;;
+  desktop) build_frontend; build_desktop; install_desktop ;;
   stop) stop ;;
   logs) tail -f "$LOG_FILE" ;;
   test)
     case "${2:-all}" in
-      backend) (cd "$ROOT" && "$CARGO" test) ;;
+      backend) (cd "$ROOT" && "$CARGO" test -p pdf-edit) ;;
       frontend) (cd "$FRONTEND" && npx vitest run) ;;
-      *) (cd "$ROOT" && "$CARGO" test) && (cd "$FRONTEND" && npx vitest run) ;;
+      *) (cd "$ROOT" && "$CARGO" test -p pdf-edit) && (cd "$FRONTEND" && npx vitest run) ;;
     esac
     ;;
-  *) echo "usage: ./run.sh [setup|start|build|dev|stop|logs|test [frontend|backend]]"; exit 1 ;;
+  *) echo "usage: ./run.sh [setup|start|build|dev|stop|logs|test [frontend|backend]|desktop]"; exit 1 ;;
 esac

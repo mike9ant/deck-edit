@@ -187,7 +187,8 @@ export interface AgentStatus {
     loginExpiresAt?: string
   } | null
   apiKeyAvailable: boolean
-  python: { path: string | null; pythonPptx: string | null }
+  /** `setup`: the desktop app is setting up its own env (or couldn't) — what to show instead. */
+  python: { path: string | null; pythonPptx: string | null; setup?: string | null }
   conversations?: {
     claudeCode: { path: string; found: boolean; sessions: number }
     desktopApp: { paths: string[]; found: boolean; codeSessions: number; coworkSessions: number }

@@ -22,9 +22,9 @@ pub struct AppState {
     /// Secret the spawned CLI's hooks and MCP client present (`X-PdfEdit-Token`),
     /// so only the harness we launched can approve tool calls or call our tools.
     pub token: String,
-    /// Directory with the Python env (python-pptx, pymupdf…) put first on the
-    /// agent's PATH, when present.
-    pub python_bin: Option<PathBuf>,
+    /// The Python env (python-pptx, pymupdf…) whose `bin` goes first on the
+    /// agent's PATH, when present (the desktop app may still be setting it up).
+    pub python: Arc<crate::python_env::PythonEnv>,
     pub projects: Arc<ProjectStore>,
     pub watchers: Arc<WatcherRegistry>,
     pub events: broadcast::Sender<Value>,

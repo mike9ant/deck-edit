@@ -21,6 +21,7 @@ turn can be reverted with one click.
 ./run.sh           # build and start → http://127.0.0.1:3101
 ./run.sh dev       # hot-reload frontend on http://127.0.0.1:5180
 ./run.sh test      # backend + frontend unit tests
+./run.sh desktop   # build the macOS app → /Applications/PPTX Edit.app, and open it
 ```
 
 Requirements: Rust, Node 20+, Python 3, and the [Claude Code CLI](https://claude.com/claude-code)
@@ -29,6 +30,21 @@ switch to an Anthropic API key in Agent settings.
 
 App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
 (`PDFEDIT_DATA_DIR` to change).
+
+### Desktop app (macOS)
+
+`./run.sh desktop` builds **PPTX Edit.app** (Tauri), installs it in `/Applications` and opens
+it; after that, start it like any app (Launchpad, Spotlight, the Dock). It runs the same server
+inside the app on a private localhost port — nothing to start, no terminal — and shares
+`~/.pdf-edit/` (projects, chats, settings) with `./run.sh`.
+
+- It takes your login shell's PATH, so it finds `claude` (and the tools the agent runs) as a
+  terminal would.
+- Without the repo's `.venv`, it sets up its own Python env on first launch
+  (`~/.pdf-edit/venv`, about a minute; Settings shows the progress). Needs `python3`.
+- Links out of the app open in your browser. Logs: `~/.pdf-edit/logs/desktop.log`.
+- The first build downloads and compiles Tauri (a few minutes); later builds are quick.
+  The app is built locally and unsigned, which is fine on the Mac that built it.
 
 ## What you can do
 
@@ -185,6 +201,8 @@ relationship dangles; the output (`/tmp/pdfedit-roundtrip.pptx`) can be opened i
   CLI headless (`claude -p --output-format stream-json`, resumed per chat), a PreToolUse
   permission relay, per-turn backups (`backups.rs`, APFS copy-on-write), and a small MCP
   server (`mcp.rs`) exposing notes / current view / slide screenshots to the agent.
+- `desktop/` — the macOS app (Tauri): runs the backend in-process (`pdf_edit::run_server`)
+  and shows it in a window, with a splash while it starts. `icons/make_icon.py` draws the icon.
 - `frontend/` — React + TypeScript + Vite + Tailwind. `deck/` (PPTX editing on top of
   pptx-core), `pdf/` (pdf.js + pdf-lib), `chat/`, `notes/`, `viewers/`.
 
