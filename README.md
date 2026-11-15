@@ -28,7 +28,7 @@ Requirements: Rust, Node 20+, Python 3, and the [Claude Code CLI](https://claude
 logged in (`claude login`). The agent uses your Claude Code login (subscription) by default;
 switch to an Anthropic API key in Agent settings.
 
-App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
+App data (projects, chats, notes, per-turn backups) lives in `~/.ppt-edit/`
 (`PDFEDIT_DATA_DIR` to change).
 
 ### Desktop app (macOS)
@@ -36,13 +36,13 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
 `./run.sh desktop` builds **PPTX Edit.app** (Tauri), installs it in `/Applications` and opens
 it; after that, start it like any app (Launchpad, Spotlight, the Dock). It runs the same server
 inside the app on a private localhost port — nothing to start, no terminal — and shares
-`~/.pdf-edit/` (projects, chats, settings) with `./run.sh`.
+`~/.ppt-edit/` (projects, chats, settings) with `./run.sh`.
 
 - It takes your login shell's PATH, so it finds `claude` (and the tools the agent runs) as a
   terminal would.
 - Without the repo's `.venv`, it sets up its own Python env on first launch
-  (`~/.pdf-edit/venv`, about a minute; Settings shows the progress). Needs `python3`.
-- Links out of the app open in your browser. Logs: `~/.pdf-edit/logs/desktop.log`.
+  (`~/.ppt-edit/venv`, about a minute; Settings shows the progress). Needs `python3`.
+- Links out of the app open in your browser. Logs: `~/.ppt-edit/logs/desktop.log`.
 - The first build downloads and compiles Tauri (a few minutes); later builds are quick.
   The app is built locally and unsigned, which is fine on the Mac that built it.
 
@@ -154,7 +154,7 @@ inside the app on a private localhost port — nothing to start, no terminal —
       transcript notes the mode/model/effort it ran with.
   - **Agent settings** (Settings — the gear at the top right; its **About** tab shows the version): Claude Code CLI found/version/path and who it's
     signed in as (`claude auth status`), a custom CLI path, billing source and an optional
-    Anthropic API key (stored in `~/.pdf-edit/credentials.json`), defaults for new chats, and a
+    Anthropic API key (stored in `~/.ppt-edit/credentials.json`), defaults for new chats, and a
     per-turn spend cap (`--max-budget-usd`).
   - **Your connectors** (Agent settings, off by default): let the agent use your own MCP servers and
     claude.ai connectors (Slack, Google Drive, Gmail, …) as Claude Code has them, not just the app's

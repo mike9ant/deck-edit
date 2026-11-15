@@ -9,7 +9,7 @@
 #   ./run.sh test [frontend|backend]   Unit tests
 #   ./run.sh desktop          Build the macOS app, install it as /Applications/PPTX Edit.app and open it
 #
-# Env: PDFEDIT_PORT (default 3101), PDFEDIT_DATA_DIR (default ~/.pdf-edit),
+# Env: PDFEDIT_PORT (default 3101), PDFEDIT_DATA_DIR (default ~/.ppt-edit),
 #      PDFEDIT_TEST_DECK=<path.pptx> enables the real-deck round-trip test.
 
 set -e
@@ -64,7 +64,7 @@ install_desktop() {
   fi
   rm -rf "$APP_INSTALLED"
   cp -R "$APP_BUNDLE" "$APP_INSTALLED"
-  say "Installed → $APP_INSTALLED  (logs: ~/.pdf-edit/logs/desktop.log)  · $(date '+%Y-%m-%d %H:%M:%S')"
+  say "Installed → $APP_INSTALLED  (logs: ~/.ppt-edit/logs/desktop.log)  · $(date '+%Y-%m-%d %H:%M:%S')"
   open "$APP_INSTALLED"
 }
 

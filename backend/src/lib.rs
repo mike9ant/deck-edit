@@ -40,7 +40,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::state::AppState;
 
 pub struct ServerConfig {
-    /// Projects, chats, settings, backups, logs (`~/.pdf-edit`).
+    /// Projects, chats, settings, backups, logs (`~/.ppt-edit`).
     pub data_dir: PathBuf,
     /// The built frontend (`frontend/dist`).
     pub frontend_dist: PathBuf,
@@ -62,11 +62,19 @@ pub fn repo_frontend_dist() -> PathBuf {
     repo_root().join("frontend/dist")
 }
 
-/// `PDFEDIT_DATA_DIR`, else `~/.pdf-edit`.
+/// `PDFEDIT_DATA_DIR`, else `~/.ppt-edit`. Data from before the rename (in
+/// `~/.pdf-edit`) is moved there the first time.
 pub fn default_data_dir() -> PathBuf {
-    std::env::var("PDFEDIT_DATA_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".pdf-edit"))
+    if let Ok(dir) = std::env::var("PDFEDIT_DATA_DIR") {
+        return PathBuf::from(dir);
+    }
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let dir = home.join(".ppt-edit");
+    let old = home.join(".pdf-edit");
+    if !dir.exists() && old.is_dir() {
+        let _ = std::fs::rename(&old, &dir);
+    }
+    dir
 }
 
 /// Log to stderr, or (the desktop app) append to `log_file`.

@@ -4,7 +4,7 @@
 //! window — no terminal, no separate server. Flow: take the login shell's PATH
 //! → bind a sticky localhost port → show a static splash (`splash/index.html`)
 //! → start the server → point the window at `http://127.0.0.1:{port}/` once
-//! it's ready. Logs: `~/.pdf-edit/logs/desktop.log`.
+//! it's ready. Logs: `~/.ppt-edit/logs/desktop.log`.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -200,7 +200,7 @@ fn main() {
                     }
                     Err(_) => {
                         // run_server returned before it was ready: startup failed.
-                        let _ = window.eval("window.__bootError('PPTX Edit could not start. Details are in ~/.pdf-edit/logs/desktop.log.')");
+                        let _ = window.eval("window.__bootError('PPTX Edit could not start. Details are in ~/.ppt-edit/logs/desktop.log.')");
                     }
                 }
             });

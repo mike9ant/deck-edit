@@ -2,7 +2,7 @@
 
 - Build/run only through `./run.sh` (`setup`, `build`, `dev`, `test [frontend|backend]`).
 - Backend: Rust/axum in `backend/src` (one module per concern; see the module doc comments).
-  All models serialize camelCase. Data lives in `~/.pdf-edit` (override `PDFEDIT_DATA_DIR`).
+  All models serialize camelCase. Data lives in `~/.ppt-edit` (override `PDFEDIT_DATA_DIR`).
 - Frontend: React + TS + zustand + Tailwind in `frontend/src`.
   - PPTX editing must go through `useDecks().apply(key, op, description)` — never write
     package XML directly. The description is what the agent is told the user changed.
