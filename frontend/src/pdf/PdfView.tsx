@@ -54,6 +54,84 @@ export const PageCanvas = memo(function PageCanvas({ doc, index, width, version 
   return <canvas ref={ref} style={{ width, height: width * aspect, display: 'block', background: '#fff' }} />
 })
 
+/**
+ * Smooth text selection over pdf.js text layers, as pdf.js's own viewer does
+ * it (TextLayerBuilder): while selecting, an "end of content" element is kept
+ * right next to the moving end of the selection. Without it, dragging over a
+ * gap between text pieces makes the browser pick the nearest text in DOM
+ * order — often far away — so the selection jumps ahead/back and flickers.
+ */
+const textLayers = new Map<HTMLElement, HTMLElement>() // layer → its endOfContent element
+let selectionListening = false
+function listenForSelection() {
+  if (selectionListening) return
+  selectionListening = true
+  let pointerDown = false
+  let prevRange: Range | null = null
+  const reset = (end: HTMLElement, layer: HTMLElement) => {
+    layer.append(end)
+    end.style.width = ''
+    end.style.height = ''
+    layer.classList.remove('selecting')
+  }
+  const resetAll = () => textLayers.forEach(reset)
+  document.addEventListener('pointerdown', () => { pointerDown = true })
+  document.addEventListener('pointerup', () => { pointerDown = false; resetAll() })
+  window.addEventListener('blur', () => { pointerDown = false; resetAll() })
+  document.addEventListener('keyup', () => { if (!pointerDown) resetAll() })
+  document.addEventListener('selectionchange', () => {
+    const sel = document.getSelection()
+    if (!sel || sel.rangeCount === 0) {
+      resetAll()
+      return
+    }
+    const active = new Set<HTMLElement>()
+    const range = sel.getRangeAt(0)
+    for (const layer of textLayers.keys()) if (range.intersectsNode(layer)) active.add(layer)
+    for (const [layer, end] of textLayers) {
+      if (active.has(layer)) layer.classList.add('selecting')
+      else reset(end, layer)
+    }
+    // Move the end-of-content element next to the end that's moving (pdf.js does this for non-Firefox).
+    const modifyStart = !!prevRange && (range.compareBoundaryPoints(Range.END_TO_END, prevRange) === 0 || range.compareBoundaryPoints(Range.START_TO_END, prevRange) === 0)
+    let anchor: Node | null = modifyStart ? range.startContainer : range.endContainer
+    if (anchor?.nodeType === Node.TEXT_NODE) anchor = anchor.parentNode
+    if (!modifyStart && range.endOffset === 0 && anchor) {
+      do {
+        while (anchor && !anchor.previousSibling) anchor = anchor.parentNode
+        anchor = anchor?.previousSibling ?? null
+      } while (anchor && !anchor.childNodes.length)
+    }
+    const layer = (anchor as Element | null)?.parentElement?.closest<HTMLElement>('.textLayer')
+    const end = layer && textLayers.get(layer)
+    if (layer && end && anchor && anchor.parentElement) {
+      end.style.width = layer.style.width
+      end.style.height = layer.style.height
+      anchor.parentElement.insertBefore(end, modifyStart ? anchor : anchor.nextSibling)
+    }
+    prevRange = range.cloneRange()
+  })
+}
+
+/**
+ * Some PDFs (e.g. PowerPoint exports) draw every text run twice at the same
+ * spot. Both copies would be selected — selection color painted twice, text
+ * copied twice — so exact duplicates (same text, position and size) are dropped.
+ */
+function dropDuplicateText(layer: HTMLElement) {
+  const seen = new Set<string>()
+  for (const span of [...layer.querySelectorAll<HTMLElement>('span:not(.markedContent)')]) {
+    const t = span.textContent ?? ''
+    if (!t.trim()) continue
+    const k = `${t}|${span.style.left}|${span.style.top}|${span.style.fontSize}`
+    if (seen.has(k)) {
+      // The line break pdf.js put after it belongs to the copy too.
+      if (span.nextSibling instanceof HTMLBRElement) span.nextSibling.remove()
+      span.remove()
+    } else seen.add(k)
+  }
+}
+
 /** The page's text as an invisible, selectable layer over the canvas (pdf.js TextLayer). */
 const PageText = memo(function PageText({ doc, index, width, version, onReady }: { doc: PDFDocumentProxy; index: number; width: number; version: number; onReady(el: HTMLElement): void }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -71,15 +149,23 @@ const PageText = memo(function PageText({ doc, index, width, version, onReady }:
       el.style.setProperty('--scale-factor', String(viewport.scale))
       layer = new TextLayer({ textContentSource: await page.getTextContent(), container: el, viewport })
       await layer.render().catch(() => {})
-      if (!cancelled) onReady(el)
+      if (cancelled) return
+      dropDuplicateText(el)
+      const end = document.createElement('div')
+      end.className = 'endOfContent'
+      el.append(end)
+      textLayers.set(el, end)
+      listenForSelection()
+      onReady(el)
     })()
     return () => {
       cancelled = true
       layer?.cancel()
+      textLayers.delete(el)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc, index, width, version])
-  return <div ref={ref} className="textLayer" />
+  return <div ref={ref} className="textLayer" onMouseDown={(e) => e.currentTarget.classList.add('selecting')} />
 })
 
 export function PdfView({ pid, path }: { pid: string; path: string }) {
@@ -214,7 +300,11 @@ function PageStage({ session, noteMode, setNoteMode, showResolved, busy }: { ses
   /** A text selection on the page: the bar over it offers a note or copy. */
   const [pick, setPick] = useState<{ text: string; x: number; y: number; barX: number; barY: number } | null>(null)
   useEffect(() => {
+    // The bar is placed once the selection settles (mouse released, or keyboard), not on every
+    // mouse move — re-rendering mid-drag adds to the flicker.
+    let dragging = false
     const update = () => {
+      if (dragging) return
       const sel = window.getSelection()
       const r = sel?.rangeCount ? sel.getRangeAt(0) : null
       const stage = stageRef.current
@@ -225,8 +315,16 @@ function PageStage({ session, noteMode, setNoteMode, showResolved, busy }: { ses
       const sr = stage.getBoundingClientRect()
       setPick({ text, x: (rect.left - sr.left) / sr.width, y: (rect.top - sr.top) / sr.height, barX: rect.left + rect.width / 2, barY: rect.top })
     }
+    const down = () => { dragging = true; setPick(null) }
+    const up = () => { dragging = false; requestAnimationFrame(update) }
     document.addEventListener('selectionchange', update)
-    return () => document.removeEventListener('selectionchange', update)
+    document.addEventListener('pointerdown', down)
+    document.addEventListener('pointerup', up)
+    return () => {
+      document.removeEventListener('selectionchange', update)
+      document.removeEventListener('pointerdown', down)
+      document.removeEventListener('pointerup', up)
+    }
   }, [])
   useLayoutEffect(() => {
     const el = wrap.current!
