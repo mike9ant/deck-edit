@@ -36,6 +36,7 @@ export function NotesPane({ session }: { session: DeckSession }) {
   const savedText = useRef('')
   const dirty = useRef(false)
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const undoRedoRef = useRef<(redo: boolean) => Promise<void>>(async () => {})
   const slideNo = session.slideIndex + 1
 
   const render = () => {
@@ -75,7 +76,10 @@ export function NotesPane({ session }: { session: DeckSession }) {
     if (!el || !sid || !dirty.current) return
     dirty.current = false
     const edited = readParagraphs(el)
-    await commit(sid, buildParagraphs(base.current, edited), paragraphsText(edited))
+    const value = paragraphsText(edited)
+    // Typed and deleted again: nothing to save (and no empty undo step). Formatting only changes via toggles, saved there.
+    if (value === savedText.current && !edited.some((p) => p.noBullet)) return
+    await commit(sid, buildParagraphs(base.current, edited), value)
   }
 
   // Load the notes when the slide changes or the deck reloads — but never
@@ -101,7 +105,17 @@ export function NotesPane({ session }: { session: DeckSession }) {
 
   // The editor mounts when the panel opens; save on unmount.
   useEffect(() => {
-    if (open) render()
+    if (!open) return
+    render()
+    // Edit menu → Undo / Redo arrives as a native history input: same as the shortcuts.
+    const el = editor.current
+    const onHistory = (e: InputEvent) => {
+      if (e.inputType !== 'historyUndo' && e.inputType !== 'historyRedo') return
+      e.preventDefault()
+      void undoRedoRef.current(e.inputType === 'historyRedo')
+    }
+    el?.addEventListener('beforeinput', onHistory)
+    return () => el?.removeEventListener('beforeinput', onHistory)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
   useEffect(() => () => void save(), []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -159,9 +173,44 @@ export function NotesPane({ session }: { session: DeckSession }) {
     await commit(sid, xml, paragraphsText(paragraphs))
   }
 
+  /**
+   * ⌘Z / ⇧⌘Z in the notes: the deck's undo history (where every notes save is
+   * a step — the browser's own undo can't follow formatting toggles, bullets or
+   * re-renders). Saves pending typing first, then shows the result, caret kept.
+   */
+  const undoRedo = async (redo: boolean) => {
+    const el = editor.current
+    if (!el) return
+    const sel = window.getSelection()
+    const caret = sel?.anchorNode && el.contains(sel.anchorNode) ? readParagraphsAt(el, [[sel.anchorNode, sel.anchorOffset]]).positions[0] : null
+    if (dirty.current) await save()
+    const decks = useDecks.getState()
+    if (redo) await decks.redo(session.key)
+    else decks.undo(session.key)
+    const p = useDecks.getState().sessions[session.key]?.pres
+    const sl = p?.slides.find((x) => x.id === shown.current)
+    if (!p || !sl) return
+    const ps = await readNotesParagraphs(p, sl)
+    base.current = ps
+    savedText.current = notesText(ps)
+    setText(savedText.current)
+    render()
+    el.focus()
+    const at = (caret && domPointAt(el, caret)) ?? domPointAt(el, { p: Math.max(0, ps.length - 1), o: Number.MAX_SAFE_INTEGER })
+    if (at) window.getSelection()?.collapse(...at)
+  }
+
+  undoRedoRef.current = undoRedo
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     e.stopPropagation() // the deck's shortcuts don't apply while typing notes
-    const prop = STYLE_KEYS[e.key.toLowerCase()]
+    const k = e.key.toLowerCase()
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && (k === 'z' || k === 'y')) {
+      e.preventDefault()
+      void undoRedo(k === 'y' || e.shiftKey)
+      return
+    }
+    const prop = STYLE_KEYS[k]
     if (prop && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
       e.preventDefault()
       void toggleStyle(prop)
