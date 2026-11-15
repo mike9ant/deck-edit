@@ -240,7 +240,13 @@ export const useChat = create<ChatState>((set, get) => {
         if (e.kind === 'thinking') return
         const drafts = e.kind === 'message' ? { ...get().drafts, [ev.turnId]: '' } : get().drafts
         const events = e.kind === 'todos' ? turn.events.filter((x) => x.kind !== 'todos') : turn.events
-        const nextTurn = { ...turn, events: [...events, e] }
+        let nextEvents = [...events, e]
+        if (e.kind === 'activity' && e.done) {
+          // A step finished: update its earlier event in place.
+          const at = events.map((x) => x.kind === 'activity' && x.tool === e.tool).lastIndexOf(true)
+          if (at >= 0) nextEvents = events.map((x, i) => (i === at ? e : x))
+        }
+        const nextTurn = { ...turn, events: nextEvents }
         set({
           drafts,
           chats: { ...get().chats, [ev.chatId]: { ...chat, turns: chat.turns.map((t) => (t.id === turn.id ? nextTurn : t)) } },

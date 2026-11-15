@@ -235,6 +235,22 @@ pub fn emit(state: &AppState, chat_id: &str, turn_id: &str, event: Value) {
     state.publish(json!({ "type": "chat", "chatId": chat_id, "turnId": turn_id, "event": event }));
 }
 
+/// Update the turn's last `tool` activity in place to a finished state and
+/// broadcast it (`done: true` tells the UI to replace, not append).
+fn finish_activity(state: &AppState, chat_id: &str, turn_id: &str, tool: &str, detail: &str) {
+    let event = json!({"kind": "activity", "tool": tool, "detail": detail, "done": true});
+    state.chats.with_turn(chat_id, turn_id, |t| {
+        let last = t.events.iter_mut().rev().find(|e| {
+            e.get("kind").and_then(|k| k.as_str()) == Some("activity") && e.get("tool").and_then(|k| k.as_str()) == Some(tool)
+        });
+        match last {
+            Some(e) => *e = event.clone(),
+            None => t.events.push(event.clone()),
+        }
+    });
+    state.publish(json!({ "type": "chat", "chatId": chat_id, "turnId": turn_id, "event": event }));
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/projects/{id}/chats", get(list).post(create))
@@ -654,6 +670,7 @@ async fn run_turn(
     // 1. Snapshot the folder so the turn can be reverted.
     emit(&state, &chat_id, &turn_id, json!({"kind": "activity", "tool": "backup", "detail": "saving a backup of the folder"}));
     let (dd, pid, r2) = (state.data_dir.clone(), project_id.clone(), root.clone());
+    let backup_started = std::time::Instant::now();
     let snapshot = tokio::task::spawn_blocking(move || backups::create(&dd, &pid, &r2)).await;
     let snapshot = match snapshot {
         Ok(Ok(m)) => Some(m),
@@ -670,6 +687,15 @@ async fn run_turn(
     if let Some(m) = &snapshot {
         let id = m.id.clone();
         state.chats.with_turn(&chat_id, &turn_id, |t| t.snapshot_id = Some(id));
+        // Mark the backup step finished, so the spinner moves on to the agent
+        // instead of sitting on "Backup" while the model thinks.
+        let n = m.files.len();
+        let detail = format!(
+            "saved ({n} file{}, {:.1} s)",
+            if n == 1 { "" } else { "s" },
+            backup_started.elapsed().as_secs_f64()
+        );
+        finish_activity(&state, &chat_id, &turn_id, "backup", &detail);
     }
 
     // 2. Run the CLI, forwarding its events.

@@ -51,7 +51,7 @@ export interface FileChange {
 /** One event in a turn's transcript (see backend claude_cli.rs / chat.rs). */
 export type TurnEvent =
   | { kind: 'message'; text: string }
-  | { kind: 'activity'; tool: string; detail: string }
+  | { kind: 'activity'; tool: string; detail: string; /** A finished step (replaces the earlier event for the same tool). */ done?: boolean }
   | { kind: 'command'; command: string; exitCode: number; output: string }
   | { kind: 'fileEdited'; path: string }
   | { kind: 'todos'; items: { text: string; status: string }[] }

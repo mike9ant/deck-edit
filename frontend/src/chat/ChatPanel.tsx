@@ -393,13 +393,15 @@ function ToolGroup({ events, running }: { events: TurnEvent[]; running: boolean 
   const commands = events.filter((e) => e.kind === 'command').length
   const edits = events.filter((e) => e.kind === 'fileEdited').length
   const failed = events.some((e) => e.kind === 'command' && e.exitCode !== 0)
+  // A finished last step (e.g. the backup) stops spinning — the wait is now the agent ("Working…" below).
+  const spinning = running && !lastActivity?.done
   return (
     <div className="rounded-md border border-hair bg-paper/60 text-xs">
       <button className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-ink-3 hover:text-ink" onClick={() => setOpen(!open)}>
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        {running ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />}
+        {spinning ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />}
         <span className="truncate">
-          {running && lastActivity
+          {(spinning || (steps === 1 && events.length === 1)) && lastActivity
             ? `${toolLabel(lastActivity.tool)} ${lastActivity.detail}`
             : [
                 steps ? `${steps} step${steps > 1 ? 's' : ''}` : '',

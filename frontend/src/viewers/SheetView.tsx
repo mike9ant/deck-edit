@@ -26,6 +26,9 @@ import { DrawLayer, NoteToolButton, SelectToolButton, pinFor, strokesBox, useEsc
 import { notesForSlide, useNotes } from '../store/notesStore'
 import { sendToAgent } from '../chat/sendToAgent'
 
+/** A lazily loaded chunk that no longer exists (Chrome / Safari / Firefox wording). */
+const STALE_BUILD = /dynamically imported module|Importing a module script failed|error loading dynamically imported/i
+
 interface CellView extends Shown {
   style?: React.CSSProperties
   raw?: string
@@ -135,6 +138,15 @@ export function SheetView({ pid, path }: { pid: string; path: string }) {
     return () => clearTimeout(t)
   }, [pid, path, sheet, sel])
 
+  if (error && STALE_BUILD.test(error)) {
+    // This page predates a rebuild of the app, and the spreadsheet reader's chunk is gone.
+    return (
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-ink-3">
+        <div>The app was updated since this page loaded — reload to open spreadsheets.</div>
+        <button className="btn-primary" onClick={() => window.location.reload()}>Reload</button>
+      </div>
+    )
+  }
   if (error) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-ink-3">
