@@ -1,6 +1,6 @@
 // Round-trip safety check against a real deck: every edit kind the app uses,
 // then save, then compare the zip part-by-part with the original.
-// Set PDFEDIT_TEST_DECK to a .pptx path; skipped when absent.
+// Set DECKEDIT_TEST_DECK to a .pptx path; skipped when absent.
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import JSZip from 'jszip'
 import { repairPackage } from '../packageHygiene'
@@ -8,8 +8,8 @@ import {
   readPptx, buildPresentation, applyEdit, writePptx, copyNodes, materializeAllSlides,
 } from '@diceui/pptx-core'
 
-const deckPath = process.env.PDFEDIT_TEST_DECK ?? ''
-const out = process.env.PDFEDIT_TEST_OUT ?? '/tmp/pdfedit-roundtrip.pptx'
+const deckPath = process.env.DECKEDIT_TEST_DECK ?? ''
+const out = process.env.DECKEDIT_TEST_OUT ?? '/tmp/deckedit-roundtrip.pptx'
 
 describe.skipIf(!deckPath || !existsSync(deckPath))('pptx round trip', () => {
   it('only touched parts change', async () => {

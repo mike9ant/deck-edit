@@ -40,7 +40,7 @@ pub const SKIP_DIRS: &[&str] = &["node_modules", "__pycache__", "target", "venv"
 
 /// Is this path component something we hide (dotfiles, Office lock files, our temp files)?
 pub fn is_hidden_name(name: &str) -> bool {
-    name.starts_with('.') || name.starts_with("~$") || name.ends_with(".pdfedit-tmp")
+    name.starts_with('.') || name.starts_with("~$") || name.ends_with(".deckedit-tmp") || name.ends_with(".pdfedit-tmp")
 }
 
 pub fn is_skipped_dir(name: &str) -> bool {
@@ -93,7 +93,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "file".into());
-    let tmp = path.with_file_name(format!(".{name}.{}.pdfedit-tmp", std::process::id()));
+    let tmp = path.with_file_name(format!(".{name}.{}.deckedit-tmp", std::process::id()));
     std::fs::write(&tmp, bytes)?;
     std::fs::rename(&tmp, path)
 }

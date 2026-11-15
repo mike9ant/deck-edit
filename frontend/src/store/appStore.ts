@@ -71,15 +71,15 @@ interface AppState {
   toast(text: string, kind?: Toast['kind']): void
 }
 
-const LS_PROJECT = 'pdfedit-project'
-const lsTabs = (pid: string) => `pdfedit-tabs-${pid}`
+const LS_PROJECT = 'deckedit-project'
+const lsTabs = (pid: string) => `deckedit-tabs-${pid}`
 const saveTabs = (pid: string | null, tabs: string[], kept: string[], active: string | null) => {
   if (pid) localStorage.setItem(lsTabs(pid), JSON.stringify({ tabs, kept, active }))
 }
 
 const savedWidths = (): Widths => {
   try {
-    return { tree: 240, rail: 200, chat: 420, ...JSON.parse(localStorage.getItem('pdfedit-widths') ?? '{}') }
+    return { tree: 240, rail: 200, chat: 420, ...JSON.parse(localStorage.getItem('deckedit-widths') ?? '{}') }
   } catch {
     return { tree: 240, rail: 200, chat: 420 }
   }
@@ -98,9 +98,9 @@ export const useApp = create<AppState>((set, get) => ({
   activePath: null,
   widths: savedWidths(),
   toasts: [],
-  filesCollapsed: localStorage.getItem('pdfedit-files-collapsed') === '1',
+  filesCollapsed: localStorage.getItem('deckedit-files-collapsed') === '1',
   setFilesCollapsed(v) {
-    localStorage.setItem('pdfedit-files-collapsed', v ? '1' : '0')
+    localStorage.setItem('deckedit-files-collapsed', v ? '1' : '0')
     set({ filesCollapsed: v })
   },
   renameOpenPaths(pairs) {
@@ -201,7 +201,7 @@ export const useApp = create<AppState>((set, get) => ({
   setWidth(key, px) {
     const widths = { ...get().widths, [key]: Math.round(px) }
     set({ widths })
-    localStorage.setItem('pdfedit-widths', JSON.stringify(widths))
+    localStorage.setItem('deckedit-widths', JSON.stringify(widths))
   },
 
   toast(text, kind = 'info') {

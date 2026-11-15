@@ -23,7 +23,7 @@ import { sendToAgent } from '../chat/sendToAgent'
 import { MarkdownEditable } from './MarkdownEditable'
 
 type MdMode = 'preview' | 'edit'
-const MD_MODE_KEY = 'pptxedit-md-mode'
+const MD_MODE_KEY = 'deckedit-md-mode'
 
 export function MarkdownView({ pid, path }: { pid: string; path: string }) {
   const [mode, setModeState] = useState<MdMode>(() => (localStorage.getItem(MD_MODE_KEY) === 'edit' ? 'edit' : 'preview'))

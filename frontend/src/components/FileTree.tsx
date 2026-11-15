@@ -24,7 +24,7 @@ import { baseName, deletePaths, joinPath, movePaths, newFolder, parentOf, planMo
 import { MiddleEllipsis } from './MiddleEllipsis'
 import { NoteCountBadge } from '../notes/NoteCountBadge'
 
-const MOVE_TYPE = 'application/x-pdfedit-paths'
+const MOVE_TYPE = 'application/x-deckedit-paths'
 /** A second click on the selected item between these delays renames it (a faster one is a double-click). */
 const RENAME_CLICK_MIN_MS = 450
 const RENAME_CLICK_MAX_MS = 1600
@@ -167,7 +167,7 @@ export function FileTree() {
     if (!selected.includes(n.path)) setSelected([n.path])
     e.dataTransfer.setData(MOVE_TYPE, JSON.stringify(paths))
     // A single image can also be dropped onto a slide.
-    if (paths.length === 1 && docKind(paths[0]) === 'image') e.dataTransfer.setData('application/x-pdfedit-path', paths[0])
+    if (paths.length === 1 && docKind(paths[0]) === 'image') e.dataTransfer.setData('application/x-deckedit-path', paths[0])
     e.dataTransfer.effectAllowed = 'copyMove'
   }
 

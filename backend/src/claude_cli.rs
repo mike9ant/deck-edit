@@ -114,7 +114,7 @@ fn shell_quote(s: &str) -> String {
 
 fn settings_json(port: u16, chat_id: &str, token: &str, fast: bool, matcher: &str) -> String {
     let url = format!("http://127.0.0.1:{port}/api/agent/hook?chat={chat_id}");
-    let header = shell_quote(&format!("X-PdfEdit-Token: {token}"));
+    let header = shell_quote(&format!("X-DeckEdit-Token: {token}"));
     let command = format!(
         "curl -sS -m {} -X POST -H 'Content-Type: application/json' -H {header} --data-binary @- {}",
         HOOK_TIMEOUT_SECS + 30,
@@ -140,7 +140,7 @@ fn mcp_config(port: u16, chat_id: &str, token: &str) -> String {
             "deck": {
                 "type": "http",
                 "url": format!("http://127.0.0.1:{port}/api/mcp?chat={chat_id}"),
-                "headers": { "X-PdfEdit-Token": token },
+                "headers": { "X-DeckEdit-Token": token },
             }
         }
     })
@@ -613,7 +613,7 @@ mod tests {
         assert_eq!(s["fastMode"], true);
         assert_eq!(s["hooks"]["PreToolUse"][0]["matcher"], GATED_TOOLS);
         let cmd = s["hooks"]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap();
-        assert!(cmd.contains("X-PdfEdit-Token: tok'\\''en"));
+        assert!(cmd.contains("X-DeckEdit-Token: tok'\\''en"));
         assert!(cmd.contains("/api/agent/hook?chat=c1"));
     }
 

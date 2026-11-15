@@ -1,10 +1,10 @@
-//! PPTX Edit as a desktop app (Tauri).
+//! Deck Edit as a desktop app (Tauri).
 //!
 //! Runs the app's server in-process on a background task and shows it in a
 //! window — no terminal, no separate server. Flow: take the login shell's PATH
 //! → bind a sticky localhost port → show a static splash (`splash/index.html`)
 //! → start the server → point the window at `http://127.0.0.1:{port}/` once
-//! it's ready. Logs: `~/.ppt-edit/logs/desktop.log`.
+//! it's ready. Logs: `~/.deck-edit/logs/desktop.log`.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -17,7 +17,7 @@ use tauri::menu::{AboutMetadataBuilder, Menu, MenuBuilder, SubmenuBuilder};
 use tauri::webview::NewWindowResponse;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
-use pdf_edit::{default_data_dir, init_logging, repo_frontend_dist, run_server, ServerConfig};
+use deck_edit::{default_data_dir, init_logging, repo_frontend_dist, run_server, ServerConfig};
 
 /// Bind the port saved from the last run, falling back to a fresh ephemeral
 /// port (saved for next time). A stable port keeps the window's origin — and
@@ -44,7 +44,7 @@ fn bind_sticky(port_file: &Path) -> anyhow::Result<TcpListener> {
 /// runs (python3, git, brew-installed commands) would be found. Take the PATH
 /// the user's interactive login shell sets up, plus the usual install places.
 fn adopt_login_path() {
-    const MARK: &str = "__PPTX_EDIT_PATH__";
+    const MARK: &str = "__DECK_EDIT_PATH__";
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let from_shell = Command::new(&shell)
         .args(["-ilc", &format!("printf '{MARK}%s{MARK}' \"$PATH\"")])
@@ -123,13 +123,13 @@ fn app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<
     let v = &app.package_info().version;
     let version = format!("{}.{}", v.major, v.minor); // "0.1", as in Settings → About
     let about = AboutMetadataBuilder::new()
-        .name(Some("PPTX Edit"))
+        .name(Some("Deck Edit"))
         .version(Some(version.clone()))
         .short_version(Some(version))
         .copyright(Some(AUTHOR))
         .credits(Some(format!("{PURPOSE}\n\n{AS_IS}")))
         .build();
-    let app_menu = SubmenuBuilder::new(app, "PPTX Edit")
+    let app_menu = SubmenuBuilder::new(app, "Deck Edit")
         .about(Some(about))
         .separator()
         .services()
@@ -164,7 +164,7 @@ fn main() {
             tracing::info!("desktop app: server on port {port}, frontend at {dist:?}");
 
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
-                .title("PPTX Edit")
+                .title("Deck Edit")
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(900.0, 600.0)
                 // The page handles dropped files itself (images onto slides, files into the chat);
@@ -200,12 +200,12 @@ fn main() {
                     }
                     Err(_) => {
                         // run_server returned before it was ready: startup failed.
-                        let _ = window.eval("window.__bootError('PPTX Edit could not start. Details are in ~/.ppt-edit/logs/desktop.log.')");
+                        let _ = window.eval("window.__bootError('Deck Edit could not start. Details are in ~/.deck-edit/logs/desktop.log.')");
                     }
                 }
             });
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("error while running the PPTX Edit app");
+        .expect("error while running the Deck Edit app");
 }

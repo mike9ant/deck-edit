@@ -6,7 +6,7 @@ import type { Note } from '../api/types'
 
 /** How a new note is placed: a pin at a point, or a freehand mark around an area. */
 export type NoteTool = 'pin' | 'draw'
-const TOOL_KEY = 'pptxedit-note-tool'
+const TOOL_KEY = 'deckedit-note-tool'
 
 interface NotesState {
   pid: string | null

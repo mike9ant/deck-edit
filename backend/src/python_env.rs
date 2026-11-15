@@ -1,7 +1,7 @@
 //! The Python env the agent uses for decks (python-pptx, pymupdf, pypdf,
 //! pillow, openpyxl): its `bin` directory goes first on the agent's PATH.
 //!
-//! Looked for, in order: `PDFEDIT_PYTHON_BIN`, the app's own env
+//! Looked for, in order: `DECKEDIT_PYTHON_BIN`, the app's own env
 //! (`<data dir>/venv`, made by `provision`), the repo checkout's `.venv`
 //! (`./run.sh setup`). The desktop app provisions its own env on first launch
 //! when none is found, in the background — so it works without the repo.
@@ -14,7 +14,9 @@ use anyhow::{bail, Context};
 
 const PACKAGES: [&str; 5] = ["python-pptx", "pymupdf", "pypdf", "pillow", "openpyxl"];
 /// Written into `<data dir>/venv` once every package installed: a half-made env (no network, …) isn't used.
-const READY_MARKER: &str = ".pdf-edit-ready";
+const READY_MARKER: &str = ".deck-edit-ready";
+/// The marker an env made before the rename to Deck Edit carries.
+const OLD_READY_MARKER: &str = ".pdf-edit-ready";
 
 #[derive(Default)]
 pub struct PythonEnv {
@@ -27,8 +29,8 @@ impl PythonEnv {
     pub fn locate(data_dir: &Path, repo_root: &Path) -> Self {
         let own = data_dir.join("venv");
         let candidates = [
-            std::env::var("PDFEDIT_PYTHON_BIN").ok().map(PathBuf::from),
-            own.join(READY_MARKER).exists().then(|| own.join("bin")),
+            std::env::var("DECKEDIT_PYTHON_BIN").ok().map(PathBuf::from),
+            (own.join(READY_MARKER).exists() || own.join(OLD_READY_MARKER).exists()).then(|| own.join("bin")),
             Some(repo_root.join(".venv/bin")),
         ];
         let bin = candidates.into_iter().flatten().find(|b| b.join("python3").exists());

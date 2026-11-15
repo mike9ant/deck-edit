@@ -12,7 +12,7 @@
 //! `~/Library/Application Support/Claude` (macOS), `%APPDATA%\Claude` or the
 //! Microsoft Store package's `LocalCache\Roaming\Claude` (Windows),
 //! `$XDG_CONFIG_HOME/Claude` = `~/.config/Claude` (Linux).
-//! `PDFEDIT_CLAUDE_DESKTOP_DIR` adds one more folder to look in.
+//! `DECKEDIT_CLAUDE_DESKTOP_DIR` adds one more folder to look in.
 //! - CLI: `<config>/projects/<cwd with separators → ->/<session>.jsonl`
 //! - Desktop Code: `<desktop>/claude-code-sessions/<account>/<org>/local_<id>.json`
 //!   (title, cwd, `cliSessionId`); the transcript is that CLI session's jsonl
@@ -57,7 +57,7 @@ pub struct ConversationInfo {
     pub first_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Set when this is one of PPTX Edit's own agent chats.
+    /// Set when this is one of Deck Edit's own agent chats.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub app_chat: Option<String>,
     #[serde(skip)]
@@ -101,7 +101,7 @@ pub fn claude_config_dir() -> PathBuf {
 /// Every Claude desktop app data folder that exists on this machine.
 pub fn desktop_dirs() -> Vec<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(p) = std::env::var("PDFEDIT_CLAUDE_DESKTOP_DIR") {
+    if let Ok(p) = std::env::var("DECKEDIT_CLAUDE_DESKTOP_DIR") {
         candidates.push(PathBuf::from(p));
     }
     // macOS: ~/Library/Application Support · Windows: %APPDATA% (Roaming) ·
@@ -234,7 +234,7 @@ fn count_files(dir: &Path) -> usize {
     walkdir::WalkDir::new(dir).into_iter().filter_map(|e| e.ok()).filter(|e| e.file_type().is_file()).count()
 }
 
-/// The agent turns run by PPTX Edit itself: CLI session id → chat title.
+/// The agent turns run by Deck Edit itself: CLI session id → chat title.
 fn app_chats(state: &AppState) -> HashMap<String, String> {
     state.chats.cli_sessions()
 }
@@ -701,7 +701,7 @@ mod tests {
         assert_eq!(msgs[1].tools, vec!["Bash: python3 make.py"]);
         assert!(msgs[1].text.contains("Saved investor-deck.pptx"));
         assert_eq!(human_part("[Canvas context]\n- x\n---\nUser question: find my deck\n"), "find my deck");
-        assert_eq!(human_part("Fix slide 3\n\n---\n[Context from the PPTX Edit app — …]"), "Fix slide 3");
+        assert_eq!(human_part("Fix slide 3\n\n---\n[Context from the Deck Edit app — …]"), "Fix slide 3");
         let hits = search_transcript(&p, "togo", 3);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].role, "user");

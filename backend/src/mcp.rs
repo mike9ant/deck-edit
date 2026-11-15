@@ -79,7 +79,7 @@ async fn mcp(
                 json!({
                     "protocolVersion": version,
                     "capabilities": { "tools": {} },
-                    "serverInfo": { "name": "pdf-edit-deck", "version": env!("CARGO_PKG_VERSION") },
+                    "serverInfo": { "name": "deck-edit", "version": env!("CARGO_PKG_VERSION") },
                 }),
             )
         }

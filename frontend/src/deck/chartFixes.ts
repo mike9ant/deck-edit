@@ -218,13 +218,13 @@ function polish(chart: ChartLike, scaling: AxisScaling[]) {
  */
 function snapshotAsImage(chart: ChartLike) {
   const dom = chart.getDom?.()
-  if (!dom || !chart.getDataURL || dom.dataset.pdfeditSnapshot) return
+  if (!dom || !chart.getDataURL || dom.dataset.deckeditSnapshot) return
   const take = () => {
     if (chart.isDisposed?.()) return
     const img = document.createElement('img')
     img.src = chart.getDataURL!({ type: 'png', pixelRatio: 1, backgroundColor: 'transparent' })
     img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block'
-    dom.dataset.pdfeditSnapshot = '1'
+    dom.dataset.deckeditSnapshot = '1'
     for (const child of Array.from(dom.children)) (child as HTMLElement).style.visibility = 'hidden'
     dom.appendChild(img)
   }

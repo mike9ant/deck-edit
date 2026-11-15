@@ -1,4 +1,4 @@
-# PPTX Edit
+# Deck Edit
 
 A local app for developing slide decks **together with an AI agent**. You and
 the agent take turns on the same PowerPoint (.pptx) or PDF file: your edits are
@@ -21,28 +21,28 @@ turn can be reverted with one click.
 ./run.sh           # build and start → http://127.0.0.1:3101
 ./run.sh dev       # hot-reload frontend on http://127.0.0.1:5180
 ./run.sh test      # backend + frontend unit tests
-./run.sh desktop   # build the macOS app → /Applications/PPTX Edit.app, and open it
+./run.sh desktop   # build the macOS app → /Applications/Deck Edit.app, and open it
 ```
 
 Requirements: Rust, Node 20+, Python 3, and the [Claude Code CLI](https://claude.com/claude-code)
 logged in (`claude login`). The agent uses your Claude Code login (subscription) by default;
 switch to an Anthropic API key in Agent settings.
 
-App data (projects, chats, notes, per-turn backups) lives in `~/.ppt-edit/`
-(`PDFEDIT_DATA_DIR` to change).
+App data (projects, chats, notes, per-turn backups) lives in `~/.deck-edit/`
+(`DECKEDIT_DATA_DIR` to change).
 
 ### Desktop app (macOS)
 
-`./run.sh desktop` builds **PPTX Edit.app** (Tauri), installs it in `/Applications` and opens
+`./run.sh desktop` builds **Deck Edit.app** (Tauri), installs it in `/Applications` and opens
 it; after that, start it like any app (Launchpad, Spotlight, the Dock). It runs the same server
 inside the app on a private localhost port — nothing to start, no terminal — and shares
-`~/.ppt-edit/` (projects, chats, settings) with `./run.sh`.
+`~/.deck-edit/` (projects, chats, settings) with `./run.sh`.
 
 - It takes your login shell's PATH, so it finds `claude` (and the tools the agent runs) as a
   terminal would.
 - Without the repo's `.venv`, it sets up its own Python env on first launch
-  (`~/.ppt-edit/venv`, about a minute; Settings shows the progress). Needs `python3`.
-- Links out of the app open in your browser. Logs: `~/.ppt-edit/logs/desktop.log`.
+  (`~/.deck-edit/venv`, about a minute; Settings shows the progress). Needs `python3`.
+- Links out of the app open in your browser. Logs: `~/.deck-edit/logs/desktop.log`.
 - The first build downloads and compiles Tauri (a few minutes); later builds are quick.
   The app is built locally and unsigned, which is fine on the Mac that built it.
 
@@ -114,7 +114,7 @@ inside the app on a private localhost port — nothing to start, no terminal —
   `search_conversations` / `read_conversation` tools (read-only; the apps' private stores are
   parsed defensively, see `backend/src/conversations.rs`). Found on macOS, Windows (incl. Microsoft
   Store installs) and Linux; Claude Code's `CLAUDE_CONFIG_DIR` is honored, and
-  `PDFEDIT_CLAUDE_DESKTOP_DIR` adds another desktop-app folder. Agent settings shows what was found.
+  `DECKEDIT_CLAUDE_DESKTOP_DIR` adds another desktop-app folder. Agent settings shows what was found.
 - **Notes for the agent** — "Note for AI" (or "Draw for AI") at the right of the toolbar (apart from the edit tools); **Select**
   (or Esc) goes back to selecting shapes. Its ▾ menu picks how to place one:
   *Pin at a point* (click), or *Draw on the slide* — circle, underline or arrow at an area
@@ -154,7 +154,7 @@ inside the app on a private localhost port — nothing to start, no terminal —
       transcript notes the mode/model/effort it ran with.
   - **Agent settings** (Settings — the gear at the top right; its **About** tab shows the version): Claude Code CLI found/version/path and who it's
     signed in as (`claude auth status`), a custom CLI path, billing source and an optional
-    Anthropic API key (stored in `~/.ppt-edit/credentials.json`), defaults for new chats, and a
+    Anthropic API key (stored in `~/.deck-edit/credentials.json`), defaults for new chats, and a
     per-turn spend cap (`--max-budget-usd`).
   - **Your connectors** (Agent settings, off by default): let the agent use your own MCP servers and
     claude.ai connectors (Slack, Google Drive, Gmail, …) as Claude Code has them, not just the app's
@@ -188,11 +188,11 @@ instead of overwriting.
 Round-trip test against a real deck:
 
 ```bash
-PDFEDIT_TEST_DECK=/path/to/deck.pptx ./run.sh test frontend
+DECKEDIT_TEST_DECK=/path/to/deck.pptx ./run.sh test frontend
 ```
 
 It applies every edit kind, saves, and checks that only the expected parts changed and no
-relationship dangles; the output (`/tmp/pdfedit-roundtrip.pptx`) can be opened in PowerPoint.
+relationship dangles; the output (`/tmp/deckedit-roundtrip.pptx`) can be opened in PowerPoint.
 
 ## Architecture
 
@@ -201,7 +201,7 @@ relationship dangles; the output (`/tmp/pdfedit-roundtrip.pptx`) can be opened i
   CLI headless (`claude -p --output-format stream-json`, resumed per chat), a PreToolUse
   permission relay, per-turn backups (`backups.rs`, APFS copy-on-write), and a small MCP
   server (`mcp.rs`) exposing notes / current view / slide screenshots to the agent.
-- `desktop/` — the macOS app (Tauri): runs the backend in-process (`pdf_edit::run_server`)
+- `desktop/` — the macOS app (Tauri): runs the backend in-process (`deck_edit::run_server`)
   and shows it in a window, with a splash while it starts. `icons/make_icon.py` draws the icon.
 - `frontend/` — React + TypeScript + Vite + Tailwind. `deck/` (PPTX editing on top of
   pptx-core), `pdf/` (pdf.js + pdf-lib), `chat/`, `notes/`, `viewers/`.

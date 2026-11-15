@@ -518,7 +518,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     e.preventDefault()
     setDropHint(false)
     const at = toSlide(e.clientX, e.clientY)
-    const treePath = e.dataTransfer.getData('application/x-pdfedit-path')
+    const treePath = e.dataTransfer.getData('application/x-deckedit-path')
     if (treePath) {
       const pid = useApp.getState().projectId!
       const { bytes } = await api.readFile(pid, treePath)

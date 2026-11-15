@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "PPTX Edit",
+  "productName": "Deck Edit",
   "version": "0.1.0",
-  "identifier": "com.pptxedit.desktop",
+  "identifier": "com.deckedit.desktop",
   "build": {
     "frontendDist": "./splash"
   },

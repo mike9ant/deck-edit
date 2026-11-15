@@ -356,7 +356,7 @@ function PageStage({ session, noteMode, setNoteMode, showResolved, busy }: { ses
     const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height
     let blob: Blob | null = null
     let name = 'image.png'
-    const treePath = e.dataTransfer.getData('application/x-pdfedit-path')
+    const treePath = e.dataTransfer.getData('application/x-deckedit-path')
     if (treePath) {
       blob = new Blob([(await api.readFile(session.pid, treePath)).bytes])
       name = treePath.split('/').pop()!

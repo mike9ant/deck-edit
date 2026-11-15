@@ -22,8 +22,8 @@ import { actNowPrompt } from '../notes/NotePins'
 import { setQuoteHighlight } from '../notes/quoteHighlight'
 import { domRangeOf } from '../viewers/textRanges'
 
-const LS_OPEN = 'pdfedit-notes-open'
-const LS_HEIGHT = 'pdfedit-notes-height'
+const LS_OPEN = 'deckedit-notes-open'
+const LS_HEIGHT = 'deckedit-notes-height'
 const SAVE_MS = 900
 const STYLE_KEYS: Record<string, StyleProp> = { b: 'b', i: 'i', u: 'u' }
 

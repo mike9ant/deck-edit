@@ -1,5 +1,5 @@
 #!/bin/bash
-# PPTX Edit — run script
+# Deck Edit — run script
 #   ./run.sh setup            Python env (.venv with python-pptx, pymupdf, pypdf, openpyxl) + npm install
 #   ./run.sh                  Build everything and (re)start the server  → http://127.0.0.1:3101
 #   ./run.sh build            Just build (backend release + frontend dist)
@@ -7,19 +7,19 @@
 #   ./run.sh stop             Stop the server started from this folder
 #   ./run.sh logs             Tail the server log
 #   ./run.sh test [frontend|backend]   Unit tests
-#   ./run.sh desktop          Build the macOS app, install it as /Applications/PPTX Edit.app and open it
+#   ./run.sh desktop          Build the macOS app, install it as /Applications/Deck Edit.app and open it
 #
-# Env: PDFEDIT_PORT (default 3101), PDFEDIT_DATA_DIR (default ~/.ppt-edit),
-#      PDFEDIT_TEST_DECK=<path.pptx> enables the real-deck round-trip test.
+# Env: DECKEDIT_PORT (default 3101), DECKEDIT_DATA_DIR (default ~/.deck-edit),
+#      DECKEDIT_TEST_DECK=<path.pptx> enables the real-deck round-trip test.
 
 set -e
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND="$ROOT/frontend"
 PID_FILE="$ROOT/.server.pid"
 LOG_FILE="$ROOT/.server.log"
-PORT="${PDFEDIT_PORT:-3101}"
+PORT="${DECKEDIT_PORT:-3101}"
 CARGO="${CARGO:-$(command -v cargo || echo "$HOME/.cargo/bin/cargo")}"
-BIN="$ROOT/target/release/pdf-edit"
+BIN="$ROOT/target/release/deck-edit"
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 say() { echo -e "${GREEN}==>${NC} $*"; }
@@ -35,15 +35,17 @@ setup() {
   (cd "$FRONTEND" && npm install --no-audit --no-fund)
 }
 
-build_backend() { say "Building backend"; (cd "$ROOT" && "$CARGO" build --release -p pdf-edit); }
+build_backend() { say "Building backend"; (cd "$ROOT" && "$CARGO" build --release -p deck-edit); }
 build_frontend() {
   [ -d "$FRONTEND/node_modules" ] || (cd "$FRONTEND" && npm install --no-audit --no-fund)
   say "Building frontend"; (cd "$FRONTEND" && npm run build)
 }
 
-APP_NAME="PPTX Edit"
+APP_NAME="Deck Edit"
 APP_BUNDLE="$ROOT/target/release/bundle/macos/$APP_NAME.app"
 APP_INSTALLED="/Applications/$APP_NAME.app"
+# The app before it was renamed to Deck Edit; replaced on install.
+LEGACY_APP="/Applications/PPTX Edit.app"
 
 # The desktop app (desktop/, Tauri) runs the server in-process and bundles
 # frontend/dist, so the frontend must be built first. No beforeBuildCommand:
@@ -56,15 +58,21 @@ build_desktop() {
 # Quit a running copy (the single-instance plugin would just focus the old
 # build), replace the installed app, and open it.
 install_desktop() {
-  if pgrep -f pptx-edit-desktop >/dev/null 2>&1; then
+  if pgrep -f deck-edit-desktop >/dev/null 2>&1; then
     say "Quitting the running app"
     osascript -e "tell application \"$APP_NAME\" to quit" 2>/dev/null || true
-    for _ in $(seq 1 20); do pgrep -f pptx-edit-desktop >/dev/null 2>&1 || break; sleep 0.5; done
+    for _ in $(seq 1 20); do pgrep -f deck-edit-desktop >/dev/null 2>&1 || break; sleep 0.5; done
     sleep 1  # let LaunchServices settle; an immediate re-open can fail with -600
+  fi
+  if [ -d "$LEGACY_APP" ]; then
+    osascript -e 'tell application "PPTX Edit" to quit' 2>/dev/null || true
+    for _ in $(seq 1 20); do pgrep -f pptx-edit-desktop >/dev/null 2>&1 || break; sleep 0.5; done
+    rm -rf "$LEGACY_APP"
+    say "Removed the old PPTX Edit.app (now Deck Edit)"
   fi
   rm -rf "$APP_INSTALLED"
   cp -R "$APP_BUNDLE" "$APP_INSTALLED"
-  say "Installed → $APP_INSTALLED  (logs: ~/.ppt-edit/logs/desktop.log)  · $(date '+%Y-%m-%d %H:%M:%S')"
+  say "Installed → $APP_INSTALLED  (logs: ~/.deck-edit/logs/desktop.log)  · $(date '+%Y-%m-%d %H:%M:%S')"
   open "$APP_INSTALLED"
 }
 
@@ -84,8 +92,8 @@ stop() {
 start_backend() {
   stop
   local busy; busy="$(lsof -nP -t -iTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1 || true)"
-  if [ -n "$busy" ]; then warn "Port $PORT is in use by pid $busy — set PDFEDIT_PORT to use another"; exit 1; fi
-  PDFEDIT_PORT="$PORT" nohup "$BIN" --port "$PORT" >"$LOG_FILE" 2>&1 &
+  if [ -n "$busy" ]; then warn "Port $PORT is in use by pid $busy — set DECKEDIT_PORT to use another"; exit 1; fi
+  DECKEDIT_PORT="$PORT" nohup "$BIN" --port "$PORT" >"$LOG_FILE" 2>&1 &
   echo $! >"$PID_FILE"
   for _ in $(seq 1 40); do
     curl -sf "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1 && break
@@ -101,16 +109,16 @@ case "${1:-start}" in
   dev)
     build_backend; start_backend
     say "Vite dev server → http://127.0.0.1:5180  · $(date '+%Y-%m-%d %H:%M:%S')"
-    cd "$FRONTEND" && PDFEDIT_BACKEND="http://127.0.0.1:$PORT" npx vite --host 127.0.0.1
+    cd "$FRONTEND" && DECKEDIT_BACKEND="http://127.0.0.1:$PORT" npx vite --host 127.0.0.1
     ;;
   desktop) build_frontend; build_desktop; install_desktop ;;
   stop) stop ;;
   logs) tail -f "$LOG_FILE" ;;
   test)
     case "${2:-all}" in
-      backend) (cd "$ROOT" && "$CARGO" test -p pdf-edit) ;;
+      backend) (cd "$ROOT" && "$CARGO" test -p deck-edit) ;;
       frontend) (cd "$FRONTEND" && npx vitest run) ;;
-      *) (cd "$ROOT" && "$CARGO" test -p pdf-edit) && (cd "$FRONTEND" && npx vitest run) ;;
+      *) (cd "$ROOT" && "$CARGO" test -p deck-edit) && (cd "$FRONTEND" && npx vitest run) ;;
     esac
     ;;
   *) echo "usage: ./run.sh [setup|start|build|dev|stop|logs|test [frontend|backend]|desktop]"; exit 1 ;;

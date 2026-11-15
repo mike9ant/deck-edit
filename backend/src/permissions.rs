@@ -64,7 +64,7 @@ pub fn routes() -> Router<AppState> {
 
 pub fn token_ok(headers: &HeaderMap, token: &str) -> bool {
     headers
-        .get("x-pdfedit-token")
+        .get("x-deckedit-token")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|t| t == token)
 }

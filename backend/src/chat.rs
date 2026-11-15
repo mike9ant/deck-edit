@@ -169,13 +169,13 @@ impl ChatRegistry {
     }
 
     /// CLI session id → chat title, for every chat of this app (so the
-    /// conversation browser can label PPTX Edit's own agent sessions).
+    /// conversation browser can label Deck Edit's own agent sessions).
     pub fn cli_sessions(&self) -> HashMap<String, String> {
         self.chats
             .lock()
             .unwrap()
             .values()
-            .filter_map(|c| c.cli_session_id.clone().map(|s| (s, format!("PPTX Edit chat: {}", c.title))))
+            .filter_map(|c| c.cli_session_id.clone().map(|s| (s, format!("Deck Edit chat: {}", c.title))))
             .collect()
     }
 
@@ -536,7 +536,7 @@ fn title_from(text: &str) -> String {
 /// The user's message plus an app-generated context block.
 fn compose_prompt(state: &AppState, project_id: &str, chat_id: &str, root: &Path, text: &str, ctx: Option<&Value>) -> String {
     let mut out = String::from(text.trim());
-    out.push_str("\n\n---\n[Context from the PPTX Edit app — generated automatically, not typed by the user]\n");
+    out.push_str("\n\n---\n[Context from the Deck Edit app — generated automatically, not typed by the user]\n");
     out.push_str(&format!("Project folder: {}\n", root.display()));
     let s = |v: Option<&Value>| v.and_then(|x| x.as_str()).unwrap_or("").to_string();
     let deck = ctx.and_then(|c| c.get("deck")).and_then(|d| d.as_str()).unwrap_or("");
@@ -620,7 +620,7 @@ pub fn system_prompt(state: &AppState) -> String {
         _ => "",
     };
     format!(
-        r#"You are the presentation agent inside **PPTX Edit**, a desktop-style app where the user and you take turns developing slide decks (PowerPoint .pptx, and PDF) in the project folder (your working directory).
+        r#"You are the presentation agent inside **Deck Edit**, a desktop-style app where the user and you take turns developing slide decks (PowerPoint .pptx, and PDF) in the project folder (your working directory).
 
 How the app works:
 - The user sees the deck live: whenever a .pptx/.pdf file in the folder changes on disk, the app reloads it within a second. So edit decks IN PLACE and save to the same path — the user watches your changes appear. Save after each logical change (e.g. per slide) so progress shows up while you work.

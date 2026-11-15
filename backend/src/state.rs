@@ -19,7 +19,7 @@ use crate::watcher::WatcherRegistry;
 pub struct AppState {
     pub data_dir: PathBuf,
     pub port: u16,
-    /// Secret the spawned CLI's hooks and MCP client present (`X-PdfEdit-Token`),
+    /// Secret the spawned CLI's hooks and MCP client present (`X-DeckEdit-Token`),
     /// so only the harness we launched can approve tool calls or call our tools.
     pub token: String,
     /// The Python env (python-pptx, pymupdf…) whose `bin` goes first on the

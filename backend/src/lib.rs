@@ -1,11 +1,11 @@
-//! PPTX Edit backend: a local server for the slide/PDF editor.
+//! Deck Edit backend: a local server for the slide/PDF editor.
 //!
 //! Serves the built frontend plus a JSON API under `/api`: projects (a folder +
 //! chats), the folder tree and raw file read/write, live file-change events,
 //! slide notes, agent chats running the Claude Code CLI, per-turn backups, and
 //! an MCP endpoint the agent calls back into.
 //!
-//! Run by the `pdf-edit` binary (`./run.sh`, port 3101) and, in-process, by
+//! Run by the `deck-edit` binary (`./run.sh`, port 3101) and, in-process, by
 //! the desktop app (`desktop/`), which shows it in its own window.
 
 mod backups;
@@ -40,7 +40,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::state::AppState;
 
 pub struct ServerConfig {
-    /// Projects, chats, settings, backups, logs (`~/.ppt-edit`).
+    /// Projects, chats, settings, backups, logs (`~/.deck-edit`).
     pub data_dir: PathBuf,
     /// The built frontend (`frontend/dist`).
     pub frontend_dist: PathBuf,
@@ -62,24 +62,25 @@ pub fn repo_frontend_dist() -> PathBuf {
     repo_root().join("frontend/dist")
 }
 
-/// `PDFEDIT_DATA_DIR`, else `~/.ppt-edit`. Data from before the rename (in
-/// `~/.pdf-edit`) is moved there the first time.
+/// `DECKEDIT_DATA_DIR`, else `~/.deck-edit`. Data under an earlier name
+/// (`~/.ppt-edit`, `~/.pdf-edit`) is moved there the first time.
 pub fn default_data_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("PDFEDIT_DATA_DIR") {
+    if let Ok(dir) = std::env::var("DECKEDIT_DATA_DIR") {
         return PathBuf::from(dir);
     }
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let dir = home.join(".ppt-edit");
-    let old = home.join(".pdf-edit");
-    if !dir.exists() && old.is_dir() {
-        let _ = std::fs::rename(&old, &dir);
+    let dir = home.join(".deck-edit");
+    if !dir.exists() {
+        if let Some(old) = [".ppt-edit", ".pdf-edit"].iter().map(|n| home.join(n)).find(|p| p.is_dir()) {
+            let _ = std::fs::rename(&old, &dir);
+        }
     }
     dir
 }
 
 /// Log to stderr, or (the desktop app) append to `log_file`.
 pub fn init_logging(log_file: Option<&Path>) {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "pdf_edit=info,tower_http=warn".into());
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "deck_edit=info,tower_http=warn".into());
     let file = log_file.and_then(|p| {
         if let Some(dir) = p.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -151,7 +152,7 @@ pub async fn run_server(listener: std::net::TcpListener, config: ServerConfig, r
         .with_state(state);
 
     let listener = tokio::net::TcpListener::from_std(listener)?;
-    tracing::info!("PPTX Edit listening on http://{addr} (data: {}, frontend: {})", data_dir.display(), frontend_dist.display());
+    tracing::info!("Deck Edit listening on http://{addr} (data: {}, frontend: {})", data_dir.display(), frontend_dist.display());
     if let Some(ready) = ready {
         let _ = ready.send(());
     }

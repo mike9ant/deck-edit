@@ -44,7 +44,7 @@ interface ChatState {
   handleEvent(ev: ServerEvent): void
 }
 
-const lsTabs = (pid: string) => `pdfedit-chats-${pid}`
+const lsTabs = (pid: string) => `deckedit-chats-${pid}`
 
 export const useChat = create<ChatState>((set, get) => {
   const persistTabs = () => {

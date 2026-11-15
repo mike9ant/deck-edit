@@ -6,7 +6,7 @@ index dd73442..cc6e268 100644
    /** Index of the source paragraph whose `a:pPr` / `a:endParaRPr` to clone. -1 = bare paragraph. */
    sourceParagraphIndex: number;
    runs: SetTextBodyRun[];
-+  /** pdf-edit patch: write the paragraph without a bullet / number (`a:buNone`). */
++  /** deck-edit patch: write the paragraph without a bullet / number (`a:buNone`). */
 +  noBullet?: boolean;
  }
  interface SetTextBodyRun {
@@ -19,7 +19,7 @@ index c6cc36a..ae5ac6b 100644
  	element.style.color = "transparent";
  }
  function generateAutoNumber(type, num) {
-+	// pdf-edit patch: every Latin scheme of ST_TextAutonumberScheme (roman/alpha
++	// deck-edit patch: every Latin scheme of ST_TextAutonumberScheme (roman/alpha
 +	// with Period, ParenR, ParenBoth; alpha past z as aa, bb… like PowerPoint),
 +	// plus circled and full-width numbers.
 +	const m = /^(arabic|romanLc|romanUc|alphaLc|alphaUc)(Period|ParenR|ParenBoth|Plain)$/.exec(type || "");
@@ -65,7 +65,7 @@ index c6cc36a..ae5ac6b 100644
  		else if (merged.spaceAfterPct !== void 0) paraDiv.style.marginBottom = `${merged.spaceAfterPct * effectiveFontSize}pt`;
  		const suppressBullet = !hasVisibleRuns || placeholder?.type === "sldNum" || placeholder?.type === "dt" || placeholder?.type === "ftr" || placeholder?.type === "title" || placeholder?.type === "ctrTitle" || placeholder?.type === "subTitle";
  		let bulletPrefix = "";
-+		// pdf-edit patch: number like PowerPoint — startAt is the FIRST number of a
++		// deck-edit patch: number like PowerPoint — startAt is the FIRST number of a
 +		// list (not every item's); a list continues at its level until a visible
 +		// paragraph at a shallower level, or an un-numbered / differently numbered
 +		// one at the same level, interrupts it. Deeper items don't break it.
@@ -90,7 +90,7 @@ index c6cc36a..ae5ac6b 100644
  			}
  			if (srcPara.endParaRPr?.element) endParaRPrNode = new SafeXmlNode(srcPara.endParaRPr.element.cloneNode(true));
  		}
-+		// pdf-edit patch: `noBullet` — the paragraph without its bullet / number
++		// deck-edit patch: `noBullet` — the paragraph without its bullet / number
 +		// (PowerPoint's Backspace at the start of a bulleted line): <a:buNone/>, and
 +		// no hanging indent, so the text stays where it was.
 +		if (opPara.noBullet) {

@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 import { readdirSync, statSync, unlinkSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
-const backend = process.env.PDFEDIT_BACKEND ?? 'http://127.0.0.1:3101'
+const backend = process.env.DECKEDIT_BACKEND ?? 'http://127.0.0.1:3101'
 
 /**
  * Builds don't empty dist/ (see emptyOutDir), so a page loaded before a rebuild

@@ -687,7 +687,7 @@ function EventView({ e, resolved, onAnswer, onOpen }: { e: TurnEvent; resolved: 
  * text also survives a reload (localStorage); pasted images live in memory.
  */
 const composerDrafts = new Map<string, { text: string; images: PendingImage[] }>()
-const draftKey = (chatId: string) => `pdfedit-draft-${chatId}`
+const draftKey = (chatId: string) => `deckedit-draft-${chatId}`
 
 function Composer({ chat }: { chat: Chat }) {
   const { send, stop, update, setMode } = useChat()

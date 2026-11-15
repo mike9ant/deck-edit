@@ -4,10 +4,10 @@ import type { AgentSettings, AgentStatus, ApprovalMode, Chat, ChatSummary, Conve
 
 /** Identifies this browser tab, so the watcher event for our own save can be skipped. */
 export const CLIENT_ID: string = (() => {
-  const existing = sessionStorage.getItem('pdfedit-client')
+  const existing = sessionStorage.getItem('deckedit-client')
   if (existing) return existing
   const id = crypto.randomUUID()
-  sessionStorage.setItem('pdfedit-client', id)
+  sessionStorage.setItem('deckedit-client', id)
   return id
 })()
 

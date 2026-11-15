@@ -44,7 +44,7 @@ function About() {
   return (
     <div className="space-y-3 text-sm text-ink-2">
       <div className="flex items-center gap-2 text-base font-semibold text-ink">
-        <Presentation size={20} className="text-accent" /> PPTX Edit <span className="text-sm font-normal text-ink-3">Version {APP_VERSION}</span>
+        <Presentation size={20} className="text-accent" /> Deck Edit <span className="text-sm font-normal text-ink-3">Version {APP_VERSION}</span>
       </div>
       <p>To enable efficient editing of PowerPoint / PPTX files, and related supporting content folders, with help of Claude Code.</p>
       <p>Developed by Michael Antonov.</p>
@@ -107,7 +107,7 @@ function AgentSettings() {
             <Choice active={settings.auth === 'key'} disabled={!settings.apiKeyAvailable} onClick={() => void update({ auth: 'key' })} title="Anthropic API key" sub={settings.apiKeyAvailable ? 'billed to the API key' : 'add a key below first'} />
           </div>
           <label className="mt-3 block text-xs font-medium text-ink-2">
-            Anthropic API key <span className="font-normal text-ink-3">{settings.apiKeyStored ? '· saved in ~/.ppt-edit (not shown)' : settings.apiKeyAvailable ? '· using ANTHROPIC_API_KEY from the environment' : '· optional'}</span>
+            Anthropic API key <span className="font-normal text-ink-3">{settings.apiKeyStored ? '· saved in ~/.deck-edit (not shown)' : settings.apiKeyAvailable ? '· using ANTHROPIC_API_KEY from the environment' : '· optional'}</span>
           </label>
           <div className="mt-1 flex gap-2">
             <input className="input flex-1 font-mono text-xs" type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={settings.apiKeyStored ? '••••••••  (enter a new key to replace)' : 'sk-ant-…'} />
