@@ -612,7 +612,7 @@ pub fn system_prompt(state: &AppState) -> String {
     let connectors = if agent_settings.user_mcp {
         "\n- The user's own MCP servers and connectors (e.g. Slack, Google Drive) are available besides the app's tools. Use them when the user asks (e.g. to pull content from a Slack thread into a slide). Anything that sends, posts or changes something outside the project needs the user's approval unless they chose auto approve — never send messages on their behalf unless asked. (The user can turn this off in Agent settings → Your connectors.)"
     } else {
-        "\n- Only the app's own tools are loaded — not the user's MCP servers / claude.ai connectors (Slack, Google Drive, Gmail, …). If a request needs one, tell the user they can turn on \"Use my MCP servers & connectors\" in Agent settings (gear icon in the chat tabs) → Your connectors; it applies from their next message."
+        "\n- Only the app's own tools are loaded — not the user's MCP servers / claude.ai connectors (Slack, Google Drive, Gmail, …). If a request needs one, tell the user they can turn on \"Use my MCP servers & connectors\" in Settings (gear icon, top right) → Agent settings → Your connectors; it applies from their next message."
     };
     let web = match agent_settings.web_access.as_str() {
         "off" => "\n- Web access is turned off (no web search or page fetch). If a request needs the web, say so and mention they can allow it in Agent settings → Web access.",

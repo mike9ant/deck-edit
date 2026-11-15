@@ -10,7 +10,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   AlertTriangle, Check, ChevronDown, ChevronRight, CircleDot, FileEdit, History, Loader2, MessageSquare, SquarePlus, Trash2,
-  Plus, RotateCcw, Send, Settings, Square, Terminal, Wrench, X, StickyNote, Pencil, Play, ImagePlus, Library,
+  Plus, RotateCcw, Send, Square, Terminal, Wrench, X, StickyNote, Pencil, Play, ImagePlus, Library,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useChat } from '../store/chatStore'
@@ -23,7 +23,6 @@ import type { Chat, Posture, Turn, TurnEvent } from '../api/types'
 import { buildTurnContext, pendingEditCount } from './turnContext'
 import { useTextEditTick } from '../viewers/textEdits'
 import { PosturePopover } from './PosturePopover'
-import { AgentSettingsDialog } from './AgentSettings'
 import { ConversationsPanel } from './ConversationsPanel'
 import { APPROVAL_MODES, FALLBACK_MODELS, chatPosture, turnPostureLabel } from './posture'
 import { api } from '../api/client'
@@ -33,7 +32,6 @@ export function ChatPanel() {
   const { openIds, activeId, chats, summaries, newChat, openChat, closeChat } = useChat()
   const [history, setHistory] = useState(false)
   const [library, setLibrary] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
   const active = activeId ? chats[activeId] : undefined
   return (
     <div className="flex h-full min-h-0 flex-col bg-panel">
@@ -65,8 +63,6 @@ export function ChatPanel() {
         >
           <Library size={15} />
         </button>
-        <button className="icon-btn mb-1" title="Agent settings — Claude Code CLI, billing, defaults" onClick={() => setSettingsOpen(true)}><Settings size={15} /></button>
-        {settingsOpen && <AgentSettingsDialog onClose={() => setSettingsOpen(false)} />}
         <button
           className={clsx('icon-btn mb-1', history && 'bg-black/10 text-ink')}
           title={history ? 'Back to the conversation' : 'Chat history — every chat in this project'}

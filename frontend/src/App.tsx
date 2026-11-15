@@ -9,6 +9,7 @@ import { FolderPlus, PanelLeftOpen, Pin, Presentation, X } from 'lucide-react'
 import clsx from 'clsx'
 import { TopBar, NewProjectDialog } from './components/TopBar'
 import { FileTree } from './components/FileTree'
+import { MiddleEllipsis } from './components/MiddleEllipsis'
 import { Splitter } from './components/Splitter'
 import { ChatPanel } from './chat/ChatPanel'
 import { DeckView } from './deck/DeckView'
@@ -129,7 +130,7 @@ function DocTabs() {
           title={preview ? `${t}\nPreview — opening another file replaces this tab. Pin it (or double-click) to keep it open; it also stays once you or the agent change the file.` : t}
           data-preview={preview || undefined}
         >
-          <span className={clsx('truncate', preview && 'italic')}>{t.split('/').pop()}</span>
+          <MiddleEllipsis name={t.split('/').pop() ?? t} className={clsx(preview && 'italic')} />
           {/* A preview tab can be kept with one click — the next file then opens in a new tab. */}
           {preview && (
             <button

@@ -136,7 +136,7 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
       `/fast on|off` in the composer works too); **billing** (Claude subscription or API key).
     - Each pick applies to the chat and becomes the default for new chats. Every turn in the
       transcript notes the mode/model/effort it ran with.
-  - **Agent settings** (gear in the chat tabs): Claude Code CLI found/version/path and who it's
+  - **Agent settings** (Settings — the gear at the top right; its **About** tab shows the version): Claude Code CLI found/version/path and who it's
     signed in as (`claude auth status`), a custom CLI path, billing source and an optional
     Anthropic API key (stored in `~/.pdf-edit/credentials.json`), defaults for new chats, and a
     per-turn spend cap (`--max-budget-usd`).

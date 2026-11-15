@@ -1,17 +1,59 @@
 /**
- * Agent settings: which Claude Code CLI runs the agent and how it's signed in,
- * which billing source a turn uses, and the defaults new chats start with
- * (approval mode, model, effort, fast mode), plus a per-turn spend cap.
+ * Settings (the gear, top right). "Agent settings": which Claude Code CLI runs
+ * the agent and how it's signed in, which billing source a turn uses, the
+ * defaults new chats start with (approval mode, model, effort, fast mode),
+ * connectors, web access and a per-turn spend cap. "About": who made the app,
+ * its version and purpose.
  */
 
 import { useEffect, useState } from 'react'
-import { CheckCircle2, Loader2, RefreshCw, X, XCircle } from 'lucide-react'
+import { CheckCircle2, Loader2, Presentation, RefreshCw, X, XCircle } from 'lucide-react'
 import clsx from 'clsx'
 import { useAgent } from '../store/agentStore'
 import { APPROVAL_MODES, EFFORT_OPTIONS, FALLBACK_MODELS, fastSupported, modelLabel } from './posture'
 import type { ApprovalMode, Effort } from '../api/types'
+import { APP_VERSION } from '../version'
 
-export function AgentSettingsDialog({ onClose }: { onClose(): void }) {
+export function SettingsDialog({ onClose }: { onClose(): void }) {
+  const [tab, setTab] = useState<'agent' | 'about'>('agent')
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onMouseDown={onClose}>
+      <div className="max-h-[90vh] w-[560px] overflow-y-auto rounded-xl bg-white p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center gap-3">
+          <h2 className="text-base font-semibold">Settings</h2>
+          <div className="flex gap-1">
+            {(['agent', 'about'] as const).map((t) => (
+              <button
+                key={t}
+                className={clsx('rounded-md px-2.5 py-1 text-xs font-medium', tab === t ? 'bg-accent-soft text-accent' : 'text-ink-3 hover:bg-paper hover:text-ink')}
+                onClick={() => setTab(t)}
+              >
+                {t === 'agent' ? 'Agent settings' : 'About'}
+              </button>
+            ))}
+          </div>
+          <button className="ml-auto text-ink-3 hover:text-ink" onClick={onClose}><X size={16} /></button>
+        </div>
+        {tab === 'agent' ? <AgentSettings /> : <About />}
+      </div>
+    </div>
+  )
+}
+
+function About() {
+  return (
+    <div className="space-y-3 text-sm text-ink-2">
+      <div className="flex items-center gap-2 text-base font-semibold text-ink">
+        <Presentation size={20} className="text-accent" /> PPTX Edit <span className="text-sm font-normal text-ink-3">Version {APP_VERSION}</span>
+      </div>
+      <p>To enable efficient editing of PowerPoint / PPTX files, and related supporting content folders, with help of Claude Code.</p>
+      <p>Developed by Michael Antonov.</p>
+      <p className="text-xs text-ink-3">Provided as-is, with no warranty of any kind.</p>
+    </div>
+  )
+}
+
+function AgentSettings() {
   const { settings, status, statusLoading, models, refreshStatus, update, setApiKey } = useAgent()
   const [path, setPath] = useState(settings?.claudePath ?? '')
   const [key, setKey] = useState('')
@@ -25,13 +67,7 @@ export function AgentSettingsDialog({ onClose }: { onClose(): void }) {
   const loggedIn = !!status?.auth?.loggedIn
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30" onMouseDown={onClose}>
-      <div className="max-h-[90vh] w-[560px] overflow-y-auto rounded-xl bg-white p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="mb-4 flex items-center">
-          <h2 className="text-base font-semibold">Agent settings</h2>
-          <button className="ml-auto text-ink-3 hover:text-ink" onClick={onClose}><X size={16} /></button>
-        </div>
-
+    <>
         <Section title="Claude Code CLI" action={<button className="icon-btn" title="Re-check" onClick={() => void refreshStatus()}>{statusLoading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}</button>}>
           <Row ok={cliOk} label={cliOk ? `Found ${status?.cli.version ?? ''}` : status ? `Not found (\`${status.cli.command}\`)` : 'Checking…'} detail={status?.cli.path ?? undefined} />
           <Row
@@ -144,8 +180,7 @@ export function AgentSettingsDialog({ onClose }: { onClose(): void }) {
             <span className="text-ink-3">(API spend per turn; `--max-budget-usd`)</span>
           </div>
         </Section>
-      </div>
-    </div>
+    </>
   )
 }
 

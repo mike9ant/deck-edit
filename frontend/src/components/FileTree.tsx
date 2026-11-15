@@ -20,7 +20,8 @@ import clsx from 'clsx'
 import type { TreeNode } from '../api/types'
 import { docKind, useApp } from '../store/appStore'
 import { collectDropped, isOsFileDrag, uploadDropped } from './fileDrop'
-import { baseName, deletePaths, joinPath, movePaths, newFolder, parentOf, planMove, splitForMiddleEllipsis } from './fileOps'
+import { baseName, deletePaths, joinPath, movePaths, newFolder, parentOf, planMove } from './fileOps'
+import { MiddleEllipsis } from './MiddleEllipsis'
 
 const MOVE_TYPE = 'application/x-pdfedit-paths'
 /** A second click on the selected item between these delays renames it (a faster one is a double-click). */
@@ -315,17 +316,6 @@ export function FileTree() {
   )
 }
 
-/** A name shortened in the middle when the row is narrow: "Acme — Board Rev…raft_3.pptx". */
-function Name({ name }: { name: string }) {
-  const [head, tail] = splitForMiddleEllipsis(name)
-  return (
-    <span className="flex min-w-0">
-      <span className="truncate">{head}</span>
-      {tail && <span className="shrink-0 whitespace-pre">{tail}</span>}
-    </span>
-  )
-}
-
 function RenameBox({ node }: { node: TreeNode }) {
   const { finishRename } = useContext(TreeCtx)
   const [value, setValue] = useState(node.name)
@@ -393,7 +383,7 @@ function Row({ node, depth }: { node: TreeNode; depth: number }) {
         </span>
       )}
       <span className="shrink-0">{isDir ? <Folder size={14} className="text-sky-700" /> : icon(node.path)}</span>
-      {isEditing ? <RenameBox node={node} /> : <span data-name className="flex min-w-0"><Name name={node.name} /></span>}
+      {isEditing ? <RenameBox node={node} /> : <span data-name className="flex min-w-0"><MiddleEllipsis name={node.name} /></span>}
     </div>
   )
   if (!isDir) return row

@@ -1,16 +1,18 @@
 /** Header: app name, project picker (a project = a folder + its chats), new project. */
 
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, FolderOpen, FolderPlus, Presentation, Trash2 } from 'lucide-react'
+import { ChevronDown, FolderOpen, FolderPlus, Presentation, Settings, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
 import { useApp, currentProject } from '../store/appStore'
 import { api } from '../api/client'
+import { SettingsDialog } from '../chat/AgentSettings'
 
 export function TopBar() {
   const { projects, projectId, selectProject, loadProjects } = useApp()
   const project = currentProject()
   const [menu, setMenu] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [settings, setSettings] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -67,7 +69,9 @@ export function TopBar() {
           <FolderOpen size={13} /> <span className="truncate">{project.folder}</span>
         </button>
       )}
+      <button className="icon-btn ml-auto shrink-0" title="Settings — agent (Claude Code CLI, billing, defaults…) and About" onClick={() => setSettings(true)}><Settings size={16} /></button>
       {creating && <NewProjectDialog onClose={() => setCreating(false)} />}
+      {settings && <SettingsDialog onClose={() => setSettings(false)} />}
     </div>
   )
 }
