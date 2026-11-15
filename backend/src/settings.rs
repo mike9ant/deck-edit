@@ -50,6 +50,19 @@ pub struct AgentSettings {
     pub fast: bool,
     /// Hard cap on one turn's API spend (`--max-budget-usd`); None = no cap.
     pub max_budget_usd: Option<f64>,
+    /// Let the agent use the user's own MCP servers and claude.ai connectors
+    /// (Slack, …) as configured for Claude Code — not just the app's tools.
+    /// Their tools go through the approval hook like shell commands.
+    #[serde(default)]
+    pub user_mcp: bool,
+    /// Web search / page fetch: "allow" (as any tool), "ask" (an approval card
+    /// each time, in every mode) or "off" (the agent has no web tools).
+    #[serde(default = "default_web_access")]
+    pub web_access: String,
+}
+
+fn default_web_access() -> String {
+    "allow".into()
 }
 
 impl Default for AgentSettings {
@@ -62,6 +75,8 @@ impl Default for AgentSettings {
             default_effort: String::new(),
             fast: false,
             max_budget_usd: None,
+            user_mcp: false,
+            web_access: default_web_access(),
         }
     }
 }

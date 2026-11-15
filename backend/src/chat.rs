@@ -592,6 +592,17 @@ pub fn system_prompt(state: &AppState) -> String {
         .as_ref()
         .map(|b| format!("`{}/python3`", b.display()))
         .unwrap_or_else(|| "`python3`".into());
+    let agent_settings = state.settings.get();
+    let connectors = if agent_settings.user_mcp {
+        "\n- The user's own MCP servers and connectors (e.g. Slack, Google Drive) are available besides the app's tools. Use them when the user asks (e.g. to pull content from a Slack thread into a slide). Anything that sends, posts or changes something outside the project needs the user's approval unless they chose auto approve — never send messages on their behalf unless asked. (The user can turn this off in Agent settings → Your connectors.)"
+    } else {
+        "\n- Only the app's own tools are loaded — not the user's MCP servers / claude.ai connectors (Slack, Google Drive, Gmail, …). If a request needs one, tell the user they can turn on \"Use my MCP servers & connectors\" in Agent settings (gear icon in the chat tabs) → Your connectors; it applies from their next message."
+    };
+    let web = match agent_settings.web_access.as_str() {
+        "off" => "\n- Web access is turned off (no web search or page fetch). If a request needs the web, say so and mention they can allow it in Agent settings → Web access.",
+        "ask" => "\n- Web search and page fetches need the user's approval each time (Agent settings → Web access is \"Ask first\"); use them only when the request needs it.",
+        _ => "",
+    };
     format!(
         r#"You are the presentation agent inside **PPTX Edit**, a desktop-style app where the user and you take turns developing slide decks (PowerPoint .pptx, and PDF) in the project folder (your working directory).
 
@@ -608,7 +619,7 @@ Editing PowerPoint files:
 - Write scratch scripts to /tmp, not into the project folder.
 - The user's past Claude conversations (Claude Code CLI, the Claude desktop app's Code sessions, and Cowork) can be searched with the `deck` tools `search_conversations` and read with `read_conversation` (pass `query` to get just the relevant parts). When the user mentions an earlier conversation, a Cowork session, or text like `[Conversation: … — id cowork:…]`, use these instead of searching the disk yourself. Cowork output files are listed by `read_conversation`; ask before copying them into the project.
 - Speaker notes are shown and edited in the app under each slide. Read/write them with python-pptx (`slide.notes_slide.notes_text_frame.text`); keep the user's notes unless asked to change them.
-- Spreadsheets (.xlsx): read/write them with openpyxl (installed; same Python). The app shows them as a read-only preview. openpyxl doesn't calculate formulas — a formula you write shows as the formula in the preview (and gets its value when the user opens the file in Excel); for figures the user should see right away, also write the computed value somewhere or tell them.
+- Spreadsheets (.xlsx): read/write them with openpyxl (installed; same Python). The app shows them as a read-only preview. openpyxl doesn't calculate formulas — a formula you write shows as the formula in the preview (and gets its value when the user opens the file in Excel); for figures the user should see right away, also write the computed value somewhere or tell them.{connectors}{web}
 - The user may keep editing while you work. In decks, their edits are held and re-applied on top of your saved version after your turn (just save normally; they're reported to you next turn). Text/Markdown files may change between your reads: if an edit fails because the file changed, re-read it and apply your change to the current text — don't overwrite theirs.
 - Copying slides BETWEEN decks: the user can do it in the app (mini-slides ⌘C in one deck, ⌘V in the other — it re-creates the slide on the target's matching layout). If asked to do it yourself, add a slide on a matching layout of the target, copy the source shapes' XML into it, and copy every image they reference (with its relationship) — never modify the source deck.
 - For PDFs, pymupdf (`import fitz`) and pypdf are installed.
@@ -697,6 +708,8 @@ async fn run_turn(
         chat_id: &chat_id,
         token: &state.token,
         python_bin: state.python_bin.as_deref(),
+        user_mcp: settings.user_mcp,
+        web_access: &settings.web_access,
     };
     let result = tokio::select! {
         r = claude_cli::run(params, tx, slot.clone()) => Some(r),

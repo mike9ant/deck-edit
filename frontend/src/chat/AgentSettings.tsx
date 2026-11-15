@@ -108,6 +108,33 @@ export function AgentSettingsDialog({ onClose }: { onClose(): void }) {
           <p className="mt-2 text-[11px] text-ink-3">The composer’s chip changes these per chat; your last pick there also becomes the default.</p>
         </Section>
 
+        <Section title="Your connectors">
+          <label className="flex items-start gap-2 text-xs">
+            <input type="checkbox" className="mt-0.5" checked={!!settings.userMcp} onChange={(e) => void update({ userMcp: e.target.checked })} />
+            <span>
+              <span className="font-medium text-ink">Use my MCP servers &amp; connectors</span> (Slack, Google Drive, …) — the ones your
+              Claude Code has, besides the app’s own tools.
+              <span className="mt-1 block text-[11px] text-ink-3">
+                Their actions ask for approval like commands (in manual and accept-edits modes; allowed automatically in auto approve;
+                read-only in plan). claude.ai connectors need the Claude subscription login. Applies from the next message.
+              </span>
+            </span>
+          </label>
+        </Section>
+
+        <Section title="Web access">
+          <div className="flex gap-2">
+            {([
+              ['allow', 'Allow', 'web search and page fetches run like any tool'],
+              ['ask', 'Ask first', 'an approval card each time, in every mode'],
+              ['off', 'Off', 'the agent has no web tools'],
+            ] as const).map(([id, title, sub]) => (
+              <Choice key={id} active={(settings.webAccess ?? 'allow') === id} onClick={() => void update({ webAccess: id })} title={title} sub={sub} />
+            ))}
+          </div>
+          <p className="mt-2 text-[11px] text-ink-3">Applies from the next message.</p>
+        </Section>
+
         <Section title="Spend cap">
           <div className="flex items-center gap-2 text-xs">
             Stop a turn after

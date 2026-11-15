@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { FolderPlus, PanelLeftOpen, Presentation, X } from 'lucide-react'
+import { FolderPlus, PanelLeftOpen, Pin, Presentation, X } from 'lucide-react'
 import clsx from 'clsx'
 import { TopBar, NewProjectDialog } from './components/TopBar'
 import { FileTree } from './components/FileTree'
@@ -126,11 +126,21 @@ function DocTabs() {
           )}
           onClick={() => openFile(t)}
           onDoubleClick={() => projectId && keepTab(projectId, t)}
-          title={preview ? `${t}\nPreview — opening another file replaces this tab. It stays once you or the agent change the file, or double-click to keep it.` : t}
+          title={preview ? `${t}\nPreview — opening another file replaces this tab. Pin it (or double-click) to keep it open; it also stays once you or the agent change the file.` : t}
           data-preview={preview || undefined}
         >
           <span className={clsx('truncate', preview && 'italic')}>{t.split('/').pop()}</span>
-          <button className="hidden shrink-0 text-ink-3 hover:text-ink group-hover:block" onClick={(e) => { e.stopPropagation(); closeTab(t) }}><X size={12} /></button>
+          {/* A preview tab can be kept with one click — the next file then opens in a new tab. */}
+          {preview && (
+            <button
+              className={clsx('shrink-0 text-ink-3 hover:text-accent group-hover:block', t === activePath ? 'block' : 'hidden')}
+              title="Keep this tab open — the next file opens in a new tab"
+              onClick={(e) => { e.stopPropagation(); if (projectId) keepTab(projectId, t) }}
+            >
+              <Pin size={12} />
+            </button>
+          )}
+          <button className="hidden shrink-0 text-ink-3 hover:text-ink group-hover:block" title="Close" onClick={(e) => { e.stopPropagation(); closeTab(t) }}><X size={12} /></button>
         </div>
         )
       })}

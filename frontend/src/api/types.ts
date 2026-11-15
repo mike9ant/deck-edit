@@ -55,7 +55,7 @@ export type TurnEvent =
   | { kind: 'command'; command: string; exitCode: number; output: string }
   | { kind: 'fileEdited'; path: string }
   | { kind: 'todos'; items: { text: string; status: string }[] }
-  | { kind: 'permission'; requestId: string; tool: 'Bash' | 'Edit'; detail: string; description?: string; preview?: { old?: string; new?: string } | null }
+  | { kind: 'permission'; requestId: string; tool: 'Bash' | 'Edit' | 'Connector' | 'Web'; detail: string; description?: string; preview?: { old?: string; new?: string } | null }
   | { kind: 'permissionResolved'; requestId: string; decision: 'allow' | 'deny' }
   | { kind: 'notice'; text: string }
   | { kind: 'error'; text: string }
@@ -168,6 +168,10 @@ export interface AgentSettings {
   defaultEffort: Effort | ''
   fast: boolean
   maxBudgetUsd: number | null
+  /** The agent may also use the user's own MCP servers / claude.ai connectors (Slack, …). */
+  userMcp: boolean
+  /** Web search / page fetch: allowed, asked each time, or off. */
+  webAccess: 'allow' | 'ask' | 'off'
   apiKeyStored: boolean
   apiKeyAvailable: boolean
 }

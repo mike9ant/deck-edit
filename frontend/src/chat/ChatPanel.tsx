@@ -216,7 +216,7 @@ function ChatBody({ chat }: { chat: Chat }) {
           <TurnView key={t.id} chat={chat} turn={t} draft={drafts[t.id]} isLast={i === chat.turns.length - 1} />
         ))}
       </div>
-      <Composer chat={chat} />
+      <Composer key={chat.id} chat={chat} />
     </>
   )
 }
@@ -453,12 +453,24 @@ function EventView({ e, resolved, onAnswer, onOpen }: { e: TurnEvent; resolved: 
     case 'permission': {
       const d = resolved.get(e.requestId)
       const isEdit = e.tool === 'Edit'
+      const isConnector = e.tool === 'Connector'
+      const isWeb = e.tool === 'Web'
       return (
         <div className="rounded-lg border border-amber-300 bg-amber-50 p-2 text-xs">
           <div className="mb-1 font-medium text-amber-900">
-            {isEdit ? `${e.description === 'create' ? 'Create' : 'Edit'} ${e.detail}?` : `Run this command?${e.description ? ` — ${e.description}` : ''}`}
+            {isEdit ? `${e.description === 'create' ? 'Create' : 'Edit'} ${e.detail}?`
+              : isConnector ? `Use a connector: ${e.detail}?`
+                : isWeb ? (e.description === 'search the web' ? 'Search the web?' : 'Fetch this web page?')
+                : `Run this command?${e.description ? ` — ${e.description}` : ''}`}
           </div>
-          {isEdit ? (
+          {isConnector ? (
+            e.description && <pre className="mb-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-white p-1.5 text-[11px]">{e.description}</pre>
+          ) : isWeb ? (
+            <div className="mb-2 rounded bg-white p-1.5 text-[11px]">
+              <div className="break-all font-mono">{e.detail}</div>
+              {e.description && e.description !== 'search the web' && <div className="mt-1 text-ink-3">{e.description}</div>}
+            </div>
+          ) : isEdit ? (
             e.preview && (
               <div className="mb-2 max-h-48 overflow-auto rounded bg-white font-mono text-[11px]">
                 {e.preview.old !== undefined && e.preview.old !== '' && <pre className="whitespace-pre-wrap bg-red-50 p-1.5 text-red-900">{e.preview.old}</pre>}
@@ -474,7 +486,7 @@ function EventView({ e, resolved, onAnswer, onOpen }: { e: TurnEvent; resolved: 
             <div className="flex flex-wrap gap-1.5">
               <button className="btn-primary" onClick={() => void onAnswer(e.requestId, 'allow')}>Allow</button>
               <button className="btn-ghost border border-hair bg-white" onClick={() => void onAnswer(e.requestId, 'allowAlways')}>
-                Always allow {isEdit ? 'edits' : 'commands'} in this chat
+                Always allow {isEdit ? 'edits' : isConnector ? `${e.detail.split(' · ')[0]}` : isWeb ? 'web access' : 'commands'} in this chat
               </button>
               <button className="btn-ghost text-red-700" onClick={() => void onAnswer(e.requestId, 'deny')}>Deny</button>
             </div>
@@ -493,6 +505,14 @@ function EventView({ e, resolved, onAnswer, onOpen }: { e: TurnEvent; resolved: 
   }
 }
 
+/**
+ * Unsent drafts, per chat: kept while the composer is hidden (the Claude
+ * conversations or chat-history panel replaces it) and across chat tabs. The
+ * text also survives a reload (localStorage); pasted images live in memory.
+ */
+const composerDrafts = new Map<string, { text: string; images: PendingImage[] }>()
+const draftKey = (chatId: string) => `pdfedit-draft-${chatId}`
+
 function Composer({ chat }: { chat: Chat }) {
   const { send, stop, update, setMode } = useChat()
   const runningModes = useChat((s) => s.runningModes)
@@ -503,9 +523,15 @@ function Composer({ chat }: { chat: Chat }) {
   // Re-render when edits are made so the "edits will be shared" hint stays current.
   useDecks((s) => s.sessions)
   usePdfs((s) => s.sessions)
-  const [text, setText] = useState('')
+  const [text, setText] = useState(() => composerDrafts.get(chat.id)?.text ?? localStorage.getItem(draftKey(chat.id)) ?? '')
   const [showNotes, setShowNotes] = useState(false)
-  const [images, setImages] = useState<PendingImage[]>([])
+  const [images, setImages] = useState<PendingImage[]>(() => composerDrafts.get(chat.id)?.images ?? [])
+  useEffect(() => {
+    if (text || images.length) composerDrafts.set(chat.id, { text, images })
+    else composerDrafts.delete(chat.id)
+    if (text) localStorage.setItem(draftKey(chat.id), text)
+    else localStorage.removeItem(draftKey(chat.id))
+  }, [chat.id, text, images])
   const [imageNote, setImageNote] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)

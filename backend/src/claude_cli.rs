@@ -42,6 +42,21 @@ const ALLOWED_TOOLS: &[&str] = &[
 ];
 
 pub const GATED_TOOLS: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash";
+const WEB_TOOLS: [&str; 2] = ["WebSearch", "WebFetch"];
+
+/// Tools that go through the approval hook: edits and commands always; every
+/// MCP tool when the user's own servers/connectors are loaded (the app's own
+/// `mcp__deck__*` tools are let through by the hook); web tools on "ask".
+pub fn gated_tools(user_mcp: bool, web_access: &str) -> String {
+    let mut m = GATED_TOOLS.to_string();
+    if user_mcp {
+        m.push_str("|mcp__.*");
+    }
+    if web_access == "ask" {
+        m.push_str("|WebSearch|WebFetch");
+    }
+    m
+}
 
 pub struct TurnParams<'a> {
     /// The `claude` command (Settings → Claude Code CLI path).
@@ -70,6 +85,10 @@ pub struct TurnParams<'a> {
     pub chat_id: &'a str,
     pub token: &'a str,
     pub python_bin: Option<&'a Path>,
+    /// Load the user's own MCP servers / claude.ai connectors too (Settings).
+    pub user_mcp: bool,
+    /// "allow" | "ask" | "off" (Settings).
+    pub web_access: &'a str,
 }
 
 /// Token counts the CLI reports for a turn (from the final `result` line).
@@ -93,7 +112,7 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-fn settings_json(port: u16, chat_id: &str, token: &str, fast: bool) -> String {
+fn settings_json(port: u16, chat_id: &str, token: &str, fast: bool, matcher: &str) -> String {
     let url = format!("http://127.0.0.1:{port}/api/agent/hook?chat={chat_id}");
     let header = shell_quote(&format!("X-PdfEdit-Token: {token}"));
     let command = format!(
@@ -104,7 +123,7 @@ fn settings_json(port: u16, chat_id: &str, token: &str, fast: bool) -> String {
     let mut settings = json!({
         "hooks": {
             "PreToolUse": [{
-                "matcher": GATED_TOOLS,
+                "matcher": matcher,
                 "hooks": [{ "type": "command", "command": command, "timeout": HOOK_TIMEOUT_SECS }]
             }]
         }
@@ -143,15 +162,22 @@ pub fn build_command(p: &TurnParams<'_>) -> tokio::process::Command {
         .args(["--setting-sources", "user"])
         .args(["--append-system-prompt", p.system_prompt])
         .arg("--allowedTools")
-        .args(ALLOWED_TOOLS)
+        // Web tools are pre-approved only on "allow" ("ask" routes them through the hook).
+        .args(ALLOWED_TOOLS.iter().filter(|t| p.web_access == "allow" || !WEB_TOOLS.contains(t)))
         .args(["--mcp-config", &mcp_config(p.port, p.chat_id, p.token)])
-        .arg("--strict-mcp-config")
-        .args(["--settings", &settings_json(p.port, p.chat_id, p.token, p.fast)])
+        .args(["--settings", &settings_json(p.port, p.chat_id, p.token, p.fast, &gated_tools(p.user_mcp, p.web_access))])
         .stdin(if p.images.is_empty() { Stdio::null() } else { Stdio::piped() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("MCP_TOOL_TIMEOUT", "120000")
         .kill_on_drop(true);
+    // Only the app's own tools, unless the user opted into their MCP servers / connectors.
+    if !p.user_mcp {
+        cmd.arg("--strict-mcp-config");
+    }
+    if p.web_access == "off" {
+        cmd.arg("--disallowedTools").args(WEB_TOOLS);
+    }
     if let Some(id) = p.resume {
         cmd.args(["--resume", id]);
     }
@@ -583,10 +609,45 @@ mod tests {
 
     #[test]
     fn hook_command_quotes_token() {
-        let s: Value = serde_json::from_str(&settings_json(3101, "c1", "tok'en", true)).unwrap();
+        let s: Value = serde_json::from_str(&settings_json(3101, "c1", "tok'en", true, GATED_TOOLS)).unwrap();
         assert_eq!(s["fastMode"], true);
+        assert_eq!(s["hooks"]["PreToolUse"][0]["matcher"], GATED_TOOLS);
         let cmd = s["hooks"]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap();
         assert!(cmd.contains("X-PdfEdit-Token: tok'\\''en"));
         assert!(cmd.contains("/api/agent/hook?chat=c1"));
+    }
+
+    #[test]
+    fn user_connectors_are_opt_in() {
+        let params = |user_mcp| TurnParams {
+            claude_bin: "claude", root: Path::new("/tmp"), prompt: "hi", images: &[], system_prompt: "", resume: None,
+            model: None, effort: None, fast: false, plan: false, api_key: None, max_budget_usd: None, port: 3101,
+            chat_id: "c1", token: "t", python_bin: None, user_mcp, web_access: "allow",
+        };
+        let args = |user_mcp| build_command(&params(user_mcp)).as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert!(args(false).contains(&"--strict-mcp-config".to_string()));
+        assert!(!args(true).contains(&"--strict-mcp-config".to_string()));
+        // With connectors on, their tools go through the approval hook too.
+        assert_eq!(gated_tools(true, "allow"), "Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__.*");
+    }
+
+    #[test]
+    fn web_access_setting() {
+        let args = |web: &'static str| {
+            let p = TurnParams {
+                claude_bin: "claude", root: Path::new("/tmp"), prompt: "hi", images: &[], system_prompt: "", resume: None,
+                model: None, effort: None, fast: false, plan: false, api_key: None, max_budget_usd: None, port: 3101,
+                chat_id: "c1", token: "t", python_bin: None, user_mcp: false, web_access: web,
+            };
+            build_command(&p).as_std().get_args().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>()
+        };
+        let allowed = |a: &[String]| a.iter().any(|x| x == "WebSearch") && !a.iter().any(|x| x == "--disallowedTools");
+        assert!(allowed(&args("allow")));
+        let ask = args("ask");
+        assert!(!ask.iter().any(|x| x == "WebSearch")); // not pre-approved…
+        assert!(gated_tools(false, "ask").ends_with("|WebSearch|WebFetch")); // …asked through the hook
+        let off = args("off");
+        let i = off.iter().position(|x| x == "--disallowedTools").unwrap();
+        assert_eq!(&off[i + 1..i + 3], &["WebSearch".to_string(), "WebFetch".to_string()]);
     }
 }

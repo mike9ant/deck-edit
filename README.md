@@ -140,6 +140,14 @@ App data (projects, chats, notes, per-turn backups) lives in `~/.pdf-edit/`
     signed in as (`claude auth status`), a custom CLI path, billing source and an optional
     Anthropic API key (stored in `~/.pdf-edit/credentials.json`), defaults for new chats, and a
     per-turn spend cap (`--max-budget-usd`).
+  - **Your connectors** (Agent settings, off by default): let the agent use your own MCP servers and
+    claude.ai connectors (Slack, Google Drive, Gmail, …) as Claude Code has them, not just the app's
+    tools. Their actions show an approval card ("Use a connector: Slack · …") in manual and
+    accept-edits modes, run automatically in auto approve, and are read-only in plan mode; "Always
+    allow" is per connector, per chat. claude.ai connectors need the Claude subscription login.
+  - **Web access** (Agent settings): *Allow* (default), *Ask first* (an approval card before each web
+    search or page fetch, in every mode) or *Off* (no web tools). The agent is told about both
+    settings, so it can point you to them when a request needs Slack or the web.
   - Every turn starts with a backup of the folder. The files it changed are listed under
     the turn with **Revert** (and **Undo revert**).
   - The agent can screenshot a slide exactly as the app renders it (`screenshot_slide`)

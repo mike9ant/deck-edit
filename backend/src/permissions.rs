@@ -190,7 +190,8 @@ async fn hook(
         Json(decision(false, reason)).into_response()
     };
 
-    let (bucket, detail, description, preview) = match tool.as_str() {
+    // (always-allow bucket, card kind, detail, description, preview)
+    let (bucket, kind, detail, description, preview): (String, &str, String, String, Option<Value>) = match tool.as_str() {
         "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => {
             let target = input
                 .get("file_path")
@@ -227,7 +228,7 @@ async fn hook(
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or(target.clone());
             let description = if tool == "Write" && !resolve(&root, &target).exists() { "create" } else { "edit" };
-            ("Edit", rel, description.to_string(), edit_preview(&tool, &input))
+            ("Edit".into(), "Edit", rel, description.to_string(), edit_preview(&tool, &input))
         }
         "Bash" => {
             // Plan mode defers commands to the CLI's own read-only classifier.
@@ -239,7 +240,38 @@ async fn hook(
             }
             let command = input.get("command").and_then(|c| c.as_str()).unwrap_or("").to_string();
             let description = input.get("description").and_then(|c| c.as_str()).unwrap_or("").to_string();
-            ("Bash", command, description, None)
+            ("Bash".into(), "Bash", command, description, None)
+        }
+        // Web tools reach the hook only when Agent settings → Web access is "Ask first" — asked in every mode.
+        "WebSearch" | "WebFetch" => {
+            if state.settings.get().web_access != "ask" || always("Web") {
+                return Json(decision(true, "web access allowed")).into_response();
+            }
+            let s = |k: &str| input.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let (detail, description) = if tool == "WebSearch" { (s("query"), "search the web".to_string()) } else { (s("url"), s("prompt")) };
+            ("Web".to_string(), "Web", detail, description, None)
+        }
+        // The app's own tools (notes, view, screenshots).
+        t if t.starts_with("mcp__deck__") => return Json(decision(true, "app tool")).into_response(),
+        // The user's own MCP servers / connectors (only loaded when enabled in Settings).
+        t if t.starts_with("mcp__") => {
+            if mode == "plan" {
+                return Json(json!({})).into_response(); // the CLI's plan mode decides (read-only tools only)
+            }
+            let mut parts = t.splitn(3, "__").skip(1);
+            let server = parts.next().unwrap_or("").to_string();
+            let action = parts.next().unwrap_or("").to_string();
+            let bucket = format!("mcp:{server}");
+            if mode == "auto" || always(&bucket) {
+                return Json(decision(true, "auto-approved")).into_response();
+            }
+            let args = serde_json::to_string_pretty(&input).unwrap_or_default();
+            let args: String = if args.chars().count() > 600 { format!("{}…", args.chars().take(600).collect::<String>()) } else { args };
+            // "claude_ai_Slack" / "slack_add_reaction" → "Slack · add reaction"
+            let pretty_server = server.trim_start_matches("claude_ai_").replace('_', " ");
+            let lower = pretty_server.to_lowercase().replace(' ', "_");
+            let pretty_action = action.strip_prefix(&format!("{lower}_")).unwrap_or(&action).replace('_', " ");
+            (bucket, "Connector", format!("{pretty_server} · {pretty_action}"), args, None)
         }
         _ => return Json(decision(true, "not gated")).into_response(),
     };
@@ -257,7 +289,7 @@ async fn hook(
         json!({
             "kind": "permission",
             "requestId": request_id,
-            "tool": bucket,
+            "tool": kind,
             "detail": detail,
             "description": description,
             "preview": preview,
@@ -271,7 +303,7 @@ async fn hook(
         }
     };
     if d == "allowAlways" {
-        state.perms.always.lock().unwrap().entry(q.chat.clone()).or_default().insert(bucket.to_string());
+        state.perms.always.lock().unwrap().entry(q.chat.clone()).or_default().insert(bucket.clone());
     }
     let allow = d == "allow" || d == "allowAlways";
     crate::chat::emit(
