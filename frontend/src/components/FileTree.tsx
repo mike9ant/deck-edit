@@ -22,6 +22,7 @@ import { docKind, useApp } from '../store/appStore'
 import { collectDropped, isOsFileDrag, uploadDropped } from './fileDrop'
 import { baseName, deletePaths, joinPath, movePaths, newFolder, parentOf, planMove } from './fileOps'
 import { MiddleEllipsis } from './MiddleEllipsis'
+import { NoteCountBadge } from '../notes/NoteCountBadge'
 
 const MOVE_TYPE = 'application/x-pdfedit-paths'
 /** A second click on the selected item between these delays renames it (a faster one is a double-click). */
@@ -384,6 +385,7 @@ function Row({ node, depth }: { node: TreeNode; depth: number }) {
       )}
       <span className="shrink-0">{isDir ? <Folder size={14} className="text-sky-700" /> : icon(node.path)}</span>
       {isEditing ? <RenameBox node={node} /> : <span data-name className="flex min-w-0"><MiddleEllipsis name={node.name} /></span>}
+      {!isDir && !isEditing && <NoteCountBadge path={node.path} />}
     </div>
   )
   if (!isDir) return row

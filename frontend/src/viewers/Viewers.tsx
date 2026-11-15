@@ -16,7 +16,7 @@ import { useChat } from '../store/chatStore'
 import { useApp } from '../store/appStore'
 import { CodeEditor, useTextDoc, type SaveStatus, type TextSelection } from './TextEditor'
 import { TextNoteTools } from '../notes/TextNotes'
-import { notesForSlide, useNotes } from '../store/notesStore'
+import { notesForSlide, useNotes, noteNumber } from '../store/notesStore'
 import { NotePins, actNowPrompt, type NoteDraft } from '../notes/NotePins'
 import { DrawLayer, NoteToolButton, SelectToolButton, pinFor, useEscapeEndsNoteMode } from '../notes/NoteDrawing'
 import { sendToAgent } from '../chat/sendToAgent'
@@ -64,7 +64,9 @@ function TextDoc({ pid, path, mode, tools }: { pid: string; path: string; mode: 
   const changed = useApp((s) => s.changed.includes(path))
   const [selection, setSelection] = useState<TextSelection | null>(null)
   const allNotes = useNotes((s) => s.notes)
-  const marks = allNotes.filter((n) => n.deck === path && n.quote && n.status === 'open').map((n) => ({ quote: n.quote!, line: n.slideIndex }))
+  const marks = allNotes
+    .filter((n) => n.deck === path && n.quote && n.status === 'open')
+    .map((n) => ({ id: n.id, quote: n.quote!, line: n.slideIndex, label: String(noteNumber(n, allNotes)), title: n.text }))
   const revealRef = useRef<((quote: string, line?: number) => void) | null>(null)
   const reveal = (quote: string, line?: number) => {
     if (mode === 'edit') return revealRef.current?.(quote, line)

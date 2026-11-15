@@ -35,6 +35,8 @@ import { useApp } from '../store/appStore'
 import { rebase } from './textMerge'
 import { findQuote, type QuoteMark, type TextSelection } from './TextEditor'
 import { domRangeOf } from './textRanges'
+import { useNotes } from '../store/notesStore'
+import { NotePopover } from '../notes/NotePins'
 
 import {
   applyRunEdits, deleteLineAt, insertLineAfter, lineStartOf, listItemContentStart, mapPos, nextListMarker, tableCellArea,
@@ -706,6 +708,38 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [marksKey, generation, source])
 
+  // Each open note's number in the right margin, level with its text (kept placed as the text reflows).
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const [badges, setBadges] = useState<{ key: string; id?: string; top: number; left: number; label: string; title: string; quote: string }[]>([])
+  const [openBadge, setOpenBadge] = useState<{ key: string; at: DOMRect } | null>(null)
+  const allNotes = useNotes((s) => s.notes)
+  useEffect(() => {
+    const wrap = wrapRef.current
+    const art = articleRef.current
+    if (!wrap || !art) return
+    const place = () => {
+      const wr = wrap.getBoundingClientRect()
+      const ar = art.getBoundingClientRect()
+      const placed: { key: string; id?: string; top: number; left: number; label: string; title: string; quote: string }[] = []
+      marks.forEach((m, i) => {
+        const r = domRangeOf(art, m.quote) ?? domRangeOf(art, m.quote.split('\n').map((l) => l.trim()).find(Boolean) ?? '')
+        const rect = r?.getClientRects()[0]
+        if (!rect) return
+        const top = rect.top - wr.top + (rect.height - 16) / 2
+        // Notes on the same line sit side by side.
+        const beside = placed.filter((b) => Math.abs(b.top - top) < 8).length
+        placed.push({ key: `${i}:${m.quote}`, id: m.id, top, left: ar.right - wr.left - 26 - beside * 22, label: m.label ?? String(i + 1), title: m.title ?? '', quote: m.quote })
+      })
+      setBadges(placed)
+    }
+    place()
+    const ro = new ResizeObserver(place)
+    ro.observe(art)
+    ro.observe(wrap)
+    return () => ro.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [marksKey, generation, source])
+
   // Rendered once per source/generation, so React never touches a block while it's being typed in.
   const content = useMemo(
     () => <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSourceText]} components={components}>{source}</ReactMarkdown>,
@@ -733,6 +767,24 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
         )}
       </div>
     )}
+    <div ref={wrapRef} className="relative">
+    {badges.map((b) => {
+      const note = b.id ? allNotes.find((n) => n.id === b.id) : undefined
+      return (
+        <div key={b.key} className="absolute z-20" style={{ top: b.top, left: b.left }}>
+          <span
+            className="md-note-badge"
+            style={{ top: 0, left: 0 }}
+            title={`${b.title}\n(click to open the note)`}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => setOpenBadge(openBadge?.key === b.key ? null : { key: b.key, at: e.currentTarget.getBoundingClientRect() })}
+          >
+            {b.label}
+          </span>
+          {openBadge?.key === b.key && note && <NotePopover note={note} anchor={openBadge.at} onClose={() => setOpenBadge(null)} flipX flipY={false} />}
+        </div>
+      )
+    })}
     <article
       ref={articleRef}
       key={generation}
@@ -795,6 +847,7 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
     >
       {content}
     </article>
+    </div>
     </>
   )
 }

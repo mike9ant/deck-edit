@@ -5,18 +5,22 @@
  * After a turn, the files it changed are listed with a one-click Revert.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
-  AlertTriangle, Check, ChevronDown, ChevronRight, CircleDot, FileEdit, History, Loader2, MessageSquare, SquarePlus, Trash2,
+  AlertTriangle, BotMessageSquare, Check, ChevronDown, ChevronRight, CircleDot, FileEdit, History, Loader2, MessageSquare, SquarePlus, Trash2,
   Plus, RotateCcw, Send, Square, Terminal, Wrench, X, StickyNote, Pencil, Play, ImagePlus, Library,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { askConfirm } from '../components/confirmDialog'
+import { QuoteNoteBox } from '../notes/TextNotes'
+import { NotePopover, actNowPrompt } from '../notes/NotePins'
+import { setQuoteHighlight } from '../notes/quoteHighlight'
+import { domRangeOf } from '../viewers/textRanges'
 import { useChat } from '../store/chatStore'
 import { useApp } from '../store/appStore'
-import { useNotes } from '../store/notesStore'
+import { notePlaceLabel, noteNumber, notesForChat, useNotes } from '../store/notesStore'
 import { useAgent } from '../store/agentStore'
 import { useDecks } from '../deck/deckStore'
 import { usePdfs } from '../pdf/pdfStore'
@@ -202,7 +206,7 @@ function ChatBody({ chat }: { chat: Chat }) {
     <>
       <div
         ref={scroller}
-        className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
+        className="relative min-h-0 flex-1 overflow-y-auto px-3 py-3"
         onScroll={(e) => {
           const el = e.currentTarget
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60
@@ -212,9 +216,182 @@ function ChatBody({ chat }: { chat: Chat }) {
         {chat.turns.map((t, i) => (
           <TurnView key={t.id} chat={chat} turn={t} draft={drafts[t.id]} isLast={i === chat.turns.length - 1} />
         ))}
+        <ChatNoteBadges chat={chat} scroller={scroller} />
       </div>
+      <ChatQuoteNotes chat={chat} scroller={scroller} />
       <Composer key={chat.id} chat={chat} />
     </>
+  )
+}
+
+/**
+ * Notes for the agent on selected text in the conversation: select part of a
+ * message → "Note for AI" next to the selection → pin it (the agent sees it
+ * with the next message — this chat's agent only) or act on it right away.
+ * Open notes are highlighted in the messages, with a badge to open each (ChatNoteBadges);
+ * the composer's notes list shows them with the project's other open notes.
+ */
+function ChatQuoteNotes({ chat, scroller }: { chat: Chat; scroller: RefObject<HTMLDivElement | null> }) {
+  const allNotes = useNotes((s) => s.notes)
+  const openNotes = allNotes.filter((n) => n.target === 'chat' && n.slideId === chat.id && n.status === 'open')
+  const [sel, setSel] = useState<{ quote: string; left: number; top: number } | null>(null)
+  const [draft, setDraft] = useState<{ quote: string; left: number; top: number } | null>(null)
+
+  useEffect(() => {
+    const el = scroller.current
+    // The button appears once the selection settles (mouse released, or keyboard). Shown mid-drag,
+    // it would sit under the pointer, and the selection would jump to it — past the whole chat.
+    let dragging = false
+    const update = () => {
+      if (dragging) return
+      const s = window.getSelection()
+      const quote = s && !s.isCollapsed && el?.contains(s.anchorNode) && el.contains(s.focusNode) ? s.toString().trim() : ''
+      if (!quote || !s) return setSel(null)
+      const rects = s.getRangeAt(0).getClientRects()
+      const end = rects[rects.length - 1] ?? s.getRangeAt(0).getBoundingClientRect()
+      const box = el!.getBoundingClientRect()
+      if (end.bottom < box.top || end.top > box.bottom) return setSel(null) // scrolled out of view
+      setSel({ quote, left: Math.min(Math.max(end.right - 50, box.left + 4), window.innerWidth - 120), top: Math.min(end.bottom + 6, box.bottom - 30) })
+    }
+    const down = (e: PointerEvent) => {
+      if (e.button !== 0 || (e.target as Element | null)?.closest?.('[data-chat-selbtn]')) return
+      dragging = true
+      setSel(null)
+    }
+    const up = () => {
+      if (!dragging) return
+      dragging = false
+      requestAnimationFrame(update)
+    }
+    document.addEventListener('selectionchange', update)
+    document.addEventListener('pointerdown', down)
+    document.addEventListener('pointerup', up)
+    el?.addEventListener('scroll', update)
+    return () => {
+      document.removeEventListener('selectionchange', update)
+      document.removeEventListener('pointerdown', down)
+      document.removeEventListener('pointerup', up)
+      el?.removeEventListener('scroll', update)
+    }
+  }, [scroller])
+
+  const quotesKey = openNotes.map((n) => n.quote).join('\u0000')
+  useEffect(() => setQuoteHighlight('chat-note-quote', scroller.current, openNotes.map((n) => n.quote ?? ''), true), [quotesKey, chat.turns, scroller]) // eslint-disable-line react-hooks/exhaustive-deps
+
+
+  return (
+    <>
+      {sel && !draft && (
+        <button
+          data-chat-selbtn
+          className="fixed z-50 flex items-center gap-1 rounded-md border border-hair bg-white px-2 py-1 text-xs text-ink-2 shadow-lg hover:bg-paper hover:text-ink"
+          style={{ left: sel.left, top: sel.top }}
+          title="Add a note for the AI agent about the selected text"
+          onMouseDown={(e) => e.preventDefault() /* keep the selection */}
+          onClick={() => { setDraft(sel); setSel(null) }}
+        >
+          <BotMessageSquare size={13} /> Note for AI
+        </button>
+      )}
+      {draft && (
+        <QuoteNoteBox
+          fixed={{ left: Math.max(8, Math.min(draft.left - 160, window.innerWidth - 330)), top: Math.max(8, Math.min(draft.top, window.innerHeight - 270)) }}
+          heading="Note for the agent · on this part of the chat"
+          quote={draft.quote}
+          placeholder="e.g. use this wording on slide 4, expand on this point"
+          onPin={(text) => useNotes.getState().add({ deck: '', slideId: chat.id, slideIndex: 0, x: 0, y: 0, quote: draft.quote, target: 'chat', text })}
+          actNow={(n) => actNowPrompt(n, 'chat')}
+          onClose={() => setDraft(null)}
+        />
+      )}
+    </>
+  )
+}
+
+/**
+ * Each open note's number just above the end of the text it's about, scrolling
+ * with the messages; click it for the note's card (edit, resolve, delete).
+ * Re-placed whenever the conversation's content or layout changes (a message
+ * streams in, a tool group opens, the panel is resized…), not just when turns change.
+ */
+function ChatNoteBadges({ chat, scroller }: { chat: Chat; scroller: RefObject<HTMLDivElement | null> }) {
+  const all = useNotes((s) => s.notes)
+  const notes = all.filter((n) => n.target === 'chat' && n.slideId === chat.id && n.status === 'open')
+  const key = notes.map((n) => `${n.id}:${n.quote}`).join('\u0000')
+  type Badge = { id: string; label: string; title: string; quote: string; top: number; left: number }
+  const [badges, setBadges] = useState<Badge[]>([])
+  const [open, setOpen] = useState<{ id: string; at: DOMRect } | null>(null)
+  const notesRef = useRef(notes)
+  notesRef.current = notes
+  useEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    let frame = 0
+    let last = ''
+    const place = () => {
+      frame = 0
+      const box = el.getBoundingClientRect()
+      const next: Badge[] = notesRef.current.flatMap((n) => {
+        const q = n.quote ?? ''
+        const r = domRangeOf(el, q, true) ?? domRangeOf(el, q.split('\n').map((l) => l.trim()).find(Boolean) ?? '', true)
+        const rects = r ? [...r.getClientRects()].filter((x) => x.width > 0) : []
+        const end = rects[rects.length - 1]
+        if (!end) return []
+        return [{
+          id: n.id, label: String(noteNumber(n, useNotes.getState().notes)), title: n.text, quote: q,
+          top: Math.round(end.top - box.top + el.scrollTop - 12),
+          left: Math.round(Math.min(end.right - box.left + el.scrollLeft - 4, el.clientWidth - 22)),
+        }]
+      })
+      const sig = JSON.stringify(next)
+      if (sig !== last) {
+        last = sig
+        setBadges(next)
+      }
+    }
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(place) }
+    place()
+    const ro = new ResizeObserver(schedule)
+    ro.observe(el)
+    for (const c of el.children) ro.observe(c)
+    // Content changes (streaming text, opened groups, new turns) — but not the badges' own updates.
+    const mo = new MutationObserver((records) => {
+      if (records.every((r) => (r.target as Element).closest?.('[data-chat-badges]') ?? r.target.parentElement?.closest('[data-chat-badges]'))) return
+      for (const c of el.children) ro.observe(c)
+      schedule()
+    })
+    mo.observe(el, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['open', 'class', 'style'] })
+    // And whenever the view moves — a layout shift nothing above reported is fixed by the next scroll.
+    el.addEventListener('scroll', schedule, { passive: true })
+    window.addEventListener('resize', schedule)
+    return () => {
+      ro.disconnect()
+      mo.disconnect()
+      el.removeEventListener('scroll', schedule)
+      window.removeEventListener('resize', schedule)
+      if (frame) cancelAnimationFrame(frame)
+    }
+  }, [key, scroller])
+  return (
+    <div data-chat-badges>
+      {badges.map((b) => {
+        const note = all.find((n) => n.id === b.id)
+        return (
+          <div key={b.id} className="absolute z-20" style={{ top: b.top, left: b.left }}>
+            <span
+              className="md-note-badge"
+              style={{ top: 0, left: 0 }}
+              title={`${b.title}\n(click to open the note)`}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) => setOpen(open?.id === b.id ? null : { id: b.id, at: e.currentTarget.getBoundingClientRect() })}
+            >
+              {b.label}
+            </span>
+            {open?.id === b.id && note && <NotePopover note={note} anchor={open.at} onClose={() => setOpen(null)} flipX flipY={false} />}
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -518,7 +695,7 @@ function Composer({ chat }: { chat: Chat }) {
   const { settings, models, update: updateDefaults } = useAgent()
   const pid = useApp((s) => s.projectId)
   const activePath = useApp((s) => s.activePath)
-  const notes = useNotes((s) => s.notes)
+  const notes = notesForChat(useNotes((s) => s.notes), chat.id)
   // Re-render when edits are made so the "edits will be shared" hint stays current.
   useDecks((s) => s.sessions)
   usePdfs((s) => s.sessions)
@@ -647,7 +824,7 @@ function Composer({ chat }: { chat: Chat }) {
           )}
         </div>
       )}
-      {showNotes && <NotesList onPick={() => setShowNotes(false)} />}
+      {showNotes && <NotesList chatId={chat.id} onPick={() => setShowNotes(false)} />}
       {images.length > 0 && (
         <div className="mb-1.5 flex flex-wrap gap-1.5">
           {images.map((img) => (
@@ -726,34 +903,60 @@ function Composer({ chat }: { chat: Chat }) {
   )
 }
 
-function NotesList({ onPick }: { onPick(): void }) {
-  const notes = useNotes((s) => s.notes).filter((n) => n.status === 'open')
+/**
+ * The open notes shared with this chat's agent. Each shows its number (the same as on its pin or
+ * badge), where it is, and — for a note on chat text — the start of the selection; click to go
+ * there, or delete it.
+ */
+function NotesList({ chatId, onPick }: { chatId: string; onPick(): void }) {
+  const all = useNotes((s) => s.notes)
+  const remove = useNotes((s) => s.remove)
+  const notes = notesForChat(all, chatId).filter((n) => n.status === 'open')
   const openFile = useApp((s) => s.openFile)
   const pid = useApp((s) => s.projectId)
+  const words = (t: string, n = 6) => {
+    const w = t.replace(/\s+/g, ' ').trim().split(' ')
+    return w.length > n ? `${w.slice(0, n).join(' ')}…` : w.join(' ')
+  }
+  const go = (n: (typeof notes)[number]) => {
+    onPick()
+    if (n.target === 'chat') return // on this chat's messages: its badge is in the conversation
+    openFile(n.deck)
+    if (!pid) return
+    // Jump to the note's slide / page once the file is open.
+    setTimeout(() => {
+      const s = useDecks.getState().sessions[`${pid}:${n.deck}`]
+      const i = s?.pres?.slides.findIndex((sl) => s.sldIds.get(sl.id) === n.slideId) ?? -1
+      if (s && i >= 0) useDecks.getState().setSlide(s.key, i)
+      else if (s) useDecks.getState().setSlide(s.key, n.slideIndex - 1)
+      else usePdfs.getState().setPage(`${pid}:${n.deck}`, n.slideIndex - 1)
+    }, 300)
+  }
   return (
-    <div className="mb-1.5 max-h-40 overflow-y-auto rounded border border-hair bg-paper p-1 text-xs">
+    <div className="mb-1.5 max-h-48 overflow-y-auto rounded border border-hair bg-paper p-1 text-xs">
       {notes.map((n) => (
-        <button
-          key={n.id}
-          className="flex w-full items-start gap-1.5 rounded px-1.5 py-1 text-left hover:bg-white"
-          onClick={() => {
-            openFile(n.deck)
-            if (pid) {
-              // Jump to the note's slide once the deck is open.
-              setTimeout(() => {
-                const s = useDecks.getState().sessions[`${pid}:${n.deck}`]
-                const i = s?.pres?.slides.findIndex((sl) => s.sldIds.get(sl.id) === n.slideId) ?? -1
-                if (s && i >= 0) useDecks.getState().setSlide(s.key, i)
-                else if (s) useDecks.getState().setSlide(s.key, n.slideIndex - 1)
-                else usePdfs.getState().setPage(`${pid}:${n.deck}`, n.slideIndex - 1)
-              }, 300)
-            }
-            onPick()
-          }}
-        >
-          <span className={clsx('shrink-0 rounded px-1 font-medium', n.author === 'agent' ? 'bg-violet-100 text-violet-800' : 'bg-note text-amber-950')}>{n.slideIndex}</span>
-          <span className="min-w-0"><span className="block truncate text-ink-3">{n.deck.split('/').pop()}</span>{n.text}</span>
-        </button>
+        <div key={n.id} className="group flex items-start gap-1.5 rounded px-1.5 py-1 hover:bg-white">
+          <button className="flex min-w-0 flex-1 items-start gap-1.5 text-left" onClick={() => go(n)} title={n.target === 'chat' ? 'A note on this chat' : 'Show it'}>
+            <span className={clsx('shrink-0 rounded px-1 font-medium', n.author === 'agent' ? 'bg-violet-100 text-violet-800' : 'bg-note text-amber-950')}>
+              {n.author === 'agent' ? 'AI' : noteNumber(n, all)}
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-ink-3">
+                {n.target === 'chat'
+                  ? <>This chat · <span className="italic">“{words(n.quote ?? '')}”</span></>
+                  : `${n.deck.split('/').pop()} · ${notePlaceLabel(n)}`}
+              </span>
+              <span className="text-ink">{n.text}</span>
+            </span>
+          </button>
+          <button
+            className="shrink-0 rounded p-0.5 text-ink-3 opacity-0 hover:bg-red-50 hover:text-red-600 group-hover:opacity-100"
+            title="Delete this note"
+            onClick={() => void remove(n.id)}
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
       ))}
     </div>
   )

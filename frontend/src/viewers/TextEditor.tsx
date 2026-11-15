@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { basicSetup } from 'codemirror'
 import { Annotation, Compartment, EditorState, Transaction, type Extension } from '@codemirror/state'
-import { Decoration, EditorView, keymap } from '@codemirror/view'
+import { Decoration, EditorView, WidgetType, keymap } from '@codemirror/view'
 import { indentWithTab } from '@codemirror/commands'
 import { markdown } from '@codemirror/lang-markdown'
 import { json } from '@codemirror/lang-json'
@@ -168,8 +168,30 @@ export interface TextSelection {
 }
 /** Text a note is about, to highlight (found near its line). */
 export interface QuoteMark {
+  /** The note's id (the Markdown view opens its card from the badge). */
+  id?: string
   quote: string
   line?: number
+  /** The note's badge (its number) at the right of the text, and the note shown on hover. */
+  label?: string
+  title?: string
+}
+
+/** A note's badge at the end of the line its quote ends on (floated to the right). */
+class NoteBadge extends WidgetType {
+  constructor(readonly label: string, readonly title: string) {
+    super()
+  }
+  eq(o: NoteBadge) {
+    return o.label === this.label && o.title === this.title
+  }
+  toDOM() {
+    const el = document.createElement('span')
+    el.className = 'cm-note-badge'
+    el.textContent = this.label
+    el.title = this.title
+    return el
+  }
 }
 
 /** Where `quote` occurs in `doc`, preferring the occurrence nearest `line`. */
@@ -181,15 +203,35 @@ export function findQuote(doc: string, quote: string, line?: number): { from: nu
     const d = line ? Math.abs(at - line) : n
     if (!best || d < best.d) best = { from: i, d }
   }
-  return best ? { from: best.from, to: best.from + quote.length } : null
+  if (best) return { from: best.from, to: best.from + quote.length }
+  // A quote selected in the formatted Markdown view: the source has line breaks, `> ` and `*`
+  // where the rendered text doesn't. Match ignoring whitespace and Markdown markers.
+  const skip = /[\s*_`~>#]/
+  const map: number[] = []
+  let squeezed = ''
+  for (let k = 0; k < doc.length; k++) {
+    if (!skip.test(doc[k])) {
+      squeezed += doc[k]
+      map.push(k)
+    }
+  }
+  const q = [...quote].filter((c) => !skip.test(c)).join('')
+  const i = q ? squeezed.indexOf(q) : -1
+  return i >= 0 ? { from: map[i], to: map[i + q.length - 1] + 1 } : null
 }
 
 const quoteMark = Decoration.mark({ class: 'cm-note-quote' })
 const quoteDecorations = (marks: QuoteMark[]) =>
   EditorView.decorations.compute(['doc'], (state) => {
     const text = state.doc.toString()
-    const ranges = marks.map((m) => findQuote(text, m.quote, m.line)).filter((r): r is { from: number; to: number } => !!r && r.to > r.from)
-    return Decoration.set(ranges.map((r) => quoteMark.range(r.from, r.to)), true)
+    const decos = marks.flatMap((m) => {
+      const r = findQuote(text, m.quote, m.line)
+      if (!r || r.to <= r.from) return []
+      const out = [quoteMark.range(r.from, r.to)]
+      if (m.label) out.push(Decoration.widget({ widget: new NoteBadge(m.label, m.title ?? ''), side: 1 }).range(state.doc.lineAt(r.to).to))
+      return out
+    })
+    return Decoration.set(decos, true)
   })
 
 export function CodeEditor({ path, doc, initialText, readOnly, onChange, onSave, onSelection, marks = [], revealRef }: {

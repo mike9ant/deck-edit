@@ -211,6 +211,7 @@ async fn call_tool(state: &AppState, chat_id: &str, name: &str, args: &Value) ->
             };
             let list: Vec<Value> = notes::with_current_index(state, &pid, state.notes.all(&pid))
                 .into_iter()
+                .filter(|n| n.visible_in_chat(chat_id))
                 .filter(|n| deck.is_empty() || n.deck == deck)
                 .filter(|n| status == "all" || n.status == status)
                 .map(|n| {
@@ -274,6 +275,7 @@ async fn call_tool(state: &AppState, chat_id: &str, name: &str, args: &Value) ->
                 shapes: Vec::new(),
                 quote: None,
                 lines: None,
+                target: None,
                 text: s("text"),
                 author: "agent".into(),
                 created_at: chrono::Utc::now().to_rfc3339(),

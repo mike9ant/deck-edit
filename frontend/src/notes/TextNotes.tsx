@@ -3,13 +3,16 @@
  * "Note" — the agent gets the file, the lines and the quoted text. The text of
  * open notes is highlighted in the editor; the notes list shows them (click a
  * quote to jump to it), with resolve / reopen / delete.
+ *
+ * `QuoteNoteBox` and `NotesList` are shared with the other places a note can
+ * be about selected text: the speaker notes (deck/NotesPane.tsx) and the chat.
  */
 
 import { useEffect, useRef, useState } from 'react'
 import { BotMessageSquare, Check, RotateCcw, StickyNote, Trash2, X, Zap } from 'lucide-react'
 import clsx from 'clsx'
 import type { Note } from '../api/types'
-import { useNotes } from '../store/notesStore'
+import { noteNumber, useNotes } from '../store/notesStore'
 import { useChat } from '../store/chatStore'
 import { sendToAgent } from '../chat/sendToAgent'
 import { actNowPrompt } from './NotePins'
@@ -40,34 +43,63 @@ export function TextNoteTools({ path, selection, onReveal }: { path: string; sel
           <StickyNote size={13} /> {open ? `${open} open` : `${notes.length}`}
         </button>
       )}
-      {draft && <TextNoteBox path={path} sel={draft} onClose={() => setDraft(null)} />}
-      {list && <NotesList notes={notes} onReveal={(n) => { setList(false); onReveal(n.quote!, n.slideIndex) }} onClose={() => setList(false)} />}
+      {draft && (
+        <QuoteNoteBox
+          heading={`Note for the agent · line${draft.fromLine === draft.toLine ? '' : 's'} ${linesOf(draft)}`}
+          quote={draft.text}
+          placeholder="e.g. tighten this paragraph, check these numbers"
+          onPin={(text) => useNotes.getState().add({ deck: path, slideId: '', slideIndex: draft.fromLine, x: 0, y: 0, quote: draft.text, lines: linesOf(draft), text })}
+          actNow={(note) => actNowPrompt(note, 'text')}
+          onClose={() => setDraft(null)}
+        />
+      )}
+      {list && <NotesList title="Notes on this file" notes={notes} onReveal={(n) => { setList(false); onReveal(n.quote!, n.slideIndex) }} onClose={() => setList(false)} />}
     </div>
   )
 }
 
-function TextNoteBox({ path, sel, onClose }: { path: string; sel: TextSelection; onClose(): void }) {
+/**
+ * The box for a note about some quoted text: the quote, the note, and Pin note
+ * (the agent sees it with the next message) or Act now (pin it and send the
+ * agent a message about it right away). `above` opens it upwards (a pane at
+ * the bottom of the window); `fixed` places it at a viewport point instead.
+ */
+export function QuoteNoteBox({ heading, quote, placeholder, onPin, actNow, onClose, above, fixed }: {
+  heading: string
+  quote: string
+  placeholder?: string
+  onPin(text: string): Promise<Note | undefined>
+  actNow(note: Note): string
+  onClose(): void
+  above?: boolean
+  fixed?: { left: number; top: number }
+}) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const agentBusy = useChat((s) => !!s.pid && !!s.busyProjects[s.pid])
   const ref = useRef<HTMLTextAreaElement>(null)
   useEffect(() => ref.current?.focus(), [])
-  const save = async (actNow: boolean) => {
-    if (!text.trim() || (actNow && agentBusy)) return
+  const save = async (now: boolean) => {
+    if (!text.trim() || (now && agentBusy)) return
     setBusy(true)
-    const note = await useNotes.getState().add({ deck: path, slideId: '', slideIndex: sel.fromLine, x: 0, y: 0, quote: sel.text, lines: linesOf(sel), text: text.trim() })
+    const note = await onPin(text.trim())
     setBusy(false)
     onClose()
-    if (actNow && note) await sendToAgent(actNowPrompt(note, 'text'))
+    if (now && note) await sendToAgent(actNow(note))
   }
   return (
-    <div className="absolute right-0 top-8 z-40 w-80 rounded-lg border border-hair bg-white p-3 text-sm shadow-xl" onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape') onClose() }}>
-      <div className="mb-1 text-xs text-ink-3">Note for the agent · line{sel.fromLine === sel.toLine ? '' : 's'} {linesOf(sel)}</div>
-      <div className="mb-2 line-clamp-3 border-l-2 border-amber-400 bg-amber-50/60 px-2 py-1 font-mono text-[11px] text-ink-2">{clip(sel.text, 400)}</div>
+    <div
+      className={clsx('z-50 w-80 rounded-lg border border-hair bg-white p-3 text-sm shadow-xl', fixed ? 'fixed' : clsx('absolute right-0', above ? 'bottom-8' : 'top-8'))}
+      style={fixed ? { left: fixed.left, top: fixed.top } : undefined}
+      onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape') onClose() }}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <div className="mb-1 text-xs text-ink-3">{heading}</div>
+      <div className="mb-2 line-clamp-3 whitespace-pre-wrap border-l-2 border-amber-400 bg-amber-50/60 px-2 py-1 text-[11px] text-ink-2">{clip(quote, 400)}</div>
       <textarea
         ref={ref}
         className="h-20 w-full resize-none rounded border border-hair p-2 text-sm outline-none focus:border-accent"
-        placeholder="e.g. tighten this paragraph, check these numbers"
+        placeholder={placeholder ?? 'What should the agent do about this?'}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void save(e.shiftKey) }}
@@ -84,21 +116,35 @@ function TextNoteBox({ path, sel, onClose }: { path: string; sel: TextSelection;
   )
 }
 
-function NotesList({ notes, onReveal, onClose }: { notes: Note[]; onReveal(n: Note): void; onClose(): void }) {
+/** Notes about quoted text, with resolve / reopen / delete; click a quote to show it. */
+export function NotesList({ title, notes, onReveal, onClose, above, fixed }: {
+  title: string
+  notes: Note[]
+  onReveal(n: Note): void
+  onClose(): void
+  above?: boolean
+  fixed?: { left: number; top: number }
+}) {
   const { update, remove } = useNotes()
+  const all = useNotes((s) => s.notes)
   return (
-    <div className="absolute right-0 top-8 z-40 max-h-96 w-96 overflow-y-auto rounded-lg border border-hair bg-white p-2 text-sm shadow-xl">
+    <div
+      className={clsx('z-50 max-h-96 w-96 overflow-y-auto rounded-lg border border-hair bg-white p-2 text-sm shadow-xl', fixed ? 'fixed' : clsx('absolute right-0', above ? 'bottom-8' : 'top-8'))}
+      style={fixed ? { left: fixed.left, top: fixed.top } : undefined}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
       <div className="mb-1 flex items-center px-1 text-xs font-medium text-ink-3">
-        Notes on this file <button className="ml-auto text-ink-3 hover:text-ink" onClick={onClose}><X size={14} /></button>
+        {title} <button className="ml-auto text-ink-3 hover:text-ink" onClick={onClose}><X size={14} /></button>
       </div>
       {notes.map((n) => (
         <div key={n.id} className={clsx('rounded-md p-2 hover:bg-paper', n.status === 'resolved' && 'opacity-60')}>
-          <button className="mb-1 block w-full truncate border-l-2 border-amber-400 pl-2 text-left font-mono text-[11px] text-ink-2 hover:text-ink" title="Show it in the file" onClick={() => onReveal(n)}>
+          <button className="mb-1 block w-full truncate border-l-2 border-amber-400 pl-2 text-left font-mono text-[11px] text-ink-2 hover:text-ink" title="Show it" onClick={() => onReveal(n)}>
             {n.lines ? `L${n.lines} · ` : ''}{clip(n.quote ?? '', 90)}
           </button>
           <div className="whitespace-pre-wrap text-ink">{n.text}</div>
           {n.status === 'resolved' && <div className="mt-1 text-xs text-emerald-700">Resolved{n.resolvedBy === 'agent' ? ' by the agent' : ''}: {n.resolution || 'done'}</div>}
           <div className="mt-1 flex items-center gap-1 text-xs">
+            {n.status === 'open' && <span className="rounded bg-note px-1.5 py-0.5 font-semibold text-amber-950">{noteNumber(n, all)}</span>}
             <span className={clsx('rounded px-1.5 py-0.5 font-medium', n.author === 'agent' ? 'bg-violet-100 text-violet-800' : 'bg-amber-100 text-amber-900')}>{n.author === 'agent' ? 'Agent' : 'You'}</span>
             {n.status === 'open'
               ? <button className="btn-ghost h-6 px-1.5" onClick={() => void update(n.id, { status: 'resolved' })}><Check size={12} /> Resolve</button>

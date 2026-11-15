@@ -37,7 +37,7 @@ export function NoteToolButton({ active, onToggle }: { active: boolean; onToggle
         onClick={onToggle}
         title={tool === 'draw' ? 'Draw a note for the AI agent: circle or mark an area' : 'Pin a note for the AI agent: click where it goes'}
       >
-        <Icon size={15} /> {tool === 'draw' ? 'Draw for AI' : 'Note for AI'}
+        <Icon size={15} /> <span className="tb-label">{tool === 'draw' ? 'Draw for AI' : 'Note for AI'}</span>
       </button>
       <button
         className={clsx('tool-btn rounded-l-none px-1', active && 'bg-amber-100 text-amber-900')}
@@ -190,6 +190,45 @@ export function strokesBox(strokes: Stroke[]): Box {
 export function pinFor(strokes: Stroke[]): { x: number; y: number } {
   const b = strokesBox(strokes)
   return { x: b.x2, y: b.y1 }
+}
+
+/** How far outside the drawing a drawn note's pin sits (px). */
+const PIN_GAP = 7
+
+/**
+ * Where a drawn note's pin is shown, in fractions of a `w`×`h` px area: the
+ * mark's top-right corner (or top-left: `corner`), pulled in along the ray
+ * from the mark's centre when the drawing crosses that ray first — to
+ * PIN_GAP px outside the outermost crossing. A circled area keeps its pin on
+ * the circle instead of out in its bounding box's corner. Computed in pixels,
+ * so the gap and the ray hold on any aspect ratio.
+ */
+export function pinNearMark(strokes: Stroke[], w: number, h: number, side: 'tr' | 'tl' = 'tr'): { x: number; y: number } {
+  const b = strokesBox(strokes)
+  const corner = { x: side === 'tr' ? b.x2 : b.x1, y: b.y1 }
+  if (!w || !h) return corner
+  const cx = ((b.x1 + b.x2) / 2) * w
+  const cy = ((b.y1 + b.y2) / 2) * h
+  const dx = corner.x * w - cx
+  const dy = b.y1 * h - cy
+  const len = Math.hypot(dx, dy)
+  if (len < 8) return corner
+  // The outermost crossing of the ray centre → corner with the drawing (t = fraction of the way).
+  let tMax = -1
+  for (const s of strokes) {
+    for (let i = 1; i < s.length; i++) {
+      const ax = s[i - 1][0] * w, ay = s[i - 1][1] * h
+      const ex = s[i][0] * w - ax, ey = s[i][1] * h - ay
+      const den = dx * ey - dy * ex
+      if (Math.abs(den) < 1e-9) continue // parallel
+      const t = ((ax - cx) * ey - (ay - cy) * ex) / den
+      const u = ((ax - cx) * dy - (ay - cy) * dx) / den
+      if (t > 0 && t <= 1 && u >= 0 && u <= 1) tMax = Math.max(tMax, t)
+    }
+  }
+  if (tMax < 0) return corner
+  const dist = Math.min(len, tMax * len + PIN_GAP)
+  return { x: (cx + (dx / len) * dist) / w, y: (cy + (dy / len) * dist) / h }
 }
 
 /** Fewer, rounded points (kept ≤ 400) — enough to redraw the mark faithfully. */

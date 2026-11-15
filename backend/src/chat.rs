@@ -494,7 +494,7 @@ async fn start_turn(
     })?;
     state.publish(json!({ "type": "turn", "chatId": cid, "turnId": turn_id, "status": "running", "projectId": chat.project_id }));
 
-    let mut prompt = compose_prompt(&state, &chat.project_id, &root, &text, b.context.as_ref());
+    let mut prompt = compose_prompt(&state, &chat.project_id, &chat.id, &root, &text, b.context.as_ref());
     if !images.is_empty() {
         prompt.push_str("Images attached to this message (also saved on disk — copy one into the project folder or onto a slide when asked to use it):\n");
         for (i, img) in images.iter().enumerate() {
@@ -534,7 +534,7 @@ fn title_from(text: &str) -> String {
 }
 
 /// The user's message plus an app-generated context block.
-fn compose_prompt(state: &AppState, project_id: &str, root: &Path, text: &str, ctx: Option<&Value>) -> String {
+fn compose_prompt(state: &AppState, project_id: &str, chat_id: &str, root: &Path, text: &str, ctx: Option<&Value>) -> String {
     let mut out = String::from(text.trim());
     out.push_str("\n\n---\n[Context from the PPTX Edit app — generated automatically, not typed by the user]\n");
     out.push_str(&format!("Project folder: {}\n", root.display()));
@@ -588,10 +588,10 @@ fn compose_prompt(state: &AppState, project_id: &str, root: &Path, text: &str, c
     }
     let notes: Vec<_> = crate::notes::with_current_index(state, project_id, state.notes.all(project_id))
         .into_iter()
-        .filter(|n| n.status == "open")
+        .filter(|n| n.status == "open" && n.visible_in_chat(chat_id))
         .collect();
     if !notes.is_empty() {
-        out.push_str("Open notes the user pinned — on slides, PDF pages, spreadsheet cells or selected text (address the ones relevant to this request; call resolve_note with a one-line summary for each note you handle):\n");
+        out.push_str("Open notes the user pinned — on slides, PDF pages, spreadsheet cells, speaker notes, chat messages or selected text (address the ones relevant to this request; call resolve_note with a one-line summary for each note you handle):\n");
         for n in notes.iter().take(30) {
             out.push_str(&format!("- [note {}] {} (by {}): \"{}\"\n", n.id, n.describe_place(), n.author, n.text));
         }

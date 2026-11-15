@@ -54,6 +54,41 @@ export const useNotes = create<NotesState>((set, get) => ({
 }))
 
 /** Notes on one slide of a deck: matched by stable slide id, else by number (PDF pages). */
+/**
+ * The place a note is numbered in: a slide, a PDF page, a sheet or image, a
+ * text file, a slide's speaker notes, or a chat. Pins, badges and lists all
+ * number a note by its place, so the same note shows the same number everywhere.
+ */
+export function notePlace(n: Note): string {
+  if (n.target === 'chat') return `chat:${n.slideId}`
+  if (n.target === 'speakerNotes') return `speaker:${n.deck}:${n.slideId}`
+  if (n.quote && !n.deck.toLowerCase().endsWith('.pdf')) return `file:${n.deck}` // text / Markdown
+  return `${n.deck}:${n.slideId || n.slideIndex}`
+}
+
+/** A note's number: its position among the open notes in its place (oldest first); 0 when resolved. */
+export function noteNumber(n: Note, all: Note[]): number {
+  if (n.status !== 'open') return 0
+  const place = notePlace(n)
+  return all.filter((x) => x.status === 'open' && notePlace(x) === place).findIndex((x) => x.id === n.id) + 1
+}
+
+/** Where a note is, in a few words, for lists ("slide 23", "page 4", "line 12", "speaker notes, slide 3"…). */
+export function notePlaceLabel(n: Note): string {
+  const lower = n.deck.toLowerCase()
+  if (n.target === 'chat') return 'This chat'
+  if (n.target === 'speakerNotes') return `speaker notes, slide ${n.slideIndex}`
+  if (lower.endsWith('.pdf')) return `page ${n.slideIndex}`
+  if (n.quote) return n.lines ? `line${/[–-]/.test(n.lines) ? 's' : ''} ${n.lines}` : 'text'
+  if (lower.endsWith('.xlsx') || lower.endsWith('.xlsm')) return `sheet ${n.slideId}`
+  if (/\.(png|jpe?g|gif|webp|svg)$/.test(lower)) return 'image'
+  return `slide ${n.slideIndex}`
+}
+
+/** Notes the agent of chat `chatId` sees: all but the notes made on another chat's messages. */
+export const notesForChat = (notes: Note[], chatId: string) => notes.filter((n) => n.target !== 'chat' || n.slideId === chatId)
+
 export function notesForSlide(notes: Note[], deck: string, slideId: string, slideNumber: number): Note[] {
-  return notes.filter((n) => n.deck === deck && (n.slideId ? n.slideId === slideId : n.slideIndex === slideNumber))
+  // Notes in the speaker notes or a chat aren't on the slide/page itself (no pin there).
+  return notes.filter((n) => !n.target && n.deck === deck && (n.slideId ? n.slideId === slideId : n.slideIndex === slideNumber))
 }

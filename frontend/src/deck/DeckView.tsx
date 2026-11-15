@@ -16,6 +16,7 @@ import { SlideEditor, type AlignKind, type SlideActions } from './SlideEditor'
 import { NotesPane } from './NotesPane'
 import { NoteToolButton, SelectToolButton, useEscapeEndsNoteMode } from '../notes/NoteDrawing'
 import { Splitter } from '../components/Splitter'
+import { useInnerWidth } from '../components/useInnerWidth'
 import { useApp } from '../store/appStore'
 import { useChat } from '../store/chatStore'
 import { api } from '../api/client'
@@ -26,6 +27,10 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   const { open, undo, redo, setSlide } = useDecks()
   const busy = useChat((s) => !!s.busyProjects[pid])
   const railW = useApp((s) => s.widths.rail)
+  // On a narrow pane the rail takes at most 40% of it (the slide needs the room); the width you set comes back with space.
+  const rowRef = useRef<HTMLDivElement>(null)
+  const rowW = useInnerWidth(rowRef, 1200)
+  const railShown = Math.min(railW, Math.max(120, Math.floor(rowW * 0.4)))
   const setWidth = useApp((s) => s.setWidth)
   const changed = useApp((s) => s.changed.includes(path))
   const held = session && session.heldFrom != null ? session.undo.length - session.heldFrom : 0
@@ -79,18 +84,18 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" onKeyDown={onKeyDown}>
-      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-hair bg-panel px-2">
+      <div className="toolbar-fit flex h-10 shrink-0 items-center gap-1 border-b border-hair bg-panel px-2">
         <button className="icon-btn" title="Undo (⌘Z)" disabled={!session.undo.length} onClick={() => undo(key)}><Undo2 size={16} /></button>
         <button className="icon-btn" title="Redo (⇧⌘Z)" disabled={!session.redo.length} onClick={() => void redo(key)}><Redo2 size={16} /></button>
         <div className="mx-1 h-5 w-px bg-hair" />
         <SelectToolButton active={!noteMode} onSelect={() => setNoteMode(false)} />
-        <button className="tool-btn" onClick={() => { setNoteMode(false); actions.current.addTextBox() }} title="Add a text box"><Type size={15} /> Text</button>
+        <button className="tool-btn" onClick={() => { setNoteMode(false); actions.current.addTextBox() }} title="Add a text box"><Type size={15} /> <span className="tb-label">Text</span></button>
         {session.selection.length >= 2 && <AlignTools count={session.selection.length} onAlign={(k) => actions.current.align(k)} />}
-        <div className="ml-2 text-xs text-ink-3">
+        <div className="ml-2 min-w-0 truncate whitespace-nowrap text-xs text-ink-3">
           Slide {session.slideIndex + 1} / {pres.slides.length}
           {session.selection.length > 0 && ` · ${session.selection.length} selected`}
         </div>
-        <div className="ml-auto flex items-center gap-2 text-xs text-ink-3">
+        <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap text-xs text-ink-3">
           {/* Notes for the agent — not an editing tool, so they sit apart from the edit tools. */}
           <NoteToolButton active={noteMode} onToggle={() => setNoteMode(!noteMode)} />
           <button className="icon-btn" onClick={() => setShowResolved(!showResolved)} title={showResolved ? 'Hide resolved notes' : 'Show resolved notes'}>
@@ -98,7 +103,7 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
           </button>
           <div className="h-5 w-px bg-hair" />
           {session.saving ? <span className="flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Saving…</span> : session.dirty ? <span>Unsaved…</span> : changed ? <span>Saved</span> : null}
-          <button className="tool-btn" title="Open this deck in PowerPoint" onClick={() => void api.openExternal(pid, path)}><ExternalLink size={14} /> PowerPoint</button>
+          <button className="tool-btn" title="Open this deck in PowerPoint" onClick={() => void api.openExternal(pid, path)}><ExternalLink size={14} /> <span className="tb-label">PowerPoint</span></button>
         </div>
       </div>
       {busy && (
@@ -118,9 +123,9 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
           <button className="ml-auto text-violet-700 hover:text-violet-900" onClick={() => setDismissedAt(Date.now())}><X size={14} /></button>
         </div>
       )}
-      <div className="flex min-h-0 flex-1">
-        <SlideRail session={session} width={railW} />
-        <Splitter width={railW} min={120} max={420} onChange={(w) => setWidth('rail', w)} />
+      <div ref={rowRef} className="flex min-h-0 flex-1 overflow-hidden">
+        <SlideRail session={session} width={railShown} />
+        <Splitter width={railShown} min={120} max={420} onChange={(w) => setWidth('rail', w)} />
         <div className="flex min-w-0 flex-1 flex-col">
           <SlideEditor
             session={session}

@@ -29,6 +29,8 @@ export interface Note {
   /** A note on selected text in a text/code/Markdown file: the text, and its lines ("12" / "12–14"). */
   quote?: string
   lines?: string
+  /** A quote note in the speaker notes of slide `slideId`, or in a message of the chat `slideId` (that chat's agent only). */
+  target?: 'speakerNotes' | 'chat'
   text: string
   author: 'user' | 'agent'
   createdAt: string

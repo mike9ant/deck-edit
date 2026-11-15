@@ -13,10 +13,20 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
     @apply inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-ink-2 hover:bg-paper disabled:opacity-50;
   }
   .icon-btn {
-    @apply inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-2 hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-35;
+    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ink-2 hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-35;
   }
   .tool-btn {
-    @apply inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs text-ink-2 hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-40;
+    @apply inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 text-xs text-ink-2 hover:bg-black/5 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  /* A toolbar that gives way on a narrow pane: its .tb-label texts go, the icons stay
+     (a container query, so it follows the pane's width, not the window's). */
+  .toolbar-fit {
+    container-type: inline-size;
+  }
+  @container (max-width: 640px) {
+    .tb-label {
+      display: none;
+    }
   }
   .input {
     @apply rounded-md border border-hair px-2.5 py-1.5 text-sm outline-none focus:border-accent;
@@ -69,7 +79,39 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
   background: rgb(251 191 36 / 0.3);
   border-bottom: 2px solid rgb(245 158 11 / 0.8);
 }
-::highlight(note-quote) {
+/* A note's number at the right of the text it's about (text editor; Markdown view). */
+.cm-note-badge,
+.md-note-badge {
+  float: right;
+  margin-left: 8px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 9999px 9999px 9999px 2px;
+  background: #fef3c7;
+  box-shadow: 0 0 0 1px rgb(245 158 11 / 0.7);
+  color: #451a03;
+  font: 600 10px/16px ui-sans-serif, system-ui, sans-serif;
+  text-align: center;
+  cursor: default;
+}
+.md-note-badge {
+  float: none;
+  position: absolute;
+  margin: 0;
+  cursor: pointer;
+}
+
+/* See App.tsx: while a drag selects text, nothing floating may catch the pointer. */
+.drag-selecting .md-note-badge,
+.drag-selecting [data-chat-badges],
+.drag-selecting [data-chat-selbtn] {
+  pointer-events: none;
+}
+
+::highlight(note-quote),
+::highlight(speaker-note-quote),
+::highlight(chat-note-quote) {
   background-color: rgb(251 191 36 / 0.35);
 }
 

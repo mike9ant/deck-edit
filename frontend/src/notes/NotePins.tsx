@@ -7,12 +7,13 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Check, GripHorizontal, MessageSquarePlus, RotateCcw, Trash2, X, Zap } from 'lucide-react'
 import clsx from 'clsx'
 import type { Note, Stroke } from '../api/types'
-import { useNotes } from '../store/notesStore'
+import { noteNumber, useNotes } from '../store/notesStore'
 import { useChat } from '../store/chatStore'
-import { NOTE_COLORS, StrokesSvg } from './NoteDrawing'
+import { NOTE_COLORS, StrokesSvg, pinNearMark } from './NoteDrawing'
 
 export interface NoteDraft {
   x: number
@@ -27,6 +28,8 @@ export interface NoteDraft {
 }
 
 interface Props {
+  /** Space a bubble may use past the right edge (a PDF page has grey margin beside it). */
+  roomRight?: number
   notes: Note[]
   /** Stage size in screen px. */
   width: number
@@ -38,13 +41,31 @@ interface Props {
   onCancelDraft(): void
 }
 
-export function NotePins({ notes, width, height, showResolved, draft, onSaveDraft, onCancelDraft }: Props) {
+export function NotePins({ notes, width, height, showResolved, draft, onSaveDraft, onCancelDraft, roomRight = 0 }: Props) {
   const [openId, setOpenId] = useState<string | null>(null)
+  const allNotes = useNotes((s) => s.notes)
   const visible = notes.filter((n) => showResolved || n.status === 'open')
   // Open popovers toward the side with room (they're ~290 px wide, ≤ ~260 px tall).
   const flipX = (x: number) => x * width + 300 > width && x * width > 300
   const flipY = (y: number) => y * height + 270 > height && y * height > 270
   const color = (n: Note) => (n.status === 'resolved' ? NOTE_COLORS.resolved : n.author === 'agent' ? NOTE_COLORS.agent : NOTE_COLORS.user)
+  // A drawn note's pin sits just outside the mark (see pinNearMark); a pinned one where it was put.
+  const anchorOf = (n: { x: number; y: number; strokes?: Stroke[] }) => (n.strokes?.length ? pinNearMark(n.strokes, width, height) : { x: n.x, y: n.y })
+  /**
+   * Where a note's bubble goes and which way it opens. It opens to the right of its spot; when it
+   * wouldn't fit there, a drawn note's bubble moves to the mark's top-left corner (same rule,
+   * opening left), a pinned note's opens to the left of its pin.
+   */
+  const placeOf = (n: Note, chars: number): { at: { x: number; y: number }; leftward: boolean } => {
+    const est = Math.min(PIN_MAX_W, 24 + chars * 5.6) // the bubble's width, near enough
+    const right = anchorOf(n)
+    if (right.x * width + est <= width + roomRight) return { at: right, leftward: false }
+    if (n.strokes?.length) {
+      const left = pinNearMark(n.strokes, width, height, 'tl')
+      if (left.x * width - est >= 0 || left.x * width > width - right.x * width) return { at: left, leftward: true }
+    }
+    return { at: right, leftward: true }
+  }
   return (
     <div className="pointer-events-none absolute inset-0" style={{ width, height }}>
       {visible.map((n) =>
@@ -61,31 +82,43 @@ export function NotePins({ notes, width, height, showResolved, draft, onSaveDraf
         ) : null,
       )}
       {draft?.strokes?.length ? <StrokesSvg strokes={draft.strokes} width={width} height={height} color={NOTE_COLORS.user} /> : null}
-      {visible.map((n, i) => (
-        <div key={n.id} className="absolute" style={{ left: n.x * width, top: n.y * height }}>
-          <button
-            className={clsx(
-              'pointer-events-auto -translate-x-1/2 -translate-y-full flex h-6 min-w-6 items-center justify-center rounded-full rounded-bl-none border px-1.5 text-[11px] font-semibold shadow-md',
-              n.status === 'resolved'
-                ? 'border-emerald-300 bg-emerald-50 text-emerald-700 opacity-70'
-                : n.author === 'agent'
-                  ? 'border-violet-300 bg-violet-100 text-violet-800'
-                  : 'border-amber-400 bg-note text-amber-950',
-            )}
-            title={n.text}
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={(e) => {
-              e.stopPropagation()
-              setOpenId(openId === n.id ? null : n.id)
-            }}
-          >
-            {n.status === 'resolved' ? <Check size={12} /> : n.author === 'agent' ? 'AI' : i + 1}
-          </button>
-          {openId === n.id && <NotePopover note={n} onClose={() => setOpenId(null)} flipX={flipX(n.x)} flipY={flipY(n.y)} />}
-        </div>
-      ))}
+      {visible.map((n) => {
+        const tag = n.author === 'agent' ? 'AI' : String(noteNumber(n, allNotes))
+        const snippet = n.status === 'resolved' ? '' : shortText(n.text, PIN_CHARS - tag.length - 1)
+        // The bubble's tail marks the spot.
+        const { at, leftward } = placeOf(n, tag.length + 1 + snippet.length)
+        return (
+          <div key={n.id} className="absolute" style={{ left: at.x * width, top: at.y * height }}>
+            <button
+              className={clsx(
+                'pointer-events-auto absolute bottom-0 flex min-h-6 w-max min-w-6 max-w-[156px] items-center gap-1 rounded-xl border px-1.5 py-[3px] text-left shadow-md',
+                leftward ? 'right-0 rounded-br-none' : 'left-0 rounded-bl-none',
+                n.status === 'resolved'
+                  ? 'items-center justify-center border-emerald-300 bg-emerald-50 text-emerald-700 opacity-70'
+                  : n.author === 'agent'
+                    ? 'border-violet-300 bg-violet-100 text-violet-800'
+                    : 'border-amber-400 bg-note text-amber-950',
+              )}
+              title={n.text}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.stopPropagation()
+                setOpenId(openId === n.id ? null : n.id)
+              }}
+            >
+              {n.status === 'resolved' ? <Check size={12} /> : (
+                <>
+                  <span className="shrink-0 text-[11px] font-semibold leading-[13px]">{tag}</span>
+                  {snippet && <span className="line-clamp-2 break-words text-[10px] font-medium leading-[13px]">{snippet}</span>}
+                </>
+              )}
+            </button>
+            {openId === n.id && <NotePopover note={n} onClose={() => setOpenId(null)} flipX={flipX(at.x)} flipY={flipY(at.y)} />}
+          </div>
+        )
+      })}
       {draft && (
-        <div className="absolute" style={{ left: draft.x * width, top: draft.y * height }}>
+        <div className="absolute" style={{ left: anchorOf(draft).x * width, top: anchorOf(draft).y * height }}>
           <div className="-translate-x-1/2 -translate-y-full flex h-6 w-6 items-center justify-center rounded-full rounded-bl-none border border-amber-400 bg-note shadow-md">
             <MessageSquarePlus size={12} />
           </div>
@@ -187,13 +220,37 @@ function DraftPopover({ draft, onSave, onCancel, flipX, flipY }: { draft: NoteDr
   )
 }
 
-function NotePopover({ note, onClose, flipX, flipY }: { note: Note; onClose(): void; flipX: boolean; flipY: boolean }) {
+/**
+ * Where a card opened from a badge goes, in the window: above the badge (or below it when there's
+ * no room above), right-aligned to it, and kept inside the window — so a scrolling panel can't clip it.
+ */
+function floatingStyle(anchor: DOMRect): React.CSSProperties {
+  const W = 288
+  const left = Math.max(8, Math.min(anchor.right - W, window.innerWidth - W - 8))
+  const above = anchor.top > 300 || anchor.top > window.innerHeight - anchor.bottom
+  return above
+    ? { left, bottom: window.innerHeight - anchor.top + 6, maxHeight: anchor.top - 14, overflowY: 'auto' }
+    : { left, top: anchor.bottom + 6, maxHeight: window.innerHeight - anchor.bottom - 14, overflowY: 'auto' }
+}
+
+/**
+ * A note's card: the note, its quote or mark, Resolve / Reopen, Edit, Delete. Opens next to its pin;
+ * given an `anchor` (a badge's rect), it floats over the window above that badge instead.
+ */
+export function NotePopover({ note, onClose, flipX, flipY, anchor }: { note: Note; onClose(): void; flipX: boolean; flipY: boolean; anchor?: DOMRect }) {
   const { update, remove } = useNotes()
   const [editing, setEditing] = useState(false)
   const [text, setText] = useState(note.text)
   const drag = useDraggable()
-  return (
-    <div data-note-popover className={popoverPos(flipX, flipY)} style={drag.style} onPointerDown={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+  const card = (
+    <div
+      data-note-popover
+      className={anchor ? 'pointer-events-auto fixed z-[60] w-72 rounded-lg border border-hair bg-white p-3 text-sm shadow-xl' : popoverPos(flipX, flipY)}
+      style={anchor ? { ...floatingStyle(anchor), ...drag.style } : drag.style}
+      onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
       <div {...drag.handle} className={clsx('-mx-3 -mt-3 mb-1 flex items-center gap-2 rounded-t-lg px-3 pb-1 pt-2 text-xs text-ink-3', drag.handle.className)} title="Drag to move">
         <Grip />
         <span className={clsx('rounded px-1.5 py-0.5 font-medium', note.author === 'agent' ? 'bg-violet-100 text-violet-800' : 'bg-amber-100 text-amber-900')}>
@@ -235,6 +292,7 @@ function NotePopover({ note, onClose, flipX, flipY }: { note: Note; onClose(): v
       </div>
     </div>
   )
+  return anchor ? createPortal(card, document.body) : card
 }
 
 function Quote({ text }: { text: string }) {
@@ -251,10 +309,28 @@ function MarkInfo({ shapes, hint }: { shapes?: string[]; hint?: boolean }) {
 }
 
 /** The message "Act now" sends: the note itself (place, drawn area, shapes/cells, quote) reaches the agent in the context block. */
-export function actNowPrompt(note: Note, unit: 'slide' | 'page' | 'sheet' | 'text' | 'image'): string {
+/** At most this many characters in a pin's bubble: the number, a space, the start of the note (two short lines). */
+const PIN_CHARS = 44
+/** A bubble's widest (px): ~24 characters a line, two lines. */
+const PIN_MAX_W = 156
+
+/** `text` cut to `max` characters (on a word when it can), with an ellipsis. */
+function shortText(text: string, max: number): string {
+  const t = text.replace(/\s+/g, ' ').trim()
+  if (t.length <= max) return t
+  const cut = t.slice(0, max - 1)
+  const word = cut.lastIndexOf(' ')
+  return `${(word > max * 0.6 ? cut.slice(0, word) : cut).trimEnd()}…`
+}
+
+export function actNowPrompt(note: Note, unit: 'slide' | 'page' | 'sheet' | 'text' | 'image' | 'speakerNotes' | 'chat'): string {
   const clip = (t: string, n = 120) => (t.length > n ? `${t.slice(0, n - 1)}…` : t)
   let place: string
-  if (unit === 'text') {
+  if (unit === 'speakerNotes') {
+    place = `in the speaker notes of slide ${note.slideIndex} of ${note.deck}, on the text "${clip(note.quote ?? '')}"`
+  } else if (unit === 'chat') {
+    return `About this part of our chat — "${clip(note.quote ?? '', 300)}": ${note.text}\n\n(note ${note.id} — resolve it when done)`
+  } else if (unit === 'text') {
     const lines = note.lines ? ` (line${/[–-]/.test(note.lines) ? 's' : ''} ${note.lines})` : ''
     place = `in ${note.deck}${lines}, on the text "${clip(note.quote ?? '')}"`
   } else if (note.quote) {

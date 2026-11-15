@@ -51,6 +51,11 @@ pub struct Note {
     /// …and its lines ("12" or "12–14").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lines: Option<String>,
+    /// Where a quote note is, besides a file: "speakerNotes" (the speaker notes
+    /// of slide `slide_id` in deck `deck`) or "chat" (a message in the chat
+    /// `slide_id`; such a note is shown only to that chat's agent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
     pub text: String,
     /// "user" | "agent"
     pub author: String,
@@ -101,9 +106,19 @@ impl Note {
     }
 
     /// One line for the agent: where the note is and what it covers.
+    /// Whether the agent of chat `chat_id` should see this note (a note on a chat message is for that chat only).
+    pub fn visible_in_chat(&self, chat_id: &str) -> bool {
+        self.target.as_deref() != Some("chat") || self.slide_id == chat_id
+    }
+
     pub fn describe_place(&self) -> String {
         if let Some(q) = &self.quote {
             let q: String = q.chars().take(400).collect();
+            match self.target.as_deref() {
+                Some("speakerNotes") => return format!("{} slide {}, in the speaker notes, on the text: \"{q}\"", self.deck, self.slide_index),
+                Some("chat") => return format!("this chat (an earlier message), on the text: \"{q}\""),
+                _ => {}
+            }
             if self.deck.to_lowercase().ends_with(".pdf") {
                 return format!("{} page {}, on the text: \"{q}\"", self.deck, self.slide_index);
             }
@@ -351,6 +366,8 @@ struct CreateBody {
     quote: Option<String>,
     #[serde(default)]
     lines: Option<String>,
+    #[serde(default)]
+    target: Option<String>,
     text: String,
 }
 
@@ -372,6 +389,7 @@ async fn create(
         strokes: clean_strokes(b.strokes, !sheet),
         quote: b.quote.map(|q| q.chars().take(2000).collect()),
         lines: b.lines,
+        target: b.target.filter(|t| t == "speakerNotes" || t == "chat"),
         shapes: b.shapes.into_iter().take(12).collect(),
         text: b.text,
         author: "user".into(),
@@ -481,6 +499,7 @@ mod tests {
             shapes: vec!["Chart 4".into()],
             quote: None,
             lines: None,
+            target: None,
             text: "bigger".into(),
             author: "user".into(),
             created_at: String::new(),
@@ -535,7 +554,7 @@ mod sheet_and_text_tests {
     fn base(deck: &str) -> Note {
         Note {
             id: "n".into(), deck: deck.into(), slide_id: "Summary".into(), slide_index: 1, x: 2.4, y: 7.5,
-            shape_name: Some("B7 = \"$3,584,568\"".into()), strokes: vec![], shapes: vec![], quote: None, lines: None,
+            shape_name: Some("B7 = \"$3,584,568\"".into()), strokes: vec![], shapes: vec![], quote: None, lines: None, target: None,
             text: "check".into(), author: "user".into(), created_at: String::new(), status: "open".into(),
             resolution: None, resolved_at: None, resolved_by: None,
         }
@@ -580,5 +599,24 @@ mod sheet_and_text_tests {
         n.quote = Some("Medicine should be engineered".into());
         n.lines = Some("12–14".into());
         assert_eq!(n.describe_place(), "notes.md lines 12–14, on the text: \"Medicine should be engineered\"");
+    }
+
+    #[test]
+    fn speaker_notes_and_chat_notes_say_where_they_are() {
+        let mut n = base("deck.pptx");
+        n.slide_index = 3;
+        n.quote = Some("Say the line, pause".into());
+        n.target = Some("speakerNotes".into());
+        assert_eq!(n.describe_place(), "deck.pptx slide 3, in the speaker notes, on the text: \"Say the line, pause\"");
+
+        let mut c = base("");
+        c.slide_id = "chat-1".into();
+        c.quote = Some("3 at development candidate".into());
+        c.target = Some("chat".into());
+        assert_eq!(c.describe_place(), "this chat (an earlier message), on the text: \"3 at development candidate\"");
+        // A note on a chat message is for that chat's agent only; other notes are for every chat.
+        assert!(c.visible_in_chat("chat-1"));
+        assert!(!c.visible_in_chat("chat-2"));
+        assert!(n.visible_in_chat("chat-2"));
     }
 }

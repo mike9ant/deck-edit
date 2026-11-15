@@ -7,7 +7,7 @@
  * The text of open notes is highlighted.
  */
 
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { TextLayer, type PDFDocumentProxy } from 'pdfjs-dist'
 import { degrees } from 'pdf-lib'
 import { BotMessageSquare, Copy, CopyPlus, ExternalLink, Eye, EyeOff, Loader2, Redo2, Trash2, Undo2 } from 'lucide-react'
@@ -313,9 +313,16 @@ function PageStage({ session, noteMode, setNoteMode, showResolved, busy }: { ses
       if (!text) return setPick(null)
       const rect = r.getBoundingClientRect()
       const sr = stage.getBoundingClientRect()
-      setPick({ text, x: (rect.left - sr.left) / sr.width, y: (rect.top - sr.top) / sr.height, barX: rect.left + rect.width / 2, barY: rect.top })
+      // The note's pin goes at the selection's top-right.
+      setPick({ text, x: (rect.right - sr.left) / sr.width, y: (rect.top - sr.top) / sr.height, barX: rect.left + rect.width / 2, barY: rect.top })
     }
-    const down = () => { dragging = true; setPick(null) }
+    const down = (e: PointerEvent) => {
+      // A press on the bar itself is a click on its buttons: hiding the bar here would remove the
+      // button before the click lands (the note box never opened).
+      if ((e.target as Element | null)?.closest?.('[data-pdf-selbar]')) return
+      dragging = true
+      setPick(null)
+    }
     const up = () => { dragging = false; requestAnimationFrame(update) }
     document.addEventListener('selectionchange', update)
     document.addEventListener('pointerdown', down)
@@ -383,10 +390,26 @@ function PageStage({ session, noteMode, setNoteMode, showResolved, busy }: { ses
     return () => { reg.delete('note-quote') }
   }, [quotesKey, textReady])
 
+  // A note on selected text is pinned at that text's top-right — found from the text itself, so
+  // older notes (pinned at the selection's left) move there too.
+  const shownNotes = useMemo(() => {
+    const el = textRef.current
+    const stage = stageRef.current
+    if (!el || !stage) return pageNotes
+    const sr = stage.getBoundingClientRect()
+    return pageNotes.map((n) => {
+      if (!n.quote) return n
+      const b = domRangeOf(el, n.quote)?.getBoundingClientRect()
+      return b && b.width ? { ...n, x: (b.right - sr.left) / sr.width, y: (b.top - sr.top) / sr.height } : n
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(pageNotes.map((n) => [n.id, n.quote, n.status, n.text])), textReady, w, h])
+
   return (
     <div ref={wrap} className="flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#e9e8e4]" onDragOver={(e) => e.preventDefault()} onDrop={(e) => void onDrop(e)}>
       {pick && !noteMode && !draft && (
         <div
+          data-pdf-selbar
           className="fixed z-40 flex -translate-x-1/2 -translate-y-full gap-0.5 rounded-md border border-hair bg-white p-0.5 shadow-lg"
           style={{ left: pick.barX, top: pick.barY - 6 }}
           onMouseDown={(e) => e.preventDefault() /* keep the selection */}
@@ -425,7 +448,8 @@ function PageStage({ session, noteMode, setNoteMode, showResolved, busy }: { ses
           />
         )}
         <NotePins
-          notes={pageNotes}
+          roomRight={Math.max(0, (box.w - w) / 2 - 8)}
+          notes={shownNotes}
           width={w}
           height={h}
           showResolved={showResolved}

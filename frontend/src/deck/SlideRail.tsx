@@ -174,7 +174,8 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-paper" style={{ width }}>
+    // Keeps its width (the thumbnails are sized from it), so they never hang out of the rail.
+    <div className="flex h-full min-h-0 shrink-0 flex-col bg-paper" style={{ width }}>
       <div ref={listRef} tabIndex={0} onKeyDown={onKeyDown} className="min-h-0 flex-1 overflow-y-auto px-2 py-2 outline-none [scrollbar-gutter:stable]">
         {pres.slides.map((slide, i) => {
           const sid = session.sldIds.get(slide.id) ?? ''

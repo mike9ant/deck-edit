@@ -10,6 +10,7 @@ import clsx from 'clsx'
 import { TopBar, NewProjectDialog } from './components/TopBar'
 import { FileTree } from './components/FileTree'
 import { MiddleEllipsis } from './components/MiddleEllipsis'
+import { NoteCountBadge } from './notes/NoteCountBadge'
 import { Splitter } from './components/Splitter'
 import { ChatPanel } from './chat/ChatPanel'
 import { DeckView } from './deck/DeckView'
@@ -81,27 +82,47 @@ export default function App() {
     [],
   )
 
+  // While a mouse drag is selecting text, floating note badges and buttons ignore the pointer: one
+  // passed over mid-drag would pull the selection to it (they come after the text in the page).
+  useEffect(() => {
+    const root = document.documentElement
+    const down = (e: PointerEvent) => {
+      if (e.button === 0 && !(e.target as Element | null)?.closest?.('button, [data-note-popover], .md-note-badge')) root.classList.add('drag-selecting')
+    }
+    const up = () => root.classList.remove('drag-selecting')
+    document.addEventListener('pointerdown', down, true)
+    document.addEventListener('pointerup', up, true)
+    document.addEventListener('pointercancel', up, true)
+    return () => {
+      document.removeEventListener('pointerdown', down, true)
+      document.removeEventListener('pointerup', up, true)
+      document.removeEventListener('pointercancel', up, true)
+    }
+  }, [])
+
   return (
     <div className="flex h-screen flex-col bg-paper font-ui text-ink">
       <TopBar />
       {projectId ? (
-        <div className="flex min-h-0 flex-1">
+        // On a narrow window the side panels give way (down to their minimums) before the document pane,
+        // which keeps 480px and clips what doesn't fit — nothing spills over the chat.
+        <div className="flex min-h-0 flex-1 overflow-hidden">
           {filesCollapsed ? (
             <div className="flex w-8 shrink-0 flex-col items-center border-r border-hair bg-paper pt-1.5">
               <button className="icon-btn" title="Show the files panel" onClick={() => setFilesCollapsed(false)}><PanelLeftOpen size={15} /></button>
             </div>
           ) : (
             <>
-              <div className="shrink-0" style={{ width: widths.tree }}><FileTree /></div>
+              <div className="min-w-[160px] shrink" style={{ width: widths.tree }}><FileTree /></div>
               <Splitter width={widths.tree} min={160} max={480} onChange={(w) => setWidth('tree', w)} />
             </>
           )}
-          <div className="flex min-w-0 flex-1 flex-col bg-panel">
+          <div className="flex min-w-[480px] flex-1 flex-col overflow-hidden bg-panel">
             <DocTabs />
             <DocArea pid={projectId} />
           </div>
           <Splitter width={widths.chat} min={300} max={900} side="right" onChange={(w) => setWidth('chat', w)} />
-          <div className="shrink-0" style={{ width: widths.chat }}><ChatPanel /></div>
+          <div className="min-w-[300px] shrink" style={{ width: widths.chat }}><ChatPanel /></div>
         </div>
       ) : loaded ? (
         <Welcome hasProjects={projects.length > 0} />
@@ -131,6 +152,7 @@ function DocTabs() {
           data-preview={preview || undefined}
         >
           <MiddleEllipsis name={t.split('/').pop() ?? t} className={clsx(preview && 'italic')} />
+          <NoteCountBadge path={t} />
           {/* A preview tab can be kept with one click — the next file then opens in a new tab. */}
           {preview && (
             <button
