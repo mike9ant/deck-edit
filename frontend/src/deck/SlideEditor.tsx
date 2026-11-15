@@ -19,7 +19,7 @@ import { copyNodes } from '@diceui/pptx-core'
 import { useDecks, type DeckSession } from './deckStore'
 import { ALIGN_LABEL, alignPositions, type AlignKind } from './align'
 import { SlideRender, type SlideRenderHandle } from './SlideRender'
-import { beginEditing, domPointAt, paragraphsText, readParagraphs, readParagraphsAt, textContainer, type TextPoint } from './textEdit'
+import { beginEditing, domPointAt, paragraphsText, readParagraphs, readParagraphsAt, textBodyChanged, textContainer, type TextPoint } from './textEdit'
 import { nodeText, short } from './deckModel'
 import { getClipboard, setClipboard } from './clipboard'
 import { fitSize, prepareImage } from './images'
@@ -197,7 +197,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     const on = !(texts.length && texts.every(has))
 
     const ops: EditOperation[] = []
-    if (paragraphsText(paragraphs) !== before) ops.push({ type: 'setTextBody', slideId: slide.id, nodeId, paragraphs })
+    if (textBodyChanged(paragraphs, before)) ops.push({ type: 'setTextBody', slideId: slide.id, nodeId, paragraphs })
     ops.push({
       type: 'setTextStyle', slideId: slide.id, nodeId, style: { [prop]: on },
       range: { start: { paragraphIndex: start.p, offset: start.o }, end: { paragraphIndex: end.p, offset: end.o } },
@@ -239,11 +239,13 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     container.contentEditable = 'false'
     const paragraphs = readParagraphs(container)
     const after = paragraphsText(paragraphs)
-    if (after === before) return
+    if (!textBodyChanged(paragraphs, before)) return
     const n = nodeById(nodeId)
     await run(
       { type: 'setTextBody', slideId: slide.id, nodeId, paragraphs },
-      `Slide ${slideNo}: edited the text of "${n ? label(n) : nodeId}": "${short(before, 80)}" → "${short(after, 120)}"`,
+      after === before
+        ? `Slide ${slideNo}: removed the bullet from a line in "${n ? label(n) : nodeId}"`
+        : `Slide ${slideNo}: edited the text of "${n ? label(n) : nodeId}": "${short(before, 80)}" → "${short(after, 120)}"`,
     )
   }, [editing, slide.id, slideNo])
 

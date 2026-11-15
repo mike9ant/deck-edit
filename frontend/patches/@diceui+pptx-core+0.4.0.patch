@@ -1,0 +1,111 @@
+diff --git a/node_modules/@diceui/pptx-core/dist/index.d.mts b/node_modules/@diceui/pptx-core/dist/index.d.mts
+index dd73442..cc6e268 100644
+--- a/node_modules/@diceui/pptx-core/dist/index.d.mts
++++ b/node_modules/@diceui/pptx-core/dist/index.d.mts
+@@ -453,6 +453,8 @@ interface SetTextBodyParagraph {
+   /** Index of the source paragraph whose `a:pPr` / `a:endParaRPr` to clone. -1 = bare paragraph. */
+   sourceParagraphIndex: number;
+   runs: SetTextBodyRun[];
++  /** pdf-edit patch: write the paragraph without a bullet / number (`a:buNone`). */
++  noBullet?: boolean;
+ }
+ interface SetTextBodyRun {
+   text: string;
+diff --git a/node_modules/@diceui/pptx-core/dist/index.mjs b/node_modules/@diceui/pptx-core/dist/index.mjs
+index c6cc36a..ae5ac6b 100644
+--- a/node_modules/@diceui/pptx-core/dist/index.mjs
++++ b/node_modules/@diceui/pptx-core/dist/index.mjs
+@@ -15844,17 +15844,35 @@ function applyClippedTextBackground(element, css) {
+ 	element.style.color = "transparent";
+ }
+ function generateAutoNumber(type, num) {
++	// pdf-edit patch: every Latin scheme of ST_TextAutonumberScheme (roman/alpha
++	// with Period, ParenR, ParenBoth; alpha past z as aa, bb… like PowerPoint),
++	// plus circled and full-width numbers.
++	const m = /^(arabic|romanLc|romanUc|alphaLc|alphaUc)(Period|ParenR|ParenBoth|Plain)$/.exec(type || "");
++	if (m) {
++		const n = Math.max(1, num);
++		let s = String(n);
++		if (m[1] === "romanUc") s = toRoman(n);
++		else if (m[1] === "romanLc") s = toRoman(n).toLowerCase();
++		else if (m[1] === "alphaUc" || m[1] === "alphaLc") {
++			s = String.fromCharCode(65 + (n - 1) % 26).repeat(Math.floor((n - 1) / 26) + 1);
++			if (m[1] === "alphaLc") s = s.toLowerCase();
++		}
++		switch (m[2]) {
++			case "Period": return `${s}.`;
++			case "ParenR": return `${s})`;
++			case "ParenBoth": return `(${s})`;
++			default: return s;
++		}
++	}
+ 	switch (type) {
+-		case "arabicPeriod": return `${num}.`;
+-		case "arabicParenR": return `${num})`;
+-		case "arabicParenBoth": return `(${num})`;
+-		case "arabicPlain": return `${num}`;
+-		case "romanUcPeriod": return `${toRoman(num)}.`;
+-		case "romanLcPeriod": return `${toRoman(num).toLowerCase()}.`;
+-		case "alphaUcPeriod": return `${String.fromCharCode(64 + ((num - 1) % 26 + 1))}.`;
+-		case "alphaLcPeriod": return `${String.fromCharCode(96 + ((num - 1) % 26 + 1))}.`;
+-		case "alphaUcParenR": return `${String.fromCharCode(64 + ((num - 1) % 26 + 1))})`;
+-		case "alphaLcParenR": return `${String.fromCharCode(96 + ((num - 1) % 26 + 1))})`;
++		case "circleNumDbPlain":
++		case "circleNumWdWhitePlain": return num >= 1 && num <= 20 ? String.fromCodePoint(9311 + num) : `${num}`;
++		case "circleNumWdBlackPlain": return num >= 1 && num <= 10 ? String.fromCodePoint(10101 + num) : num >= 11 && num <= 20 ? String.fromCodePoint(9440 + num) : `${num}`;
++		case "arabicDbPlain":
++		case "arabicDbPeriod": {
++			const wide = String(num).replace(/\d/g, (d) => String.fromCharCode(65296 + Number(d)));
++			return type === "arabicDbPeriod" ? `${wide}．` : wide;
++		}
+ 		default: return `${num}.`;
+ 	}
+ }
+@@ -16023,13 +16041,21 @@ function renderTextBody(textBody, placeholder, ctx, container, options) {
+ 		else if (merged.spaceAfterPct !== void 0) paraDiv.style.marginBottom = `${merged.spaceAfterPct * effectiveFontSize}pt`;
+ 		const suppressBullet = !hasVisibleRuns || placeholder?.type === "sldNum" || placeholder?.type === "dt" || placeholder?.type === "ftr" || placeholder?.type === "title" || placeholder?.type === "ctrTitle" || placeholder?.type === "subTitle";
+ 		let bulletPrefix = "";
++		// pdf-edit patch: number like PowerPoint — startAt is the FIRST number of a
++		// list (not every item's); a list continues at its level until a visible
++		// paragraph at a shallower level, or an un-numbered / differently numbered
++		// one at the same level, interrupts it. Deeper items don't break it.
++		const numLevel = level ?? 0;
++		const numbered = !suppressBullet && merged.bulletNone !== true && !merged.bulletChar && merged.bulletAutoNum;
++		if (hasVisibleRuns) for (const [key, c] of bulletCounters) if (c.level > numLevel || c.level === numLevel && (!numbered || c.type !== merged.bulletAutoNum)) bulletCounters.delete(key);
+ 		if (!suppressBullet && merged.bulletNone !== true) {
+ 			if (merged.bulletChar) bulletPrefix = merged.bulletChar;
+ 			else if (merged.bulletAutoNum) {
+-				const counterKey = `${level}:${merged.bulletAutoNum}`;
+-				const num = merged.bulletAutoNumStartAt ?? bulletCounters.get(counterKey) ?? 1;
++				const counterKey = `${numLevel}:${merged.bulletAutoNum}`;
++				const prev = bulletCounters.get(counterKey);
++				const num = prev ? prev.n + 1 : merged.bulletAutoNumStartAt ?? 1;
+ 				bulletPrefix = generateAutoNumber(merged.bulletAutoNum, num);
+-				bulletCounters.set(counterKey, num + 1);
++				bulletCounters.set(counterKey, { level: numLevel, type: merged.bulletAutoNum, n: num });
+ 			}
+ 		}
+ 		if (bulletPrefix) {
+@@ -20669,6 +20695,22 @@ function applySetTextBody(pres, op) {
+ 			}
+ 			if (srcPara.endParaRPr?.element) endParaRPrNode = new SafeXmlNode(srcPara.endParaRPr.element.cloneNode(true));
+ 		}
++		// pdf-edit patch: `noBullet` — the paragraph without its bullet / number
++		// (PowerPoint's Backspace at the start of a bulleted line): <a:buNone/>, and
++		// no hanging indent, so the text stays where it was.
++		if (opPara.noBullet) {
++			let pPr = pPrNode?.element;
++			if (!pPr) {
++				pPr = doc.createElementNS(A_NS, "a:pPr");
++				paragraphElement.insertBefore(pPr, paragraphElement.firstChild);
++				pPrNode = new SafeXmlNode(pPr);
++			}
++			for (const c of Array.from(pPr.children)) if (c.localName === "buChar" || c.localName === "buAutoNum" || c.localName === "buBlip" || c.localName === "buNone") pPr.removeChild(c);
++			const after = Array.from(pPr.children).find((c) => c.localName === "tabLst" || c.localName === "defRPr" || c.localName === "extLst");
++			pPr.insertBefore(doc.createElementNS(A_NS, "a:buNone"), after ?? null);
++			const indent = pPr.getAttribute("indent");
++			if (indent === null || Number(indent) < 0) pPr.setAttribute("indent", "0");
++		}
+ 		const runs = [];
+ 		function resolveDefaultRPr(srcParaIdx) {
+ 			if (srcParaIdx < 0 || srcParaIdx >= origParagraphs.length) return null;

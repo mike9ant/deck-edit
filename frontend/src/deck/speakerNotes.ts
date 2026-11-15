@@ -108,14 +108,31 @@ function paragraphText(p: Element): string {
   return out
 }
 
-export async function readNotes(pres: PresentationData, slide: SlideData): Promise<string> {
+/** The notes body's paragraphs (`a:p` elements of a parsed copy of the notes page); [] without notes. */
+export async function readNotesParagraphs(pres: PresentationData, slide: SlideData): Promise<Element[]> {
   const part = await notesPart(pres, slide)
-  if (!part) return ''
+  if (!part) return []
   const xml = await pkgOf(pres).readText(part.path)
-  if (!xml) return ''
+  if (!xml) return []
   const body = bodyShape(parse(xml))
-  if (!body) return ''
-  return [...body.getElementsByTagNameNS(A, 'p')].map(paragraphText).join('\n')
+  if (!body) return []
+  return [...body.getElementsByTagNameNS(A, 'p')]
+}
+
+export async function readNotes(pres: PresentationData, slide: SlideData): Promise<string> {
+  return (await readNotesParagraphs(pres, slide)).map(paragraphText).join('\n')
+}
+
+/** Notes content to write: plain text (one paragraph per line), or `a:p` elements serialized as XML. */
+export type NotesContent = string | { paragraphs: string[] }
+
+const contentText = (c: NotesContent) => (typeof c === 'string' ? c : c.paragraphs.map((x) => paragraphText(parse(x).documentElement)).join('\n'))
+
+function fillContent(doc: Document, txBody: Element, content: NotesContent) {
+  if (typeof content === 'string') return fillBody(doc, txBody, content)
+  for (const p of [...txBody.getElementsByTagNameNS(A, 'p')]) p.remove()
+  for (const xml of content.paragraphs) txBody.appendChild(doc.importNode(parse(xml).documentElement, true))
+  if (!content.paragraphs.length) txBody.appendChild(doc.createElementNS(A, 'a:p'))
 }
 
 /** Replace a txBody's paragraphs with `text`, one paragraph per line, keeping formatting templates. */
@@ -144,7 +161,7 @@ function fillBody(doc: Document, txBody: Element, text: string) {
   }
 }
 
-function newNotesXml(text: string): string {
+function newNotesXml(content: NotesContent): string {
   const doc = parse(
     `<p:notes xmlns:a="${A}" xmlns:r="${R}" xmlns:p="${P}"><p:cSld><p:spTree>` +
       `<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>` +
@@ -153,15 +170,15 @@ function newNotesXml(text: string): string {
       `<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>` +
       `</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:notes>`,
   )
-  fillBody(doc, doc.getElementsByTagNameNS(P, 'txBody')[0], text)
+  fillContent(doc, doc.getElementsByTagNameNS(P, 'txBody')[0], content)
   return serialize(doc)
 }
 
 /**
- * Write a slide's speaker notes. Returns an undo function that restores every
- * part it touched exactly.
+ * Write a slide's speaker notes — plain text, or formatted paragraphs (see
+ * notesRich.ts). Returns an undo function that restores every part it touched exactly.
  */
-export async function writeNotes(pres: PresentationData, slide: SlideData, text: string): Promise<() => void> {
+export async function writeNotes(pres: PresentationData, slide: SlideData, content: NotesContent): Promise<() => void> {
   const pkg = pkgOf(pres)
   const part = await notesPart(pres, slide)
   const restore: (() => void)[] = []
@@ -182,7 +199,7 @@ export async function writeNotes(pres: PresentationData, slide: SlideData, text:
       txBody.appendChild(doc.createElementNS(A, 'a:lstStyle'))
       body.appendChild(txBody)
     }
-    fillBody(doc, txBody, text)
+    fillContent(doc, txBody, content)
     await setText(part.path, serialize(doc))
     return () => restore.reverse().forEach((f) => f())
   }
@@ -195,7 +212,8 @@ export async function writeNotes(pres: PresentationData, slide: SlideData, text:
   while (used.has(`ppt/notesSlides/notesSlide${n}.xml`)) n++
   const path = `ppt/notesSlides/notesSlide${n}.xml`
   const slideName = slide.id.split('/').pop()
-  await setText(path, newNotesXml(text))
+  if (!contentText(content).trim() && !part) return () => {} // nothing to add
+  await setText(path, newNotesXml(content))
   await setText(
     relsPathFor(path),
     `${DECL}<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
