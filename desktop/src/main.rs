@@ -120,8 +120,7 @@ const AUTHOR: &str = "Developed by Michael Antonov.";
 /// The macOS menu bar: Tauri's default menu, with an About panel that shows
 /// the app's purpose, author and as-is notice.
 fn app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<R>> {
-    let v = &app.package_info().version;
-    let version = format!("{}.{}", v.major, v.minor); // "0.1", as in Settings → About
+    let version = app.package_info().version.to_string(); // "0.1.0", as in Settings → About
     let about = AboutMetadataBuilder::new()
         .name(Some("Deck Edit"))
         .version(Some(version.clone()))

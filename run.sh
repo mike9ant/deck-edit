@@ -9,7 +9,7 @@
 #   ./run.sh test [frontend|backend]   Unit tests
 #   ./run.sh desktop          Build the macOS app, install it as /Applications/Deck Edit.app and open it
 #   ./run.sh release          Shareable build: universal app, signed + notarized, in a .dmg → release/
-#   ./run.sh push             Push main; bumps the minor version first when the commits are from a new day
+#   ./run.sh push             Push main; bumps the patch version first when the commits are from a new day
 #
 # Env: DECKEDIT_PORT (default 3101), DECKEDIT_DATA_DIR (default ~/.deck-edit),
 #      DECKEDIT_TEST_DECK=<path.pptx> enables the real-deck round-trip test.
@@ -142,9 +142,10 @@ release() {
   say "Ready to share → $dmg ($(du -h "$dmg" | cut -f1), $(lipo -archs "$app/Contents/MacOS/deck-edit-desktop"))  · $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
-# Push main. The minor version goes up once per new day of commits: when the newest commit being
+# Push main. The patch version goes up once per new day of commits: when the newest commit being
 # pushed is from a different day than the last commit on origin and the version hasn't changed yet,
-# bump it (scripts/version.mjs), commit "Version X.Y", then push. The pre-push hook refuses a plain
+# bump it (scripts/version.mjs bump-patch), commit "Version X.Y.Z", then push. A minor bump done by
+# hand (scripts/version.mjs bump-minor) counts as the bump. The pre-push hook refuses a plain
 # `git push` that skipped a due bump.
 push() {
   cd "$ROOT"
@@ -160,13 +161,13 @@ push() {
   pushed_version="$(git show origin/main:desktop/tauri.conf.json | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' | head -1)"
   version="$(node scripts/version.mjs)"
   if [ "$new_day" != "$last_day" ] && [ "$version" = "$pushed_version" ]; then
-    local next; next="$(node scripts/version.mjs bump-minor)"
+    local next; next="$(node scripts/version.mjs bump-patch)"
     git add desktop/tauri.conf.json backend/Cargo.toml desktop/Cargo.toml Cargo.lock \
       frontend/src/version.ts frontend/package.json frontend/package-lock.json
     # Dated like the newest commit it versions, so the next push compares days with the work, not the push.
     local when; when="$(git log -1 --format=%cI HEAD)"
     GIT_AUTHOR_DATE="$when" GIT_COMMITTER_DATE="$when" \
-      git commit -q -m "Version ${next%.0}" -m "Commits from $new_day (last push: $last_day)."
+      git commit -q -m "Version $next" -m "Commits from $new_day (last push: $last_day)."
     say "Version $version → $next (new day of commits: $new_day; last push: $last_day)"
     count=$((count + 1))
   else

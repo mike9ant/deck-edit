@@ -26,6 +26,7 @@ import { fitSize, prepareImage } from './images'
 import { NotePins, actNowPrompt, type NoteDraft } from '../notes/NotePins'
 import { sendToAgent } from '../chat/sendToAgent'
 import { DrawLayer, pinFor, strokesBox, type Box } from '../notes/NoteDrawing'
+import { paintsAt, shapesAt } from './hitTest'
 import type { Stroke } from '../api/types'
 import { notesForSlide, useNotes } from '../store/notesStore'
 import { useApp } from '../store/appStore'
@@ -126,18 +127,28 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     setDraft(null)
   }, [slide.id, session.version])
 
-  /** Top-level slide node under a DOM target, if any. */
-  const hitNode = (target: EventTarget | null): string | null => {
+  /**
+   * The shape a click at client (x, y) means (see hitTest.ts): the topmost shape that draws
+   * something there — a picture's opaque pixel, a drawn fill or outline, its text's area — else the
+   * topmost box. `keepSelected`: a selected shape keeps its whole box (to move or edit it), except
+   * where a shape above it draws.
+   * `cycle` (⌥-click): the next shape below the selected one here, wrapping to the top.
+   */
+  const pickAt = (x: number, y: number, opts: { keepSelected?: boolean; cycle?: boolean } = {}): string | null => {
     const root = renderRef.current?.root()
-    let el = target as HTMLElement | null
-    while (el && el !== root) {
-      if (el.parentElement === root) {
-        const id = el.getAttribute('data-pptx-node-id')
-        return id && topIds.has(id) ? id : null
-      }
-      el = el.parentElement
-    }
-    return null
+    if (!root) return null
+    const stack = shapesAt(root, x, y, (id) => topIds.has(id))
+    if (!stack.length) return null
+    if (opts.cycle) return stack[(stack.findIndex((id) => selection.includes(id)) + 1) % stack.length]
+    const shape = (id: string) => root.querySelector<HTMLElement>(`:scope > [data-pptx-node-id="${CSS.escape(id)}"]`)
+    // Top down: the first shape that draws here — or, with keepSelected, that is selected (its whole
+    // box counts, but only where nothing above it draws: a picture over a selected box still wins
+    // where the picture is opaque).
+    return stack.find((id) => {
+      if (opts.keepSelected && selection.includes(id)) return true
+      const el = shape(id)
+      return !!el && paintsAt(el, x, y)
+    }) ?? stack[0]
   }
 
   const toSlide = (clientX: number, clientY: number) => {
@@ -403,13 +414,13 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     if (noteMode) {
       e.preventDefault() // no default mousedown focus: it would pull focus back from the note box that opens
       const p = toSlide(e.clientX, e.clientY)
-      const id = hitNode(e.target)
+      const id = pickAt(e.clientX, e.clientY)
       const n = id ? nodeById(id) : undefined
       setDraft({ x: p.x / pres.width, y: p.y / pres.height, shapeName: n ? label(n) : undefined })
       return
     }
     if (draft) setDraft(null)
-    const id = hitNode(e.target)
+    const id = pickAt(e.clientX, e.clientY, { cycle: e.altKey, keepSelected: !e.shiftKey && !e.metaKey })
     if (!id) {
       if (!e.shiftKey) setSelection(key, [])
       startMarquee(e)
@@ -425,7 +436,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
 
   const onDoubleClick = (e: React.MouseEvent) => {
     if (noteMode || editing) return
-    const id = hitNode(e.target)
+    const id = pickAt(e.clientX, e.clientY, { keepSelected: true })
     if (id) startEditing(id, { x: e.clientX, y: e.clientY })
   }
 
@@ -680,6 +691,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
           {selRects.map(({ id, r, rotation }) => (
             <div
               key={id}
+              data-selected-node={id}
               className={`absolute border ${editing?.nodeId === id ? 'border-dashed border-accent/70' : 'border-accent'}`}
               style={{ left: r.x * scale, top: r.y * scale, width: r.w * scale, height: r.h * scale, rotate: `${rotation}deg` }}
             >

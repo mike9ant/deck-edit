@@ -23,13 +23,15 @@ turn can be reverted with one click.
 ./run.sh test      # backend + frontend unit tests
 ./run.sh desktop   # build the macOS app → /Applications/Deck Edit.app, and open it
 ./run.sh release   # shareable build: universal, signed + notarized .dmg → release/
-./run.sh push      # push main; bumps the minor version once per new day of commits
+./run.sh push      # push main; bumps the patch version once per new day of commits
 ```
 
-Versioning: `./run.sh push` bumps the minor version (0.1 → 0.2) when the commits being pushed are
-from a different day than the last pushed commit, and commits "Version 0.2" before pushing. The
-version lives in several files (`desktop/tauri.conf.json`, the `Cargo.toml`s, `frontend/package.json`,
-`frontend/src/version.ts`); `node scripts/version.mjs [bump-minor]` reads or bumps them together.
+Versioning: `./run.sh push` bumps the **patch** version (0.1.0 → 0.1.1) when the commits being
+pushed are from a different day than the last pushed commit, and commits "Version 0.1.1" before
+pushing. Bump the **minor** version by hand when you want one: `node scripts/version.mjs bump-minor`
+(0.1.4 → 0.2.0), then commit — the next push then adds no patch bump. The version lives in several
+files (`desktop/tauri.conf.json`, the `Cargo.toml`s, `frontend/package.json`, `frontend/src/version.ts`);
+`node scripts/version.mjs [bump-patch|bump-minor]` reads or bumps them together.
 A pre-push hook (`.githooks/`, enabled by `./run.sh setup`) stops a plain `git push` that skipped a due bump.
 
 Requirements: Rust, Node 20+, Python 3, and the [Claude Code CLI](https://claude.com/claude-code)

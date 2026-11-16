@@ -1,5 +1,5 @@
 #!/bin/sh
-# Deck Edit: the minor version goes up once per new day of commits (CLAUDE.md, `./run.sh push`).
+# Deck Edit: the patch version goes up once per new day of commits (CLAUDE.md, `./run.sh push`).
 # This stops a plain `git push` of main when that bump is due but missing: the newest commit
 # being pushed is from a different day than the last commit on the remote, and the version
 # hasn't changed. Enabled by `./run.sh setup` (git config core.hooksPath .githooks).
@@ -14,7 +14,7 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   git cat-file -e "$remote_sha" 2>/dev/null || continue                          # remote commit not fetched
   [ "$(day "$local_sha")" = "$(day "$remote_sha")" ] && continue
   [ "$(ver "$local_sha")" != "$(ver "$remote_sha")" ] && continue
-  echo "Deck Edit: these commits are from a new day ($(day "$local_sha")), so the minor version should go up before pushing." >&2
+  echo "Deck Edit: these commits are from a new day ($(day "$local_sha")), so the patch version should go up before pushing." >&2
   echo "  Use ./run.sh push — it bumps the version, commits it, and pushes." >&2
   echo "  (To push without a bump anyway: git push --no-verify)" >&2
   exit 1
