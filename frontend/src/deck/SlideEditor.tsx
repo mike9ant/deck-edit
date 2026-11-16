@@ -14,7 +14,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { EditOperation, SlideData, SlideNode } from '@diceui/pptx-core'
+import type { EditOperation, NodeOrder, SlideData, SlideNode } from '@diceui/pptx-core'
 import { copyNodes } from '@diceui/pptx-core'
 import { useDecks, type DeckSession } from './deckStore'
 import { ALIGN_LABEL, alignPositions, type AlignKind } from './align'
@@ -48,6 +48,16 @@ interface Props {
 export interface SlideActions {
   addTextBox(): void
   align(kind: AlignKind): void
+  /** Bring the selected shapes to the front / forward one step, or send them backward / to the back. */
+  arrange(order: NodeOrder): void
+}
+export type { NodeOrder }
+
+const ARRANGE_LABEL: Record<NodeOrder, string> = {
+  front: 'brought to front',
+  forward: 'brought forward',
+  backward: 'sent backward',
+  back: 'sent to back',
 }
 export type { AlignKind }
 
@@ -478,6 +488,12 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     if (mod && e.key === 'd') { e.preventDefault(); void duplicateSelection(); return }
     if (mod && e.key === 'a') { e.preventDefault(); setSelection(key, slide.nodes.map((n) => n.id)); return }
     if (e.key === 'Enter' && selection.length === 1) { e.preventDefault(); startEditing(selection[0]); return }
+    // ⌘↑ / ⌘↓: one step up / down the stack; with ⇧: to the front / back (as in Google Slides).
+    if (mod && selection.length && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault()
+      arrange(e.key === 'ArrowUp' ? (e.shiftKey ? 'front' : 'forward') : (e.shiftKey ? 'back' : 'backward'))
+      return
+    }
     const step = e.shiftKey ? 10 : 1
     if (selection.length && e.key.startsWith('Arrow')) {
       e.preventDefault()
@@ -529,7 +545,35 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     if (file) await insertImage(file, file.name, at)
   }
 
+  /**
+   * Change the stacking order of the selected shapes (slide.nodes runs bottom → top). Several
+   * shapes keep their order among themselves: to the front bottom-most first, to the back top-most
+   * first; one step up top-most first, one step down bottom-most first — and a shape never hops
+   * over another selected one.
+   */
+  const arrange = (order: NodeOrder) => {
+    const picked = new Set(selection)
+    const ids = slide.nodes.map((n) => n.id)
+    const chosen = ids.filter((id) => picked.has(id))
+    if (!chosen.length) return
+    const seq = order === 'front' || order === 'backward' ? chosen : [...chosen].reverse()
+    const ops: EditOperation[] = []
+    for (const id of seq) {
+      const i = ids.indexOf(id)
+      const to = order === 'front' ? ids.length - 1 : order === 'back' ? 0 : order === 'forward' ? i + 1 : i - 1
+      if (to < 0 || to >= ids.length || to === i) continue
+      if ((order === 'forward' || order === 'backward') && picked.has(ids[to])) continue
+      ids.splice(i, 1)
+      ids.splice(to, 0, id)
+      ops.push({ type: 'reorderNode', slideId: slide.id, nodeId: id, order })
+    }
+    if (!ops.length) return
+    const names = chosen.map((id) => nodeById(id)).filter(Boolean).map((n) => `"${label(n as SlideNode)}"`)
+    void run(ops.length === 1 ? ops[0] : { type: 'batch', operations: ops }, `Slide ${slideNo}: ${ARRANGE_LABEL[order]} ${names.join(', ')}`)
+  }
+
   registerActions({
+    arrange,
     addTextBox: async () => {
         const created = await run(
         { type: 'addTextBox', slideId: slide.id, text: 'New text', position: { x: pres.width * 0.3, y: pres.height * 0.42 }, size: { w: pres.width * 0.4, h: pres.height * 0.1 } },

@@ -12,7 +12,7 @@ import {
 import clsx from 'clsx'
 import { useDecks, deckKey } from './deckStore'
 import { SlideRail } from './SlideRail'
-import { SlideEditor, type AlignKind, type SlideActions } from './SlideEditor'
+import { SlideEditor, type AlignKind, type NodeOrder, type SlideActions } from './SlideEditor'
 import { NotesPane } from './NotesPane'
 import { NoteToolButton, SelectToolButton, useEscapeEndsNoteMode } from '../notes/NoteDrawing'
 import { Splitter } from '../components/Splitter'
@@ -38,7 +38,7 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   const [showResolved, setShowResolved] = useState(false)
   useEscapeEndsNoteMode(noteMode, setNoteMode)
   const [dismissedAt, setDismissedAt] = useState(0)
-  const actions = useRef<SlideActions>({ addTextBox() {}, align() {} })
+  const actions = useRef<SlideActions>({ addTextBox() {}, align() {}, arrange() {} })
 
   useEffect(() => {
     void open(pid, path)
@@ -90,6 +90,7 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
         <div className="mx-1 h-5 w-px bg-hair" />
         <SelectToolButton active={!noteMode} onSelect={() => setNoteMode(false)} />
         <button className="tool-btn" onClick={() => { setNoteMode(false); actions.current.addTextBox() }} title="Add a text box"><Type size={15} /> <span className="tb-label">Text</span></button>
+        {session.selection.length >= 1 && <ArrangeTools onArrange={(o) => actions.current.arrange(o)} />}
         {session.selection.length >= 2 && <AlignTools count={session.selection.length} onAlign={(k) => actions.current.align(k)} />}
         <div className="ml-2 min-w-0 truncate whitespace-nowrap text-xs text-ink-3">
           Slide {session.slideIndex + 1} / {pres.slides.length}
@@ -158,6 +159,50 @@ function DistributeIcon({ size = 15, vertical = false }: { size?: number; vertic
     </svg>
   )
 }
+/**
+ * Stacking order: two overlapping squares, the selected one (filled) drawn above the other for
+ * front/forward and below it for back/backward; an arrow for the direction — double for all the
+ * way, single for one step.
+ */
+function ArrangeIcon({ order, size = 18 }: { order: NodeOrder; size?: number }) {
+  const up = order === 'front' || order === 'forward'
+  const selected = <rect x="2.5" y="9.5" width="10" height="10" rx="2" fill="currentColor" stroke="currentColor" />
+  const other = <rect x="7.5" y="4" width="10" height="10" rx="2" fill={up ? 'none' : 'white'} />
+  const arrow = {
+    front: 'M18 16.5l2.5-2.5 2.5 2.5M18 20.5l2.5-2.5 2.5 2.5',
+    forward: 'M20.5 21v-8M18 15.5l2.5-2.5 2.5 2.5',
+    backward: 'M20.5 13v8M18 18.5l2.5 2.5 2.5-2.5',
+    back: 'M18 14l2.5 2.5 2.5-2.5M18 18l2.5 2.5 2.5-2.5',
+  }[order]
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      {up ? <>{other}{selected}</> : <>{selected}{other}</>}
+      <path d={arrow} />
+    </svg>
+  )
+}
+
+const ARRANGE: { order: NodeOrder; title: string }[] = [
+  { order: 'front', title: 'Bring to front (⇧⌘↑)' },
+  { order: 'forward', title: 'Bring forward (⌘↑)' },
+  { order: 'backward', title: 'Send backward (⌘↓)' },
+  { order: 'back', title: 'Send to back (⇧⌘↓)' },
+]
+
+/** Stacking-order buttons, shown while 1+ shapes are selected. */
+function ArrangeTools({ onArrange }: { onArrange(o: NodeOrder): void }) {
+  return (
+    <div className="ml-1 flex items-center">
+      <div className="mx-1 h-5 w-px bg-hair" />
+      {ARRANGE.map(({ order, title }) => (
+        <button key={order} className="icon-btn h-7 w-7" title={title} onClick={() => onArrange(order)}>
+          <ArrangeIcon order={order} />
+        </button>
+      ))}
+    </div>
+  )
+}
+
 const DistributeH = ({ size }: { size?: number }) => <DistributeIcon size={size} />
 const DistributeV = ({ size }: { size?: number }) => <DistributeIcon size={size} vertical />
 

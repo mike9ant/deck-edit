@@ -8,9 +8,13 @@
 #   ./run.sh logs             Tail the server log
 #   ./run.sh test [frontend|backend]   Unit tests
 #   ./run.sh desktop          Build the macOS app, install it as /Applications/Deck Edit.app and open it
+#   ./run.sh release          Shareable build: universal app, signed + notarized, in a .dmg → release/
+#   ./run.sh push             Push main; bumps the minor version first when the commits are from a new day
 #
 # Env: DECKEDIT_PORT (default 3101), DECKEDIT_DATA_DIR (default ~/.deck-edit),
 #      DECKEDIT_TEST_DECK=<path.pptx> enables the real-deck round-trip test.
+#      release: DECKEDIT_SIGN_IDENTITY (default: the keychain's "Developer ID Application" certificate),
+#               DECKEDIT_NOTARY_PROFILE (default deck-edit — `xcrun notarytool store-credentials deck-edit …`).
 
 set -e
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,6 +30,8 @@ say() { echo -e "${GREEN}==>${NC} $*"; }
 warn() { echo -e "${YELLOW}!!${NC} $*"; }
 
 setup() {
+  # The pre-push hook that guards the once-a-day version bump (see push below).
+  git -C "$ROOT" config core.hooksPath .githooks
   if [ ! -x "$ROOT/.venv/bin/python3" ]; then
     say "Creating Python env (.venv)"
     python3 -m venv "$ROOT/.venv"
@@ -76,6 +82,100 @@ install_desktop() {
   open "$APP_INSTALLED"
 }
 
+# Submit a file to Apple's notary service and wait; on rejection, show Apple's log and stop.
+notarize() {
+  local file="$1" out id
+  say "Notarizing $(basename "$file") (Apple usually takes a few minutes)"
+  out="$(xcrun notarytool submit "$file" --keychain-profile "$NOTARY_PROFILE" --wait 2>&1)" || true
+  echo "$out" | grep -E "^ *(id|status):" | sort -u
+  if ! echo "$out" | grep -q "status: Accepted"; then
+    id="$(echo "$out" | sed -n 's/^ *id: \([0-9a-f-]*\).*/\1/p' | head -1)"
+    echo "$out" | tail -5
+    [ -n "$id" ] && xcrun notarytool log "$id" --keychain-profile "$NOTARY_PROFILE" | tail -40
+    warn "Notarization of $(basename "$file") failed"; exit 1
+  fi
+}
+
+# A build to give to other people: one app for Apple Silicon and Intel Macs, signed with your
+# Developer ID, notarized by Apple (with the ticket stapled, so it opens cleanly offline too),
+# packaged in a drag-to-Applications .dmg that is itself signed and notarized.
+release() {
+  NOTARY_PROFILE="${DECKEDIT_NOTARY_PROFILE:-deck-edit}"
+  local identity="${DECKEDIT_SIGN_IDENTITY:-$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)}"
+  [ -n "$identity" ] || { warn "No \"Developer ID Application\" certificate in the keychain (set DECKEDIT_SIGN_IDENTITY)"; exit 1; }
+  xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 \
+    || { warn "No notarization credentials \"$NOTARY_PROFILE\" — run: xcrun notarytool store-credentials $NOTARY_PROFILE --apple-id <email> --team-id <TEAMID>"; exit 1; }
+  local version; version="$(node -p "require('$ROOT/desktop/tauri.conf.json').version")"
+  local out="$ROOT/release"
+  local app="$ROOT/target/universal-apple-darwin/release/bundle/macos/$APP_NAME.app"
+  local dmg="$out/Deck-Edit-$version.dmg"
+  say "Release $version — signing as: $identity"
+
+  build_frontend
+  command -v rustup >/dev/null && rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
+  say "Building the universal app (Apple Silicon + Intel)"
+  (cd "$ROOT/desktop" && APPLE_SIGNING_IDENTITY="$identity" npx --yes @tauri-apps/cli@2 build --target universal-apple-darwin --bundles app)
+  codesign --verify --deep --strict "$app"
+  codesign -dv "$app" 2>&1 | grep -q "runtime" || { warn "The app isn't signed with the hardened runtime (notarization needs it)"; exit 1; }
+
+  mkdir -p "$out"
+  local zip="$out/.notarize-app.zip"
+  ditto -c -k --keepParent "$app" "$zip"
+  notarize "$zip"
+  rm -f "$zip"
+  xcrun stapler staple -q "$app"
+
+  say "Packaging the .dmg"
+  local stage; stage="$(mktemp -d)"
+  cp -R "$app" "$stage/"
+  ln -s /Applications "$stage/Applications"
+  rm -f "$dmg"
+  hdiutil create -quiet -volname "$APP_NAME" -srcfolder "$stage" -fs HFS+ -format UDZO "$dmg"
+  rm -rf "$stage"
+  codesign --sign "$identity" --timestamp "$dmg"
+  notarize "$dmg"
+  xcrun stapler staple -q "$dmg"
+
+  say "Gatekeeper check (what a recipient's Mac does)"
+  spctl -a -vv -t execute "$app" 2>&1 | sed 's/^/   /'
+  spctl -a -vv -t open --context context:primary-signature "$dmg" 2>&1 | sed 's/^/   /'
+  say "Ready to share → $dmg ($(du -h "$dmg" | cut -f1), $(lipo -archs "$app/Contents/MacOS/deck-edit-desktop"))  · $(date '+%Y-%m-%d %H:%M:%S')"
+}
+
+# Push main. The minor version goes up once per new day of commits: when the newest commit being
+# pushed is from a different day than the last commit on origin and the version hasn't changed yet,
+# bump it (scripts/version.mjs), commit "Version X.Y", then push. The pre-push hook refuses a plain
+# `git push` that skipped a due bump.
+push() {
+  cd "$ROOT"
+  local branch; branch="$(git rev-parse --abbrev-ref HEAD)"
+  [ "$branch" = main ] || { warn "On branch $branch — ./run.sh push pushes main"; exit 1; }
+  [ -z "$(git status --porcelain)" ] || { warn "Uncommitted changes — commit them first"; exit 1; }
+  git fetch -q origin
+  local count; count="$(git rev-list --count origin/main..HEAD)"
+  [ "$count" -gt 0 ] || { say "Nothing to push (main is at origin/main)"; return; }
+  local last_day new_day pushed_version version
+  last_day="$(git log -1 --format=%cd --date=short-local origin/main)"
+  new_day="$(git log -1 --format=%cd --date=short-local HEAD)"
+  pushed_version="$(git show origin/main:desktop/tauri.conf.json | sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' | head -1)"
+  version="$(node scripts/version.mjs)"
+  if [ "$new_day" != "$last_day" ] && [ "$version" = "$pushed_version" ]; then
+    local next; next="$(node scripts/version.mjs bump-minor)"
+    git add desktop/tauri.conf.json backend/Cargo.toml desktop/Cargo.toml Cargo.lock \
+      frontend/src/version.ts frontend/package.json frontend/package-lock.json
+    # Dated like the newest commit it versions, so the next push compares days with the work, not the push.
+    local when; when="$(git log -1 --format=%cI HEAD)"
+    GIT_AUTHOR_DATE="$when" GIT_COMMITTER_DATE="$when" \
+      git commit -q -m "Version ${next%.0}" -m "Commits from $new_day (last push: $last_day)."
+    say "Version $version → $next (new day of commits: $new_day; last push: $last_day)"
+    count=$((count + 1))
+  else
+    say "Version stays $version ($([ "$new_day" = "$last_day" ] && echo "same day as the last push" || echo "already bumped since the last push"))"
+  fi
+  say "Pushing $count commit(s) to origin/main"
+  git push origin main
+}
+
 stop() {
   if [ -f "$PID_FILE" ]; then
     local pid; pid="$(cat "$PID_FILE")"
@@ -112,6 +212,8 @@ case "${1:-start}" in
     cd "$FRONTEND" && DECKEDIT_BACKEND="http://127.0.0.1:$PORT" npx vite --host 127.0.0.1
     ;;
   desktop) build_frontend; build_desktop; install_desktop ;;
+  release) release ;;
+  push) push ;;
   stop) stop ;;
   logs) tail -f "$LOG_FILE" ;;
   test)
@@ -121,5 +223,5 @@ case "${1:-start}" in
       *) (cd "$ROOT" && "$CARGO" test -p deck-edit) && (cd "$FRONTEND" && npx vitest run) ;;
     esac
     ;;
-  *) echo "usage: ./run.sh [setup|start|build|dev|stop|logs|test [frontend|backend]|desktop]"; exit 1 ;;
+  *) echo "usage: ./run.sh [setup|start|build|dev|stop|logs|test [frontend|backend]|desktop|release|push]"; exit 1 ;;
 esac

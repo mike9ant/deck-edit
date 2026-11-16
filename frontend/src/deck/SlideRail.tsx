@@ -28,6 +28,11 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
   const [picked, setPicked] = useState<string[]>([])
   const [dragOver, setDragOver] = useState<number | null>(null)
   const dragIds = useRef<string[]>([])
+  /** A reorder drag in progress (pointer-driven, see startDrag): what it carries and where it started. */
+  const drag = useRef<{ ids: string[]; x: number; y: number; active: boolean } | null>(null)
+  const [dragging, setDragging] = useState<{ count: number; x: number; y: number } | null>(null)
+  /** The click that ends a drag isn't a click on the slide. */
+  const suppressClick = useRef(false)
   const listRef = useRef<HTMLDivElement>(null)
   const notes = useNotes((s) => s.notes)
   const thumbW = Math.max(60, Math.floor(useInnerWidth(listRef, width - 16) - 32))
@@ -163,6 +168,66 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
     setSlide(key, first)
   }
 
+  /** Where a drop at `clientY` lands: before the row whose upper half it's in, else after the last. */
+  const targetAt = (clientY: number): number => {
+    const rows = [...(listRef.current?.querySelectorAll<HTMLElement>('[data-slide-row]') ?? [])]
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i].getBoundingClientRect()
+      if (clientY < r.top + r.height / 2) return i
+    }
+    return rows.length
+  }
+
+  /**
+   * Reorder by dragging, tracked with pointer events rather than HTML drag-and-drop: in the
+   * desktop app's web view (WebKit) a drag started over a thumbnail picks up the slide's own
+   * pictures instead, and the drop never reaches the rail. A press that moves 5 px becomes a drag.
+   */
+  const startDrag = (e: React.PointerEvent, ids: string[]) => {
+    if (e.button !== 0) return
+    // A drag that ended over another row got no click, so its "swallow the next click" is stale.
+    suppressClick.current = false
+    drag.current = { ids, x: e.clientX, y: e.clientY, active: false }
+    const move = (ev: PointerEvent) => {
+      const d = drag.current
+      if (!d) return
+      if (!d.active) {
+        if (Math.hypot(ev.clientX - d.x, ev.clientY - d.y) < 5) return
+        d.active = true
+        dragIds.current = d.ids
+        document.body.style.cursor = 'grabbing'
+      }
+      setDragging({ count: d.ids.length, x: ev.clientX, y: ev.clientY })
+      setDragOver(targetAt(ev.clientY))
+      // Scroll the rail when dragging near its top or bottom edge.
+      const list = listRef.current
+      if (list) {
+        const r = list.getBoundingClientRect()
+        if (ev.clientY < r.top + 30) list.scrollTop -= 14
+        else if (ev.clientY > r.bottom - 30) list.scrollTop += 14
+      }
+    }
+    const up = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      const d = drag.current
+      drag.current = null
+      setDragging(null)
+      document.body.style.cursor = ''
+      if (d?.active && ev.type === 'pointerup') {
+        suppressClick.current = true
+        void onDrop(targetAt(ev.clientY))
+      } else {
+        setDragOver(null)
+        dragIds.current = []
+      }
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+  }
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     const mod = e.metaKey || e.ctrlKey
     if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); setPicked([]); setSlide(key, session.slideIndex + 1) }
@@ -176,7 +241,7 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
   return (
     // Keeps its width (the thumbnails are sized from it), so they never hang out of the rail.
     <div className="flex h-full min-h-0 shrink-0 flex-col bg-paper" style={{ width }}>
-      <div ref={listRef} tabIndex={0} onKeyDown={onKeyDown} className="min-h-0 flex-1 overflow-y-auto px-2 py-2 outline-none [scrollbar-gutter:stable]">
+      <div ref={listRef} tabIndex={0} onKeyDown={onKeyDown} className="min-h-0 flex-1 select-none overflow-y-auto px-2 py-2 outline-none [scrollbar-gutter:stable]">
         {pres.slides.map((slide, i) => {
           const sid = session.sldIds.get(slide.id) ?? ''
           const openNotes = notes.filter((n) => n.deck === session.path && n.status === 'open' && (sid ? n.slideId === sid : n.slideIndex === i + 1)).length
@@ -187,21 +252,15 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
             <div key={slide.id} data-slide-index={i}>
               <div className={clsx('mx-1 h-1 rounded', dragOver === i ? 'bg-accent' : 'bg-transparent')} />
               <div
-                draggable
-                onDragStart={(e) => {
-                  dragIds.current = isPicked ? picked : [slide.id]
-                  e.dataTransfer.effectAllowed = 'move'
-                  e.dataTransfer.setData('text/plain', 'slides')
-                }}
-                onDragOver={(e) => {
-                  if (!dragIds.current.length) return
-                  e.preventDefault()
-                  const r = e.currentTarget.getBoundingClientRect()
-                  setDragOver(e.clientY < r.top + r.height / 2 ? i : i + 1)
-                }}
-                onDrop={(e) => { e.preventDefault(); if (dragOver !== null) void onDrop(dragOver) }}
-                onDragEnd={() => setDragOver(null)}
+                data-slide-row
+                onPointerDown={(e) => startDrag(e, isPicked ? picked : [slide.id])}
+                // No native drags from the rail (the thumbnails' pictures would be dragged instead).
+                onDragStart={(e) => e.preventDefault()}
                 onClick={(e) => {
+                  if (suppressClick.current) {
+                    suppressClick.current = false
+                    return
+                  }
                   if (e.shiftKey && current) {
                     const a = Math.min(session.slideIndex, i), b = Math.max(session.slideIndex, i)
                     setPicked(pres.slides.slice(a, b + 1).map((s) => s.id))
@@ -234,12 +293,13 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
             </div>
           )
         })}
-        <div
-          className={clsx('mx-1 h-6 rounded', dragOver === pres.slides.length ? 'border-t-4 border-accent' : '')}
-          onDragOver={(e) => { if (dragIds.current.length) { e.preventDefault(); setDragOver(pres.slides.length) } }}
-          onDrop={(e) => { e.preventDefault(); void onDrop(pres.slides.length) }}
-        />
+        <div className={clsx('mx-1 h-6 rounded', dragOver === pres.slides.length ? 'border-t-4 border-accent' : '')} />
       </div>
+      {dragging && (
+        <div className="pointer-events-none fixed z-50 rounded bg-accent px-2 py-0.5 text-xs font-medium text-white shadow-lg" style={{ left: dragging.x + 14, top: dragging.y + 10 }}>
+          {dragging.count} slide{dragging.count > 1 ? 's' : ''}
+        </div>
+      )}
       <div className="flex items-center justify-center gap-0.5 border-t border-hair px-1 py-1">
         <button className="icon-btn" title="Duplicate (⌘D)" onClick={() => void duplicate()}><CopyPlus size={15} /></button>
         <button className="icon-btn" title="Copy slides (⌘C) — paste into this deck or another one" onClick={() => void copy()}><Copy size={15} /></button>
