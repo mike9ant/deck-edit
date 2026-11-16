@@ -26,7 +26,7 @@ export function beginEditing(container: HTMLElement, at?: { x: number; y: number
   container.style.pointerEvents = 'auto'
   container.querySelectorAll(`[${PPTX_ATTRS.bullet}]`).forEach((b) => ((b as HTMLElement).contentEditable = 'false'))
   watchBullets(container)
-  container.focus()
+  container.focus({ preventScroll: true }) // the slide clips, it must not scroll (see SlideEditor)
   const sel = window.getSelection()
   if (!sel) return
   const range = at ? document.caretRangeFromPoint?.(at.x, at.y) : null

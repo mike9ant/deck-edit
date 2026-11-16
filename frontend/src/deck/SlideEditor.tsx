@@ -101,6 +101,25 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     setBox({ w: el.clientWidth, h: el.clientHeight })
     return () => ro.disconnect()
   }, [])
+  // The slide and its shapes clip (overflow: hidden) rather than scroll, but the browser still
+  // scrolls a clipping box to keep a text caret in view — editing text near the slide's bottom
+  // (or past a box's edge) would shift the whole slide away from its selection overlay, and
+  // nothing would scroll it back. Undo any such scroll as it happens. Boxes that really scroll
+  // (overflow auto/scroll, e.g. a note's text field) are left alone.
+  useEffect(() => {
+    const el = wrapRef.current
+    if (!el) return
+    const onScroll = (e: Event) => {
+      const t = e.target
+      if (!(t instanceof HTMLElement) || !el.contains(t) || (!t.scrollTop && !t.scrollLeft)) return
+      const { overflowX, overflowY } = getComputedStyle(t)
+      if (/auto|scroll/.test(overflowX + overflowY)) return
+      t.scrollTop = 0
+      t.scrollLeft = 0
+    }
+    el.addEventListener('scroll', onScroll, true)
+    return () => el.removeEventListener('scroll', onScroll, true)
+  }, [])
   const scale = Math.max(0.1, Math.min((box.w - 48) / pres.width, (box.h - 48) / pres.height))
   const stageW = pres.width * scale
   const stageH = pres.height * scale
