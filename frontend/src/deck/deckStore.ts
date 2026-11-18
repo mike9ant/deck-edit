@@ -178,6 +178,9 @@ export const useDecks = create<DeckStore>((set, get) => {
     const { touched, ...rest } = entry
     const stable = touched.map((id) => cur.sldIds.get(id)).filter((x): x is string => !!x)
     patch(key, {
+      // An edit that removed slides (e.g. deleting the last one) must not leave the current slide past the end:
+      // the views would render a slide that no longer exists.
+      slideIndex: Math.max(0, Math.min(cur.slideIndex, (cur.pres?.slides.length ?? 1) - 1)),
       ...extra,
       dirty: true,
       heldFrom: cur.heldFrom ?? (isProjectBusy(cur.pid) ? cur.undo.length : null),
