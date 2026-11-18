@@ -17,6 +17,7 @@ mod error;
 mod events;
 mod file_ops;
 mod files;
+mod local_only;
 mod mcp;
 mod notes;
 mod permissions;
@@ -34,7 +35,6 @@ use axum::extract::DefaultBodyLimit;
 use axum::routing::get;
 use axum::{Json, Router};
 use tokio::sync::oneshot;
-use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::state::AppState;
@@ -148,7 +148,7 @@ pub async fn run_server(listener: std::net::TcpListener, config: ServerConfig, r
         .nest("/api", api)
         .fallback_service(static_files)
         .layer(DefaultBodyLimit::max(512 * 1024 * 1024))
-        .layer(CorsLayer::permissive())
+        .layer(axum::middleware::from_fn(local_only::guard))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::from_std(listener)?;
