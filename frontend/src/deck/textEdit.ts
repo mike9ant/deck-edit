@@ -24,7 +24,9 @@ export function beginEditing(container: HTMLElement, at?: { x: number; y: number
   container.style.cursor = 'text'
   container.style.userSelect = 'text'
   container.style.pointerEvents = 'auto'
-  container.querySelectorAll(`[${PPTX_ATTRS.bullet}]`).forEach((b) => ((b as HTMLElement).contentEditable = 'false'))
+  // Bullets are paragraph properties, not text: not editable, and not copied with the text
+  // (pasted into a list, they'd come back as a second bullet).
+  container.querySelectorAll<HTMLElement>(`[${PPTX_ATTRS.bullet}]`).forEach((b) => { b.contentEditable = 'false'; b.style.userSelect = 'none' })
   watchBullets(container)
   container.focus({ preventScroll: true }) // the slide clips, it must not scroll (see SlideEditor)
   const sel = window.getSelection()

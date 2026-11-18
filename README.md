@@ -116,7 +116,9 @@ after the current version (bumped by `./run.sh push`).
     snapping to the slide and other shapes — hold ⌥ to disable), resize (handles;
     pictures keep their aspect ratio), edit existing text in place (double-click or
     Enter — formatting of each run is kept; ⌘B / ⌘I / ⌘U toggle bold / italic / underline on the
-    selection, or the word at the caret), copy/paste/duplicate/delete shapes
+    selection, or the word at the caret; ⌘V pastes text only, formatted like where it lands,
+    ⌥⇧⌘V keeps the source's bold / italic / underline / strikethrough / colour / font / size —
+    read from the macOS clipboard by the server), copy/paste/duplicate/delete shapes
     (also across slides and decks), add a text box, drop or paste images; with 2+ shapes selected, toolbar buttons
     align them (left / centers / right, tops / middles / bottoms) or distribute them with equal
     gaps (3+), relative to the selection — one undo step each

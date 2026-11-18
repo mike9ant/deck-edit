@@ -52,6 +52,8 @@ export const api = {
   updateProject: (id: string, body: { name?: string; touch?: boolean }) => json<Project>('PATCH', `/projects/${id}`, body),
   deleteProject: (id: string) => json('DELETE', `/projects/${id}`),
   pickFolder: () => json<{ path: string | null }>('POST', '/pick-folder'),
+  /** The system clipboard's formatted text (HTML; RTF converted) and plain text — for ⌥⇧⌘V. */
+  clipboardRich: () => json<{ html: string | null; text: string | null }>('POST', '/clipboard/rich'),
 
   tree: (pid: string) => json<TreeNode[]>('GET', `/projects/${pid}/tree`),
   fileUrl: (pid: string, path: string) => `/api/projects/${pid}/file?${q(path)}`,

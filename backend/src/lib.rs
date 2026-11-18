@@ -12,6 +12,7 @@ mod backups;
 mod chat;
 mod chat_images;
 mod claude_cli;
+mod clipboard;
 mod conversations;
 mod error;
 mod events;
@@ -140,7 +141,8 @@ pub async fn run_server(listener: std::net::TcpListener, config: ServerConfig, r
         .merge(permissions::routes())
         .merge(mcp::routes())
         .merge(settings::routes())
-        .merge(conversations::routes());
+        .merge(conversations::routes())
+        .merge(clipboard::routes());
 
     let static_files = ServeDir::new(&frontend_dist).not_found_service(ServeFile::new(frontend_dist.join("index.html")));
 

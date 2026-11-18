@@ -27,6 +27,7 @@ import { NotePins, actNowPrompt, type NoteDraft } from '../notes/NotePins'
 import { sendToAgent } from '../chat/sendToAgent'
 import { DrawLayer, pinFor, strokesBox, type Box } from '../notes/NoteDrawing'
 import { paintsAt, shapesAt } from './hitTest'
+import { insertionStart, insertPlainText, normalizePasted, parseClipboardHtml, styledRanges, styledText } from './textPaste'
 import type { Stroke } from '../api/types'
 import { notesForSlide, useNotes } from '../store/notesStore'
 import { useApp } from '../store/appStore'
@@ -272,6 +273,54 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.version])
 
+  // ── paste into text being edited ────────────────────────────────────────
+  // ⌘V (and the browser's "Paste and Match Style"): text only, formatted like where it lands.
+  useEffect(() => {
+    const c = editing?.container
+    if (!c) return
+    const onPaste = (e: ClipboardEvent) => {
+      e.preventDefault()
+      const text = e.clipboardData?.getData('text/plain') ?? ''
+      if (text) insertPlainText(text)
+    }
+    c.addEventListener('paste', onPaste)
+    return () => c.removeEventListener('paste', onPaste)
+  }, [editing?.container])
+
+  /** ⌥⇧⌘V: paste keeping the source's formatting (read from the system clipboard by the server). */
+  const pasteFormatted = async () => {
+    if (!editing) return
+    const { nodeId, container } = editing
+    const clip = await api.clipboardRich().catch(() => null)
+    if (container.contentEditable !== 'true' || !container.isConnected) return // editing ended meanwhile
+    const styled = clip?.html ? parseClipboardHtml(clip.html) : null
+    const text = styled?.length ? styledText(styled) : normalizePasted(clip?.text ?? '')
+    if (!text) return
+    insertPlainText(text)
+    if (!styled?.length) return
+    // Where the pasted text ended and began, then its pieces' formatting on top.
+    const sel = window.getSelection()
+    if (!sel?.rangeCount) return
+    const caret = sel.getRangeAt(0)
+    const { paragraphs, positions: [end] } = readParagraphsAt(container, [[caret.endContainer, caret.endOffset]])
+    if (!end) return
+    const paraLength = (p: number) => paragraphs[p]?.runs.reduce((n, r) => n + r.text.length, 0) ?? 0
+    const ranges = styledRanges(styled, insertionStart(text, end, paraLength))
+    if (!ranges.length) return
+    const ops: EditOperation[] = [{ type: 'setTextBody', slideId: slide.id, nodeId, paragraphs }]
+    for (const r of ranges) {
+      ops.push({
+        type: 'setTextStyle', slideId: slide.id, nodeId, style: r.style,
+        range: { start: { paragraphIndex: r.start.p, offset: r.start.o }, end: { paragraphIndex: r.end.p, offset: r.end.o } },
+      })
+    }
+    setEditing(null)
+    container.contentEditable = 'false'
+    reselect.current = { nodeId, start: end, end } // back to editing, caret after the pasted text
+    const n = nodeById(nodeId)
+    await run({ type: 'batch', operations: ops }, `Slide ${slideNo}: pasted "${short(text, 80)}" with its formatting into "${n ? label(n) : nodeId}"`)
+  }
+
   const commitEditing = useCallback(async () => {
     if (!editing) return
     const { nodeId, container, before } = editing
@@ -505,6 +554,12 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
       if ((e.metaKey || e.ctrlKey) && !e.altKey && (k === 'b' || k === 'i' || k === 'u')) {
         e.preventDefault()
         void toggleStyle(k === 'b' ? 'bold' : k === 'i' ? 'italic' : 'underline')
+      }
+      // ⌥⇧⌘V: keep source formatting (by code: ⌥ changes the key's character). Also stops the
+      // browser's own ⌥⇧⌘V, "Paste and Match Style".
+      if ((e.metaKey || e.ctrlKey) && e.altKey && e.shiftKey && e.code === 'KeyV') {
+        e.preventDefault()
+        void pasteFormatted()
       }
       e.stopPropagation()
       return
