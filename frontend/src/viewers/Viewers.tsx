@@ -7,7 +7,7 @@
  * changes on disk (e.g. the agent edits a script or a speaker-notes .md).
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Eye, EyeOff, ExternalLink, Loader2, Pencil } from 'lucide-react'
 import clsx from 'clsx'
 import { api } from '../api/client'
@@ -21,6 +21,7 @@ import { NotePins, actNowPrompt, type NoteDraft } from '../notes/NotePins'
 import { DrawLayer, NoteToolButton, SelectToolButton, pinFor, useEscapeEndsNoteMode } from '../notes/NoteDrawing'
 import { sendToAgent } from '../chat/sendToAgent'
 import { MarkdownEditable } from './MarkdownEditable'
+import { docHistory } from './docHistory'
 
 type MdMode = 'preview' | 'edit'
 const MD_MODE_KEY = 'deckedit-md-mode'
@@ -68,6 +69,10 @@ function TextDoc({ pid, path, mode, tools }: { pid: string; path: string; mode: 
     .filter((n) => n.deck === path && n.quote && n.status === 'open')
     .map((n) => ({ id: n.id, quote: n.quote!, line: n.slideIndex, label: String(noteNumber(n, allNotes)), title: n.text }))
   const revealRef = useRef<((quote: string, line?: number) => void) | null>(null)
+  // One undo history and cursor for the file, shared by its views and kept while the app runs.
+  const loaded = !!doc
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const history = useMemo(() => (loaded ? docHistory(`${pid}:${path}`, current()) : undefined), [pid, path, loaded])
   const reveal = (quote: string, line?: number) => {
     if (mode === 'edit') return revealRef.current?.(quote, line)
     // Formatted view: scroll the highlighted text into view.
@@ -95,10 +100,10 @@ function TextDoc({ pid, path, mode, tools }: { pid: string; path: string; mode: 
         </div>
       )}
       {mode === 'edit' ? (
-        <CodeEditor path={path} doc={doc} initialText={current()} readOnly={false} onSelection={setSelection} marks={marks} revealRef={revealRef} onChange={change} onSave={() => void flush()} />
+        <CodeEditor path={path} doc={doc} initialText={current()} readOnly={false} onSelection={setSelection} marks={marks} revealRef={revealRef} onChange={change} onSave={() => void flush()} history={history} />
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <MarkdownEditable text={current()} editable onChange={change} onSelection={setSelection} marks={marks} />
+          <MarkdownEditable text={current()} editable onChange={change} onSelection={setSelection} marks={marks} history={history} />
         </div>
       )}
     </div>

@@ -6,8 +6,10 @@
  * a cell's start / → at its end to the previous/next cell. In a list, Enter
  * at the end of an item adds one below and Backspace in an empty item removes
  * it; in a table, Enter at the end of a row's last cell adds a row below and
- * Backspace in the empty first cell of an empty row removes the row; ⌘Z / ⇧⌘Z outside a block undo/redo
- * committed edits (history resets when the file changes on disk).
+ * Backspace in the empty first cell of an empty row removes the row. ⌘Z / ⇧⌘Z undo/redo saved edits
+ * (in a block with unsaved typing, that typing first) — through the file's history shared with the
+ * Markdown tab (docHistory.ts), which survives switching tabs and the agent's saves. The cursor is
+ * remembered as a source position, so either tab opens where you were.
  *
  * Blocks become editable only when clicked (or a selection is made inside
  * one): until then the view is an ordinary document, so a drag can select
@@ -23,10 +25,15 @@
  *
  * Each change is written back into exactly the source characters it came
  * from (mdSourceEdit.ts), so the rest of the file is never reformatted.
- * Inline code, code blocks and images are read-only.
+ *
+ * Code is editable too. Inline code is typed in like the text around it (and
+ * rewritten with backticks that fit). A fenced code block is a block of its
+ * own: Enter is a new line, Tab indents, ⌘Enter or clicking away saves, Escape
+ * cancels; its text goes back between the fences. Images (and indented code
+ * blocks or code in quotes) are read-only.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Bold, Copy, FileCode, Italic } from 'lucide-react'
 import clsx from 'clsx'
 import ReactMarkdown, { type Components } from 'react-markdown'
@@ -37,9 +44,11 @@ import { findQuote, type QuoteMark, type TextSelection } from './TextEditor'
 import { domRangeOf } from './textRanges'
 import { useNotes } from '../store/notesStore'
 import { NotePopover } from '../notes/NotePins'
+import { DocHistory } from './docHistory'
 
 import {
-  applyRunEdits, deleteLineAt, insertLineAfter, lineStartOf, listItemContentStart, mapPos, nextListMarker, tableCellArea,
+  applyRunEdits, codeBlockEdit, codeBlockSourcePos, codeBlockTextOffset, deleteLineAt, inlineCodeSource, inlineCodeTextStart, insertLineAfter,
+  lineStartOf, listItemContentStart, mapPos, nextListMarker, tableCellArea,
   rehypeSourceText, runSourceMap, sameVisibleText, toggleMarkRange, unwrapMark, type Mark, type RunContext, type RunEdit } from './mdSourceEdit'
 
 interface Snapshot {
@@ -47,6 +56,8 @@ interface Snapshot {
   host: HTMLElement
   runs: Map<string, { s: number; e: number; v: string }>
   outside: string
+  /** Inline code in the block: source range (backticks included) and text. */
+  codes: Map<string, { s: number; e: number; v: string }>
   /** List items / table cells with no text: typing into them goes into their source slot. */
   empty: HTMLElement[]
 }
@@ -93,17 +104,44 @@ function caretIn(el: HTMLElement, at: 'start' | 'end'): Range {
 const runKey = (el: HTMLElement) => `${el.dataset.s}:${el.dataset.e}`
 const runSpans = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('span[data-s]')]
 
-/** Text in a block that isn't inside a source-mapped run (inline code, typed into a gap…). */
+/** Text in a block that isn't inside a source-mapped run or inline code (typed into a gap…). */
 function outsideText(host: HTMLElement, skip?: Set<HTMLElement>): string {
   let out = ''
   const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT)
   for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-    if (n.parentElement?.closest('span[data-s]')) continue
+    if (n.parentElement?.closest('span[data-s], code[data-cs]')) continue
     const slot = skip && slotOf(n)
     if (slot && skip.has(slot)) continue
     out += n.textContent
   }
   return out
+}
+
+const codeKey = (el: HTMLElement) => `${el.dataset.cs}:${el.dataset.ce}`
+const inlineCodes = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('code[data-cs]')]
+/** A fenced code block, edited as a block of its own. */
+const isCodeHost = (el: HTMLElement) => el.hasAttribute('data-md-code')
+
+/** A code block's text as typed (line breaks the browser made as elements read as newlines). */
+function codeText(host: HTMLElement): string {
+  let out = ''
+  const walk = (n: Node) => {
+    if (n.nodeType === Node.TEXT_NODE) out += (n as Text).data
+    else if (n.nodeName === 'BR') out += '\n'
+    else {
+      if ((n.nodeName === 'DIV' || n.nodeName === 'P') && out && !out.endsWith('\n')) out += '\n'
+      n.childNodes.forEach(walk)
+    }
+  }
+  host.childNodes.forEach(walk)
+  return out
+}
+
+/** What Tab inserts in a code block: a tab if it's indented with tabs, else its smallest space indent (2 by default). */
+function codeIndent(text: string): string {
+  if (/^\t/m.test(text)) return '\t'
+  const runs = text.match(/^ +(?=\S)/gm)
+  return ' '.repeat(runs ? Math.min(8, Math.max(2, Math.min(...runs.map((r) => r.length)))) : 2)
 }
 
 /** A spot in a block as a character offset into its text — survives re-rendering, since formatting doesn't change the text. */
@@ -177,9 +215,11 @@ function contextOf(el: HTMLElement): RunContext {
   return /^h\d$/.test(tag) ? 'heading' : tag === 'td' || tag === 'th' ? 'cell' : 'text'
 }
 
-export function MarkdownEditable({ text, editable, onChange, onSelection, marks = [] }: {
+export function MarkdownEditable({ text, editable, onChange, onSelection, marks = [], history }: {
   text: string
   editable: boolean
+  /** The file's undo history and cursor, shared with the Markdown tab (a private one if not given). */
+  history?: DocHistory
   onChange(next: string): void
   /** The selected text (and its lines in the source), or null. */
   onSelection?(s: TextSelection | null): void
@@ -196,8 +236,14 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
   /** After a structural edit: the list item / table row (by its new source start) to put the caret in. */
   const focusAt = useRef<{ tag: 'li' | 'tr'; hs: number; cell?: number; at: 'start' | 'end' } | null>(null)
   const snapshot = useRef<Snapshot | null>(null)
-  const undo = useRef<string[]>([])
-  const redo = useRef<string[]>([])
+  const ownHistory = useRef<DocHistory | null>(null)
+  const hist = history ?? (ownHistory.current ??= new DocHistory(text))
+  const histRef = useRef(hist)
+  histRef.current = hist
+  /** After undo/redo or on opening: the source position to put the caret at. */
+  const restoreSource = useRef<{ anchor: number; head: number } | null>(null)
+  /** The last caret / selection in a block (text offsets, converted to a source position on leaving). */
+  const lastPos = useRef<Pos | null>(null)
   // The view renders its own copy of the source: an edit shows immediately, without waiting
   // for the parent to re-render. A different `text` arriving means the file changed on disk.
   const [source, setSource] = useState(text)
@@ -224,8 +270,8 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
         caret = { block: hosts().indexOf(snap.host), start: textOffset(snap.host, r.startContainer, r.startOffset), end: textOffset(snap.host, r.endContainer, r.endOffset) }
       }
     }
-    undo.current = []
-    redo.current = []
+    hist.external(text) // not undoable; the user's own steps stay
+    if (next !== text) hist.edit(next) // their merged typing is theirs
     ours.current = next
     snapshot.current = null
     restoreSel.current = caret
@@ -247,11 +293,8 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
 
   const publishRef = useRef<(next: string, history?: boolean) => void>(() => {})
   /** Write a new source, as one undoable step. */
-  const publish = (next: string, history = true) => {
-    if (history) {
-      undo.current.push(rendered.current)
-      redo.current = []
-    }
+  const publish = (next: string, record = true) => {
+    if (record) histRef.current.edit(next)
     ours.current = next
     setSource(next)
     onChange(next)
@@ -272,6 +315,90 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
       getSelection()?.removeAllRanges()
       getSelection()?.addRange(range)
     }
+  }
+
+  // ── the cursor as a source position (shared with the Markdown tab) ─────
+  /** The source offset of a point in the document; null outside any editable block. */
+  const sourceOffsetAt = (node: Node, off: number): number | null => {
+    const host = hostOf(node)
+    if (!host) return null
+    if (node instanceof Element) {
+      // A point between elements: the text position there.
+      const p = pointAt(host, textOffset(host, node, off), 'end')
+      if (p) ({ node, offset: off } = p)
+    }
+    const src = rendered.current
+    if (isCodeHost(host)) return codeBlockSourcePos(src, Number(host.dataset.hs), Number(host.dataset.he), textOffset(host, node, off)) ?? Number(host.dataset.hs)
+    const code = (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>('code[data-cs]')
+    if (code && host.contains(code)) {
+      const cs = Number(code.dataset.cs)
+      const ce = Number(code.dataset.ce)
+      return Math.min(inlineCodeTextStart(src, cs, ce) + textOffset(code, node, off), ce)
+    }
+    const run = (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>('span[data-s]')
+    if (run && host.contains(run)) {
+      const s = Number(run.dataset.s)
+      const e = Number(run.dataset.e)
+      const i = textOffset(run, node, off)
+      const map = runSourceMap(src, s, e, run.dataset.v ?? '')
+      return map ? map[Math.min(i, map.length - 1)] : Math.min(s + i, e)
+    }
+    // Not in a text run (an empty item, inline code…): the end of the run before it, else the block's start.
+    let at: number | null = null
+    for (const r of runSpans(host)) if (r.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) at = Number(r.dataset.e)
+    return at ?? Number(host.dataset.hs ?? host.closest<HTMLElement>('[data-bs]')?.dataset.bs ?? 0)
+  }
+
+  /** The point for a source offset: in the text run holding it, else at the start of the next run (or the end of the last). */
+  const domPointAtSource = (pos: number): { host: HTMLElement; node: Text; offset: number } | null => {
+    const src = rendered.current
+    let last: HTMLElement | null = null
+    for (const run of articleRef.current?.querySelectorAll<HTMLElement>('span[data-s], code[data-cs], pre[data-md-code]') ?? []) {
+      const host = hostOf(run)
+      if (!host) continue
+      last = run
+      const isPre = run.tagName === 'PRE'
+      const isCode = run.tagName === 'CODE'
+      const s = Number(isPre ? run.dataset.hs : isCode ? run.dataset.cs : run.dataset.s)
+      const e = Number(isPre ? run.dataset.he : isCode ? run.dataset.ce : run.dataset.e)
+      if (pos > e) continue
+      if (isPre || isCode) {
+        const len = (run.textContent ?? '').length
+        const i = isPre ? codeBlockTextOffset(src, s, e, pos) ?? 0 : pos - inlineCodeTextStart(src, s, e)
+        const p = pointAt(run, Math.max(0, Math.min(i, len)), 'start')
+        return p && { host, ...p }
+      }
+      const map = runSourceMap(src, s, e, run.dataset.v ?? '')
+      const i = pos <= s ? 0 : map ? Math.max(0, map.findIndex((m) => m >= pos)) : pos - s
+      const p = pointAt(run, i, 'start')
+      return p && { host, ...p }
+    }
+    const p = last && pointAt(last, (last.textContent ?? '').length, 'end')
+    return p && last ? { host: hostOf(last)!, ...p } : null
+  }
+
+  /** Remember the caret / selection in a block (typing moves it without a selectionchange in some browsers: also on input and keys). */
+  const recordPos = () => {
+    const sel = getSelection()
+    const r = sel?.rangeCount ? sel.getRangeAt(0) : null
+    const host = r && hostOf(r.startContainer)
+    if (!r || !host) return
+    const start = textOffset(host, r.startContainer, r.startOffset)
+    lastPos.current = { block: hosts().indexOf(host), start, end: hostOf(r.endContainer) === host ? textOffset(host, r.endContainer, r.endOffset) : start }
+  }
+
+  /** Put the caret (or selection, within one block) at source positions and bring it into view. */
+  const placeCaret = (at: { anchor: number; head: number }, block: ScrollLogicalPosition) => {
+    const a = domPointAtSource(Math.min(at.anchor, at.head))
+    if (!a) return
+    const b = at.anchor === at.head ? a : domPointAtSource(Math.max(at.anchor, at.head))
+    const r = document.createRange()
+    r.setStart(a.node, a.offset)
+    if (b && b.host === a.host) r.setEnd(b.node, b.offset)
+    else r.collapse(true)
+    snapshot.current = null
+    activate(a.host, r)
+    ;(a.node.parentElement ?? a.host).scrollIntoView({ block })
   }
 
   /** Leave `host` for `target` with the caret at `caret`, saving the edit on the way (if that re-renders, the effect below lands the caret). */
@@ -372,6 +499,12 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
   /** The source edits for what was typed in a block since it was focused; null if it can't be mapped back. */
   const collect = (host: HTMLElement, snap: Snapshot): RunEdit[] | null => {
     const src = rendered.current
+    if (isCodeHost(host)) {
+      const now = codeText(host).replace(/\u00a0/g, ' ')
+      if (now === snap.outside) return []
+      const ed = codeBlockEdit(src, Number(host.dataset.hs), Number(host.dataset.he), now)
+      return ed && [ed]
+    }
     // Never write through stale positions: every recorded run must still be what the file has there.
     for (const r of snap.runs.values()) if (!runSourceMap(src, r.s, r.e, r.v)) return null
     const edits: RunEdit[] = []
@@ -387,6 +520,18 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
     }
     // A run deleted entirely (the browser drops its emptied span).
     for (const [k, orig] of snap.runs) if (!seen.has(k)) edits.push({ s: orig.s, e: orig.e, text: '', ctx: 'text' })
+    // Inline code: rewritten whole (backticks that fit its new text); gone entirely when emptied.
+    const seenCode = new Set<string>()
+    for (const el of inlineCodes(host)) {
+      const k = codeKey(el)
+      const orig = snap.codes.get(k)
+      if (!orig) continue
+      seenCode.add(k)
+      if (src[orig.s] !== '`' || src[orig.e - 1] !== '`') return null
+      const now = (el.textContent ?? '').replace(/\u00a0/g, ' ')
+      if (now !== orig.v) edits.push({ s: orig.s, e: orig.e, text: inlineCodeSource(now, contextOf(el)), ctx: 'raw' })
+    }
+    for (const [k, orig] of snap.codes) if (!seenCode.has(k)) edits.push({ s: orig.s, e: orig.e, text: '', ctx: 'raw' })
     if (outsideText(host, new Set(snap.empty)) !== snap.outside) return null
     // Text typed into a list item / cell that was empty goes into its slot in the source.
     for (const el of snap.empty) {
@@ -412,7 +557,9 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
     if (!snap || snap.host !== host) return 'none'
     const edits = collect(host, snap)
     if (!edits) {
-      toast('That edit crossed formatting the formatted view can’t map back — switch to the Markdown tab for it.')
+      toast(isCodeHost(host)
+        ? 'That code can’t be saved here (a line of it would end the code block) — use the Markdown tab for it.'
+        : 'That edit crossed formatting the formatted view can’t map back — switch to the Markdown tab for it.')
       setGeneration((g) => g + 1)
       return 'failed'
     }
@@ -514,6 +661,8 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
     const edits = collect(host, snap)
     return edits === null || edits.length > 0
   }
+  const hasTypingRef = useRef(hasTyping)
+  hasTypingRef.current = hasTyping
 
   const format = (mark: Mark) => {
     if (!editable) return
@@ -585,6 +734,9 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
       if (host) applyFormat(host, pf, pf.mark)
       return
     }
+    const rsrc = restoreSource.current
+    restoreSource.current = null
+    if (rsrc) return placeCaret(rsrc, 'nearest')
     const fa = focusAt.current
     focusAt.current = null
     if (fa) {
@@ -621,6 +773,7 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
       const r = sel?.rangeCount ? sel.getRangeAt(0) : null
       // Report the selection inside the document (for a note on it), with its lines in the Markdown source.
       if (r && articleRef.current?.contains(r.commonAncestorContainer)) {
+        recordPos()
         const t = r.collapsed ? '' : sel!.toString().trim()
         const src = rendered.current
         const at = t ? findQuote(src, t) ?? findQuote(src, t.split('\n')[0]) : null
@@ -629,7 +782,7 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
       }
       if (!editable || !r || r.collapsed || !articleRef.current?.contains(r.commonAncestorContainer)) return setBar(null)
       const host = hostOf(r.startContainer)
-      const kind = host && host.isContentEditable && hostOf(r.endContainer) === host ? 'format' : 'copy'
+      const kind = host && host.isContentEditable && hostOf(r.endContainer) === host && !isCodeHost(host) ? 'format' : 'copy'
       const rect = r.getBoundingClientRect()
       const el = r.startContainer.parentElement
       setBar({ x: rect.left + rect.width / 2, y: rect.top, kind, bold: !!el?.closest('strong'), italic: !!el?.closest('em') })
@@ -643,17 +796,41 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editable])
 
-  // Undo/redo of committed edits (while not typing in a block).
+  // Opening: where the user was (in the Markdown tab, or here before). Leaving: remember where they are,
+  // as a source position (measured on the final text — leaving saved any typing and re-rendered).
+  useEffect(() => {
+    hist.external(text)
+    if (hist.placed) placeCaret(hist.cursor(), 'center')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useLayoutEffect(() => () => {
+    const lp = lastPos.current
+    const host = lp && hosts()[lp.block]
+    if (!lp || !host) return
+    const a = pointAt(host, lp.start, 'start')
+    const b = pointAt(host, lp.end, 'end')
+    const sa = a && sourceOffsetAt(a.node, a.offset)
+    const sb = b && sourceOffsetAt(b.node, b.offset)
+    if (sa != null) histRef.current.setCursor(sa, sb ?? sa)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Undo/redo of saved edits, through the file's shared history.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'z') return
       const a = document.activeElement as HTMLElement | null
-      if (a && (a.isContentEditable || a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) return
-      const [from, to] = e.shiftKey ? [redo.current, undo.current] : [undo.current, redo.current]
-      const prev = from.pop()
-      if (prev === undefined) return
+      if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) return
+      if (a?.isContentEditable) {
+        // In a block: its own unsaved typing is undone by the browser first; then the file's history.
+        if (!articleRef.current?.contains(a) || hasTypingRef.current(a)) return
+        snapshot.current = null
+      }
+      const h = histRef.current
+      const prev = e.shiftKey ? h.redo() : h.undo()
+      if (prev === null) return
       e.preventDefault()
-      to.push(rendered.current)
+      restoreSource.current = h.cursor()
       publishRef.current(prev, false)
     }
     window.addEventListener('keydown', onKey)
@@ -677,8 +854,15 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
         return editable && !hasP ? <li {...props} data-md-block suppressContentEditableWarning /> : <li {...props} />
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      code({ node: _node, ...props }: any) {
-        return <code {...props} contentEditable={false} />
+      pre({ node: _node, ...props }: any) {
+        // A fenced code block: edited as a block of its own (its text goes between the fences).
+        return editable && props['data-hs'] != null ? <pre {...props} data-md-block data-md-code suppressContentEditableWarning /> : <pre {...props} />
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      code({ node: _node, children, ...props }: any) {
+        // A code block's text without the newline the renderer ends it with (the caret would land on an empty last line).
+        const text = props['data-cs'] == null && typeof children === 'string' ? children.replace(/\n$/, '') : children
+        return <code {...props}>{text}</code>
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       a({ node: _node, ...props }: any) {
@@ -795,7 +979,8 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
         snapshot.current = {
           host,
           runs: new Map(runSpans(host).map((sp) => [runKey(sp), { s: Number(sp.dataset.s), e: Number(sp.dataset.e), v: sp.dataset.v ?? '' }])),
-          outside: outsideText(host),
+          outside: isCodeHost(host) ? codeText(host) : outsideText(host),
+          codes: new Map(inlineCodes(host).map((el) => [codeKey(el), { s: Number(el.dataset.cs), e: Number(el.dataset.ce), v: el.dataset.cv ?? '' }])),
           empty: [...(host.matches('li, td, th') ? [host] : []), ...host.querySelectorAll<HTMLElement>('li, td, th')].filter((el) => !ownText(el).trim()),
         }
       }}
@@ -822,9 +1007,19 @@ export function MarkdownEditable({ text, editable, onChange, onSelection, marks 
         const host = caret && hostOf(caret.startContainer)
         if (host && !host.isContentEditable) activate(host, caret)
       }}
+      onInput={recordPos}
+      onKeyUp={recordPos}
       onKeyDown={(e) => {
         const host = e.target as HTMLElement
         if (!host.isContentEditable) return
+        if (isCodeHost(host)) {
+          // A code block: Enter is a new line, Tab indents, ⌘Enter saves (arrows and Escape as elsewhere).
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); host.blur(); return }
+          if (e.key === 'Enter') { e.preventDefault(); document.execCommand('insertText', false, '\n'); return }
+          if (e.key === 'Tab' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); document.execCommand('insertText', false, codeIndent(codeText(host))); return }
+          if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'i')) { e.preventDefault(); return }
+          if (e.key === 'Backspace') return
+        }
         if ((e.metaKey || e.ctrlKey) && (e.key === 'b' || e.key === 'i')) {
           e.preventDefault()
           format(e.key === 'b' ? 'strong' : 'em')

@@ -8,6 +8,10 @@
  * not-yet-saved typing is merged onto its version (textMerge.ts) and saved,
  * and the editor takes the change in as minimal edits — your cursor stays put
  * and ⌘Z undoes only your own typing.
+ *
+ * With a `history` (docHistory.ts) the editor's undo history and cursor
+ * outlive it: they're shared with the formatted Markdown view and kept when
+ * the file is closed and reopened.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -28,6 +32,7 @@ import { useFileVersion } from '../store/fileVersions'
 import { useApp } from '../store/appStore'
 import { markTextEdited, registerTextSaver } from './textEdits'
 import { rebase, textChanges } from './textMerge'
+import type { DocHistory } from './docHistory'
 
 /** Marks the editor transaction that takes in a change from disk (not the user's typing). */
 const fromDisk = Annotation.define<boolean>()
@@ -234,8 +239,10 @@ const quoteDecorations = (marks: QuoteMark[]) =>
     return Decoration.set(decos, true)
   })
 
-export function CodeEditor({ path, doc, initialText, readOnly, onChange, onSave, onSelection, marks = [], revealRef }: {
+export function CodeEditor({ path, doc, initialText, readOnly, onChange, onSave, onSelection, marks = [], revealRef, history }: {
   path: string
+  /** The file's shared undo history and cursor (see docHistory.ts). */
+  history?: DocHistory
   doc: TextDocState
   /** The selection changed (null: nothing selected). */
   onSelection?(s: TextSelection | null): void
@@ -257,44 +264,53 @@ export function CodeEditor({ path, doc, initialText, readOnly, onChange, onSave,
   handlers.current = { onChange, onSave, onSelection }
   const marksRef = useRef(marks)
   marksRef.current = marks
+  const historyRef = useRef(history)
+  historyRef.current = history
 
   const readOnlyRef = useRef(readOnly)
   readOnlyRef.current = readOnly
   const editable = (r: boolean) => [EditorState.readOnly.of(r), EditorView.editable.of(!r)]
-  const makeState = (text: string, head = 0) =>
-    EditorState.create({
-      doc: text,
-      selection: { anchor: Math.min(head, text.length) },
-      extensions: [
-        basicSetup,
-        keymap.of([
-          indentWithTab,
-          { key: 'Mod-s', preventDefault: true, run: () => (handlers.current.onSave(), true) },
-        ]),
-        ...languageFor(path),
-        wraps(path) ? EditorView.lineWrapping : [],
-        ro.current.of(editable(readOnlyRef.current)),
-        marksComp.current.of(quoteDecorations(marksRef.current)),
-        EditorView.updateListener.of((u) => {
-          if (u.docChanged && !u.transactions.some((t) => t.annotation(fromDisk))) handlers.current.onChange(u.state.doc.toString())
-          if (u.selectionSet || u.docChanged) {
-            const m = u.state.selection.main
-            handlers.current.onSelection?.(m.empty ? null : { text: u.state.sliceDoc(m.from, m.to), fromLine: u.state.doc.lineAt(m.from).number, toLine: u.state.doc.lineAt(m.to).number })
-          }
-        }),
-        EditorView.theme({
-          '&': { height: '100%', fontSize: '13px', backgroundColor: '#fff' },
-          '.cm-scroller': { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', lineHeight: '1.6' },
-          '.cm-content': { padding: '12px 0' },
-          '.cm-gutters': { backgroundColor: '#fafaf9', borderRight: '1px solid #ecebe8', color: '#a8a29e' },
-          '&.cm-focused': { outline: 'none' },
-        }),
-      ],
-    })
+  const makeState = (text: string) => {
+    const h = historyRef.current
+    if (!h) return EditorState.create({ doc: text, extensions: extensions() })
+    h.external(text) // normally the same text; if not, the file changed meanwhile
+    return h.stateFor(extensions())
+  }
+  const extensions = (): Extension[] => [
+    basicSetup,
+    keymap.of([
+      indentWithTab,
+      { key: 'Mod-s', preventDefault: true, run: () => (handlers.current.onSave(), true) },
+    ]),
+    ...languageFor(path),
+    wraps(path) ? EditorView.lineWrapping : [],
+    ro.current.of(editable(readOnlyRef.current)),
+    marksComp.current.of(quoteDecorations(marksRef.current)),
+    EditorView.updateListener.of((u) => {
+      historyRef.current?.sync(u.state, u.selectionSet && u.view.hasFocus)
+      if (u.docChanged && !u.transactions.some((t) => t.annotation(fromDisk))) handlers.current.onChange(u.state.doc.toString())
+      if (u.selectionSet || u.docChanged) {
+        const m = u.state.selection.main
+        handlers.current.onSelection?.(m.empty ? null : { text: u.state.sliceDoc(m.from, m.to), fromLine: u.state.doc.lineAt(m.from).number, toLine: u.state.doc.lineAt(m.to).number })
+      }
+    }),
+    EditorView.theme({
+      '&': { height: '100%', fontSize: '13px', backgroundColor: '#fff' },
+      '.cm-scroller': { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', lineHeight: '1.6' },
+      '.cm-content': { padding: '12px 0' },
+      '.cm-gutters': { backgroundColor: '#fafaf9', borderRight: '1px solid #ecebe8', color: '#a8a29e' },
+      '&.cm-focused': { outline: 'none' },
+    }),
+  ]
 
   useEffect(() => {
     const v = new EditorView({ parent: host.current!, state: makeState(initialText) })
     view.current = v
+    // Opened where the user was (in this view, or in the formatted one).
+    if (historyRef.current?.placed) {
+      v.dispatch({ effects: EditorView.scrollIntoView(v.state.selection.main.head, { y: 'center' }) })
+      v.focus()
+    }
     return () => {
       v.destroy()
       view.current = null

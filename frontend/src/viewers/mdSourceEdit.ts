@@ -7,6 +7,12 @@
  * written back — each into its own source range (`writeRun`) — so markup,
  * spacing, list markers, tables and everything untouched stay byte-for-byte.
  *
+ * Code is edited the same way: inline code (`data-cs/ce/cv` on its element)
+ * is rewritten whole with a fence that fits its new text (`inlineCodeSource`);
+ * a fenced code block's text goes between its fences (`codeBlockEdit`), each
+ * line keeping the block's indentation. Indented blocks, unclosed fences and
+ * code in block quotes stay read-only.
+ *
  * Bold/italic toggles work the same way: `**`/`*` are inserted around the
  * selected characters' source (`wrapMark`) or a formatted element's own
  * delimiters are removed (`unwrapMark`) — and `sameVisibleText` checks the
@@ -45,6 +51,10 @@ export function rehypeSourceText() {
       }
     }
     const walk = (node: HNode) => {
+      // A code block's source range (its fences included), for editing its text.
+      if (node.tagName === 'pre' && node.position?.start.offset != null && node.position.end.offset != null) {
+        node.properties = { ...node.properties, dataHs: node.position.start.offset, dataHe: node.position.end.offset }
+      }
       if (!node.children || node.tagName === 'code' || node.tagName === 'pre') return
       if (node.tagName && HS_TAGS.has(node.tagName) && node.position?.start.offset != null && node.position.end.offset != null) {
         node.properties = { ...node.properties, dataHs: node.position.start.offset, dataHe: node.position.end.offset }
@@ -65,6 +75,11 @@ export function rehypeSourceText() {
         if (c.type === 'text' && node.tagName && TEXT_PARENTS.has(node.tagName) && s != null && e != null && c.value?.trim()) {
           return { type: 'element', tagName: 'span', properties: { dataS: s, dataE: e, dataV: c.value }, children: [c] }
         }
+        // Inline code: its source range (backticks included) and text.
+        if (c.tagName === 'code' && s != null && e != null) {
+          c.properties = { ...c.properties, dataCs: s, dataCe: e, dataCv: (c.children ?? []).map((k) => k.value ?? '').join('') }
+          return c
+        }
         walk(c)
         return c
       })
@@ -73,7 +88,8 @@ export function rehypeSourceText() {
   }
 }
 
-export type RunContext = 'text' | 'heading' | 'cell'
+/** Where a run sits (what must be escaped); `raw`: source text written as is (code). */
+export type RunContext = 'text' | 'heading' | 'cell' | 'raw'
 
 /**
  * The source for a text run whose value changed to `text`: escaped so it stays
@@ -81,6 +97,7 @@ export type RunContext = 'text' | 'heading' | 'cell'
  * indentation in list items) from the original source.
  */
 export function writeRun(src: string, s: number, e: number, text: string, ctx: RunContext): string {
+  if (ctx === 'raw') return text
   if (ctx !== 'text') text = text.replace(/\s*\n\s*/g, ' ')
   const slice = src.slice(s, e)
   const prefixes = slice.split('\n').slice(1).map((l) => l.match(/^[ \t>]*/)![0])
@@ -321,4 +338,100 @@ export function deleteLineAt(src: string, pos: number): string {
 export function insertLineAfter(src: string, pos: number, line: string): { src: string; at: number } {
   const e = lineEndOf(src, pos)
   return { src: src.slice(0, e) + '\n' + line + src.slice(e), at: e + 1 }
+}
+
+// ── code: inline code and fenced code blocks ───────────────────────────────
+
+/**
+ * Inline code's source for `text`: a backtick fence longer than any backtick run inside it, and
+ * a space of padding where Markdown would otherwise strip edge spaces or read a backtick as part
+ * of the fence. In a table cell `|` is escaped (GFM). Empty text: no code at all.
+ */
+export function inlineCodeSource(text: string, ctx: RunContext): string {
+  let body = text.replace(/\n/g, ' ')
+  if (!body) return ''
+  if (ctx === 'cell') body = body.replace(/\|/g, '\\|')
+  const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map((r) => r.length))
+  const fence = '`'.repeat(longest + 1)
+  const pad = /^`|`$/.test(body) || (body.startsWith(' ') && body.endsWith(' ') && body.trim() !== '') ? ' ' : ''
+  return fence + pad + body + pad + fence
+}
+
+/** Where inline code's text starts in its source [cs, ce) (after the fence and any padding space). */
+export function inlineCodeTextStart(src: string, cs: number, ce: number): number {
+  let n = 0
+  while (src[cs + n] === '`') n++
+  const inner = src.slice(cs + n, ce - n)
+  return cs + n + (inner.length > 1 && inner.startsWith(' ') && inner.endsWith(' ') && inner.trim() ? 1 : 0)
+}
+
+export interface CodeFence {
+  /** The lines between the fences: [contentStart, contentEnd) (each line with its newline). */
+  contentStart: number
+  contentEnd: number
+  /** Indentation each line carries in the source (the block's, e.g. inside a list item). */
+  indent: string
+  /** The opening fence (``` or ~~~, possibly longer). */
+  fence: string
+}
+
+/** The fenced code block at source [hs, he); null for an indented block, an unclosed fence or one inside a quote. */
+export function codeFence(src: string, hs: number, he: number): CodeFence | null {
+  const prefix = src.slice(lineStartOf(src, hs), hs)
+  if (!/^[ \t]*$/.test(prefix)) return null
+  const slice = src.slice(hs, he)
+  const open = /^([ \t]*)(`{3,}|~{3,})[^\n]*\n/.exec(slice)
+  if (!open) return null
+  const last = slice.slice(slice.lastIndexOf('\n') + 1)
+  if (!closingFence(open[2]).test(last)) return null
+  return { contentStart: hs + open[0].length, contentEnd: he - last.length, indent: prefix + open[1], fence: open[2] }
+}
+
+const closingFence = (fence: string) => new RegExp(`^[ \\t]*${fence[0] === '`' ? '`' : '~'}{${fence.length},}[ \\t]*$`)
+
+/** The source edit for a fenced code block whose text is now `text`; null when it can't go there (e.g. a line would close the block). */
+export function codeBlockEdit(src: string, hs: number, he: number, text: string): RunEdit | null {
+  const f = codeFence(src, hs, he)
+  if (!f) return null
+  const lines = text.split('\n')
+  if (lines.some((l) => closingFence(f.fence).test(l))) return null
+  const body = text === '' ? '' : lines.map((l) => (l ? f.indent + l : l)).join('\n') + '\n'
+  return { s: f.contentStart, e: f.contentEnd, text: body, ctx: 'raw' }
+}
+
+/** Each source line of a code block's content: where it starts, and how much indentation the reader drops. */
+function codeLines(src: string, f: CodeFence) {
+  const out: { at: number; strip: number; len: number }[] = []
+  for (let at = f.contentStart; at < f.contentEnd; ) {
+    const end = Math.min(lineEndOf(src, at), f.contentEnd)
+    const line = src.slice(at, end)
+    const strip = Math.min(f.indent.length, line.match(/^[ \t]*/)![0].length)
+    out.push({ at, strip, len: line.length - strip })
+    at = end + 1
+  }
+  return out
+}
+
+/** The source offset of a character offset in a code block's text. */
+export function codeBlockSourcePos(src: string, hs: number, he: number, offset: number): number | null {
+  const f = codeFence(src, hs, he)
+  if (!f) return null
+  let left = offset
+  for (const l of codeLines(src, f)) {
+    if (left <= l.len) return l.at + l.strip + left
+    left -= l.len + 1
+  }
+  return f.contentEnd
+}
+
+/** The character offset in a code block's text of a source offset (clamped into its content). */
+export function codeBlockTextOffset(src: string, hs: number, he: number, pos: number): number | null {
+  const f = codeFence(src, hs, he)
+  if (!f) return null
+  let acc = 0
+  for (const l of codeLines(src, f)) {
+    if (pos <= l.at + l.strip + l.len) return acc + Math.max(0, pos - l.at - l.strip)
+    acc += l.len + 1
+  }
+  return Math.max(0, acc - 1)
 }
