@@ -12,7 +12,8 @@ import {
 import clsx from 'clsx'
 import { useDecks, deckKey } from './deckStore'
 import { SlideRail } from './SlideRail'
-import { SlideEditor, type AlignKind, type NodeOrder, type SlideActions } from './SlideEditor'
+import { SlideEditor, type AlignKind, type FormatState, type NodeOrder, type SlideActions } from './SlideEditor'
+import { FormatTools } from './FormatTools'
 import { NotesPane } from './NotesPane'
 import { NoteToolButton, SelectToolButton, useEscapeEndsNoteMode } from '../notes/NoteDrawing'
 import { Splitter } from '../components/Splitter'
@@ -38,7 +39,8 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   const [showResolved, setShowResolved] = useState(false)
   useEscapeEndsNoteMode(noteMode, setNoteMode)
   const [dismissedAt, setDismissedAt] = useState(0)
-  const actions = useRef<SlideActions>({ addTextBox() {}, align() {}, arrange() {} })
+  const actions = useRef<SlideActions>({ addTextBox() {}, align() {}, arrange() {}, setFont() {}, setSize() {}, stepSize() {}, setColor() {}, holdSelection() {} })
+  const [fmt, setFmt] = useState<FormatState | null>(null)
 
   useEffect(() => {
     void open(pid, path)
@@ -90,6 +92,7 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
         <div className="mx-1 h-5 w-px bg-hair" />
         <SelectToolButton active={!noteMode} onSelect={() => setNoteMode(false)} />
         <button className="tool-btn" onClick={() => { setNoteMode(false); actions.current.addTextBox() }} title="Add a text box"><Type size={15} /> <span className="tb-label">Text</span></button>
+        {fmt && !noteMode && <FormatTools fmt={fmt} pres={pres} version={session.version} actions={actions} />}
         {session.selection.length >= 1 && <ArrangeTools onArrange={(o) => actions.current.arrange(o)} />}
         {session.selection.length >= 2 && <AlignTools count={session.selection.length} onAlign={(k) => actions.current.align(k)} />}
         <div className="ml-2 min-w-0 truncate whitespace-nowrap text-xs text-ink-3">
@@ -134,6 +137,7 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
             setNoteMode={setNoteMode}
             showResolved={showResolved}
             registerActions={(a) => (actions.current = a)}
+            onFormat={setFmt}
           />
           <NotesPane session={session} />
         </div>

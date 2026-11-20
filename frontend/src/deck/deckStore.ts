@@ -177,6 +177,28 @@ export const useDecks = create<DeckStore>((set, get) => {
     const cur = get().sessions[key]!
     const { touched, ...rest } = entry
     const stable = touched.map((id) => cur.sldIds.get(id)).filter((x): x is string => !!x)
+    // Arrow-key nudges of the same shapes in the same direction are one undo step ("nudge:" keys) —
+    // unless the earlier one was already reported to the agent, or the agent started working in between.
+    const last = cur.undo[cur.undo.length - 1]
+    const at = cur.undo.length - 1
+    if (
+      entry.coalesceKey?.startsWith('nudge:') && last?.coalesceKey === entry.coalesceKey &&
+      last.replay.kind === 'op' && entry.replay.kind === 'op' &&
+      at >= cur.turnBaseline && !(cur.heldFrom != null && at < cur.heldFrom)
+    ) {
+      const ops = (op: EditOperation): EditOperation[] => (op.type === 'batch' ? op.operations : [op])
+      const replay: Replay = { kind: 'op', op: { type: 'batch', operations: [...ops(last.replay.op), ...ops(entry.replay.op)] } }
+      const merged: UndoEntry = {
+        ...last,
+        description: entry.description,
+        undo: () => { rest.undo(); last.undo() },
+        replay,
+        stable: [...new Set([...last.stable, ...stable])],
+        redo: redoFor(key, replay, entry.description, entry.coalesceKey),
+      }
+      patch(key, { ...extra, dirty: true, undo: [...cur.undo.slice(0, -1), merged], redo: [] })
+      return
+    }
     patch(key, {
       // An edit that removed slides (e.g. deleting the last one) must not leave the current slide past the end:
       // the views would render a slide that no longer exists.

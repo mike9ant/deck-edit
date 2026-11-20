@@ -114,7 +114,8 @@ pub async fn summarize_with_sonnet(claude_bin: &str, root: &Path, api_key: Optio
     let transcript = crate::conversations::condensed_transcript(session, TRANSCRIPT_CHARS).ok_or("the earlier conversation's transcript wasn't found")?;
     let mut cmd = tokio::process::Command::new(claude_bin);
     cmd.current_dir(root)
-        .args(["-p", "--model", "sonnet", "--output-format", "text", "--no-session-persistence", "--tools", ""])
+        // Medium effort is plenty for a summary (the warm route keeps the session's own effort: changing it would miss the cache).
+        .args(["-p", "--model", "sonnet", "--effort", "medium", "--output-format", "text", "--no-session-persistence", "--tools", ""])
         .args(["--setting-sources", "user", "--strict-mcp-config"])
         .args(["--system-prompt", "You write precise, factual handoff summaries of conversations between a user and an agent working on documents."])
         .stdin(std::process::Stdio::piped())

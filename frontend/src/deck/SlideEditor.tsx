@@ -27,6 +27,7 @@ import { NotePins, actNowPrompt, type NoteDraft } from '../notes/NotePins'
 import { sendToAgent } from '../chat/sendToAgent'
 import { DrawLayer, pinFor, strokesBox, type Box } from '../notes/NoteDrawing'
 import { paintsAt, shapesAt } from './hitTest'
+import { cssToHex, firstFamily, pxToPt, sizeRuns, stepSize as nextSize } from './formatting'
 import { insertionStart, insertPlainText, normalizePasted, parseClipboardHtml, styledRanges, styledText } from './textPaste'
 import type { Stroke } from '../api/types'
 import { notesForSlide, useNotes } from '../store/notesStore'
@@ -45,13 +46,39 @@ interface Props {
   showResolved: boolean
   /** Imperative hook for the toolbar's "Add text box". */
   registerActions(a: SlideActions): void
+  /** The selection's font, size and colors, for the toolbar (null: nothing to format). */
+  onFormat?(f: FormatState | null): void
 }
+
+/** What the toolbar's font / size / color tools show and can change. */
+export interface FormatState {
+  /** Text is being edited, or a selected shape has text: font and size apply. */
+  text: boolean
+  font?: string
+  size?: number
+  textColor?: string
+  /** A shape is selected (or being edited): fill and line apply. */
+  shape: boolean
+  fill?: string
+  line?: string
+  /** Nothing selected: the slide background. */
+  background: boolean
+}
+
+export type ColorTarget = 'text' | 'fill' | 'line' | 'background'
 
 export interface SlideActions {
   addTextBox(): void
   align(kind: AlignKind): void
   /** Bring the selected shapes to the front / forward one step, or send them backward / to the back. */
   arrange(order: NodeOrder): void
+  setFont(face: string): void
+  setSize(pt: number): void
+  /** One preset size up / down, each run from its own size. */
+  stepSize(dir: 1 | -1): void
+  setColor(target: ColorTarget, hex: string): void
+  /** Remember the text selection before focus moves to a toolbar field (it ends text editing). */
+  holdSelection(): void
 }
 export type { NodeOrder }
 
@@ -75,7 +102,7 @@ const rot = (x: number, y: number, deg: number) => {
 }
 const label = (n: SlideNode) => n.name || `${n.nodeType} ${n.id}`
 
-export function SlideEditor({ session, noteMode, setNoteMode, showResolved, registerActions }: Props) {
+export function SlideEditor({ session, noteMode, setNoteMode, showResolved, registerActions, onFormat }: Props) {
   const { apply, setSelection, saveNow } = useDecks()
   const pres = session.pres!
   const slide: SlideData = pres.slides[session.slideIndex]
@@ -251,6 +278,176 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     await run(ops.length === 1 ? ops[0] : { type: 'batch', operations: ops },
       `Slide ${slideNo}: ${on ? 'made' : 'removed'} ${prop}${on ? '' : ' from'} "${short(picked, 60)}" in "${n ? label(n) : nodeId}"`)
   }
+
+  // ── font / size / color (toolbar; ⌘⇧> / ⌘⇧< step the size) ──────────────
+  /** The text being edited and its selection — the word at the caret when nothing is selected. */
+  const editingTarget = () => {
+    if (!editing) return null
+    const { nodeId, container, before } = editing
+    const sel = window.getSelection()
+    if (!sel?.rangeCount) return null
+    const r = sel.getRangeAt(0)
+    if (!container.contains(r.startContainer) || !container.contains(r.endContainer)) return null
+    const { paragraphs, positions } = readParagraphsAt(container, [[r.startContainer, r.startOffset], [r.endContainer, r.endOffset]])
+    let [start, end] = positions
+    if (!start || !end) return null
+    if (start.p === end.p && start.o === end.o) {
+      const t = paragraphs[start.p]?.runs.map((x) => x.text).join('') ?? ''
+      let a = start.o
+      let b = start.o
+      while (a > 0 && /[\p{L}\p{N}_'’-]/u.test(t[a - 1])) a--
+      while (b < t.length && /[\p{L}\p{N}_'’-]/u.test(t[b])) b++
+      if (a === b) return null
+      start = { p: start.p, o: a }
+      end = { p: end.p, o: b }
+    }
+    return { nodeId, container, paragraphs, start, end, changed: textBodyChanged(paragraphs, before) }
+  }
+  /** The text selection saved before focus went to a toolbar field (which ended the editing). */
+  const heldSelection = useRef<{ nodeId: string; start: TextPoint; end: TextPoint } | null>(null)
+
+  const textRange = (start: TextPoint, end: TextPoint) => ({ start: { paragraphIndex: start.p, offset: start.o }, end: { paragraphIndex: end.p, offset: end.o } })
+
+  /**
+   * Apply text formatting: to the text being edited (its selection), the selection saved before a
+   * toolbar field took the focus, or the whole text of each selected shape. `plan` gives the
+   * setTextStyle operations for one text container ([start, end), or all of it when null).
+   */
+  const applyText = async (what: string, plan: (nodeId: string, c: HTMLElement, start: TextPoint | null, end: TextPoint | null) => EditOperation[]) => {
+    const t = editingTarget()
+    const held = heldSelection.current
+    heldSelection.current = null
+    if (t || (held && !editing)) {
+      const nodeId = t?.nodeId ?? held!.nodeId
+      const el = nodeEl(nodeId)
+      const c = t?.container ?? (el && textContainer(el))
+      const start = t?.start ?? held!.start
+      const end = t?.end ?? held!.end
+      if (!c) return
+      const ops: EditOperation[] = []
+      if (t?.changed) ops.push({ type: 'setTextBody', slideId: slide.id, nodeId, paragraphs: t.paragraphs })
+      ops.push(...plan(nodeId, c, start, end))
+      if (!ops.length) return
+      if (t) {
+        setEditing(null)
+        t.container.contentEditable = 'false'
+      }
+      reselect.current = { nodeId, start, end }
+      const n = nodeById(nodeId)
+      await run(ops.length === 1 ? ops[0] : { type: 'batch', operations: ops }, `Slide ${slideNo}: ${what} in "${n ? label(n) : nodeId}"`)
+      return
+    }
+    const ops: EditOperation[] = []
+    const names: string[] = []
+    for (const id of selection) {
+      const el = nodeEl(id)
+      const c = el && textContainer(el)
+      if (!c) continue
+      const o = plan(id, c, null, null)
+      if (!o.length) continue
+      ops.push(...o)
+      const n = nodeById(id)
+      names.push(`"${n ? label(n) : id}"`)
+    }
+    if (ops.length) await run(ops.length === 1 ? ops[0] : { type: 'batch', operations: ops }, `Slide ${slideNo}: ${what} in ${names.join(', ')}`)
+  }
+
+  const setFont = (face: string) =>
+    void applyText(`set the font to ${face}`, (nodeId, _c, a, b) => [{ type: 'setTextStyle', slideId: slide.id, nodeId, style: { fontFamily: face }, ...(a && b ? { range: textRange(a, b) } : {}) }])
+  const setSize = (pt: number) =>
+    void applyText(`set the size to ${pt} pt`, (nodeId, _c, a, b) => [{ type: 'setTextStyle', slideId: slide.id, nodeId, style: { fontSize: pt }, ...(a && b ? { range: textRange(a, b) } : {}) }])
+  /** Each run one preset size up / down, from its own size (as PowerPoint's Grow / Shrink Font). */
+  const stepFontSize = (dir: 1 | -1) =>
+    void applyText(dir > 0 ? 'made the text bigger' : 'made the text smaller', (nodeId, c, a, b) => {
+      let start = a
+      let end = b
+      if (!start || !end) {
+        const ps = readParagraphs(c)
+        start = { p: 0, o: 0 }
+        end = { p: ps.length - 1, o: ps[ps.length - 1]?.runs.reduce((n, r) => n + r.text.length, 0) ?? 0 }
+      }
+      return sizeRuns(c, start, end).map((r): EditOperation => ({ type: 'setTextStyle', slideId: slide.id, nodeId, style: { fontSize: nextSize(r.pt, dir) }, range: textRange(r.start, r.end) }))
+    })
+  const setColor = (target: ColorTarget, hex: string) => {
+    if (target === 'text') {
+      void applyText(`colored the text #${hex}`, (nodeId, _c, a, b) => [{ type: 'setTextStyle', slideId: slide.id, nodeId, style: { color: hex }, ...(a && b ? { range: textRange(a, b) } : {}) }])
+      return
+    }
+    if (target === 'background') {
+      void run({ type: 'setSlideBackground', slideId: slide.id, color: hex }, `Slide ${slideNo}: set the background to #${hex}`)
+      return
+    }
+    const ids = editing ? [editing.nodeId] : selection
+    const shapes = ids.map((id) => nodeById(id)).filter((n): n is SlideNode => !!n && n.nodeType === 'shape')
+    if (!shapes.length) return
+    if (editing) void commitEditing()
+    const ops: EditOperation[] = shapes.map((n) =>
+      target === 'fill' ? { type: 'setSolidFill', slideId: slide.id, nodeId: n.id, color: hex } : { type: 'setOutline', slideId: slide.id, nodeId: n.id, color: hex })
+    void run(ops.length === 1 ? ops[0] : { type: 'batch', operations: ops },
+      `Slide ${slideNo}: ${target === 'fill' ? 'filled' : 'outlined'} ${shapes.map((n) => `"${label(n)}"`).join(', ')} with #${hex}`)
+  }
+  // (A later press that finds the editing already over — e.g. a double click in the field — keeps it.)
+  const holdSelection = () => {
+    const t = editingTarget()
+    if (t) heldSelection.current = { nodeId: t.nodeId, start: t.start, end: t.end }
+  }
+  // Another shape selected (or none): the saved text selection no longer applies.
+  useEffect(() => {
+    const h = heldSelection.current
+    if (h && (selection.length !== 1 || selection[0] !== h.nodeId)) heldSelection.current = null
+  }, [selection])
+
+  // The toolbar's view of the selection: font, size and colors of the text at the caret (or of the
+  // first selected shape's text), and its fill and line.
+  const [formatTick, setFormatTick] = useState(0)
+  useEffect(() => {
+    if (!editing) return
+    const bump = () => setFormatTick((n) => n + 1)
+    document.addEventListener('selectionchange', bump)
+    return () => document.removeEventListener('selectionchange', bump)
+  }, [editing])
+  useEffect(() => {
+    if (!onFormat) return
+    const textStyle = (el: Element | null) => {
+      if (!el) return {}
+      const cs = getComputedStyle(el)
+      return { font: firstFamily(cs.fontFamily), size: pxToPt(cs.fontSize), textColor: cssToHex(cs.color) ?? undefined }
+    }
+    const firstText = (c: HTMLElement) => {
+      const w = document.createTreeWalker(c, NodeFilter.SHOW_TEXT)
+      for (let n = w.nextNode(); n; n = w.nextNode()) if (n.textContent?.trim() && !n.parentElement?.closest('[data-pptx-bullet]')) return n.parentElement
+      return null
+    }
+    const paint = (el: HTMLElement | null) => {
+      const g = el?.querySelector<SVGGeometryElement>('svg path, svg rect, svg ellipse, svg polygon')
+      if (!g) return {}
+      const cs = getComputedStyle(g)
+      return { fill: cssToHex(cs.fill) ?? undefined, line: cs.stroke !== 'none' ? cssToHex(cs.stroke) ?? undefined : undefined }
+    }
+    if (editing) {
+      const sel = window.getSelection()
+      const at = sel?.rangeCount && editing.container.contains(sel.anchorNode) ? sel.anchorNode : null
+      const el = at ? (at.nodeType === Node.TEXT_NODE ? at.parentElement : (at as Element)) : firstText(editing.container)
+      onFormat({ text: true, ...textStyle(el), shape: true, ...paint(nodeEl(editing.nodeId)), background: false })
+      return
+    }
+    if (!selection.length) {
+      onFormat({ text: false, shape: false, background: true })
+      return
+    }
+    const nodes = selection.map((id) => nodeById(id)).filter((n): n is SlideNode => !!n)
+    const withText = selection.map((id) => nodeEl(id)).map((el) => el && textContainer(el)).find((c): c is HTMLElement => !!c && !!c.textContent?.trim())
+    const shapeEl = nodes.find((n) => n.nodeType === 'shape')
+    onFormat({
+      text: !!withText,
+      ...(withText ? textStyle(firstText(withText)) : {}),
+      shape: !!shapeEl,
+      ...(shapeEl ? paint(nodeEl(shapeEl.id)) : {}),
+      background: false,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onFormat, editing, selection, session.version, slide.id, formatTick])
+  useEffect(() => () => onFormat?.(null), [onFormat])
 
   useEffect(() => {
     const rs = reselect.current
@@ -542,8 +739,10 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     const nodes = selection.map(nodeById).filter(Boolean) as SlideNode[]
     if (!nodes.length) return
     const ops: EditOperation[] = nodes.map((n) => ({ type: 'setNodeTransform', slideId: slide.id, nodeId: n.id, position: { x: n.position.x + dx, y: n.position.y + dy } }))
+    // Same shapes, same direction: one undo step for the whole run of presses (see deckStore pushEdit).
+    const dir = dx < 0 ? 'left' : dx > 0 ? 'right' : dy < 0 ? 'up' : 'down'
     void run(ops.length === 1 ? ops[0] : { type: 'batch', operations: ops },
-      `Slide ${slideNo}: moved ${nodes.map((n) => `"${label(n)}"`).join(', ')}`, `move:${slide.id}:${selection.join(',')}`)
+      `Slide ${slideNo}: moved ${nodes.map((n) => `"${label(n)}"`).join(', ')}`, `nudge:${slide.id}:${selection.join(',')}:${dir}`)
   }
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -554,6 +753,11 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
       if ((e.metaKey || e.ctrlKey) && !e.altKey && (k === 'b' || k === 'i' || k === 'u')) {
         e.preventDefault()
         void toggleStyle(k === 'b' ? 'bold' : k === 'i' ? 'italic' : 'underline')
+      }
+      // ⌘⇧> / ⌘⇧<: grow / shrink the font a preset step (as in PowerPoint).
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === '>' || e.key === '.' || e.key === '<' || e.key === ',')) {
+        e.preventDefault()
+        stepFontSize(e.key === '>' || e.key === '.' ? 1 : -1)
       }
       // ⌥⇧⌘V: keep source formatting (by code: ⌥ changes the key's character). Also stops the
       // browser's own ⌥⇧⌘V, "Paste and Match Style".
@@ -571,6 +775,11 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     if (mod && e.key === 'x' && selection.length) { e.preventDefault(); void copySelection().then(deleteSelection); return }
     if (mod && e.key === 'v' && getClipboard()?.kind === 'nodes') { e.preventDefault(); void paste(); return }
     if (mod && e.key === 'd') { e.preventDefault(); void duplicateSelection(); return }
+    if (mod && e.shiftKey && selection.length && (e.key === '>' || e.key === '.' || e.key === '<' || e.key === ',')) {
+      e.preventDefault()
+      stepFontSize(e.key === '>' || e.key === '.' ? 1 : -1)
+      return
+    }
     if (mod && e.key === 'a') { e.preventDefault(); setSelection(key, slide.nodes.map((n) => n.id)); return }
     if (e.key === 'Enter' && selection.length === 1) { e.preventDefault(); startEditing(selection[0]); return }
     // ⌘↑ / ⌘↓: one step up / down the stack; with ⇧: to the front / back (as in Google Slides).
@@ -659,6 +868,11 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
 
   registerActions({
     arrange,
+    setFont,
+    setSize,
+    stepSize: stepFontSize,
+    setColor,
+    holdSelection,
     addTextBox: async () => {
         const created = await run(
         { type: 'addTextBox', slideId: slide.id, text: 'New text', position: { x: pres.width * 0.3, y: pres.height * 0.42 }, size: { w: pres.width * 0.4, h: pres.height * 0.1 } },
