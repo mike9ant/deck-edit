@@ -23,6 +23,10 @@ pub struct Project {
     pub last_opened_at: Option<String>,
 }
 
+/// The project list. Another Deck Edit may share the data folder (the desktop app and the browser
+/// version, say), so every change re-reads the file first and writes it back at once — neither
+/// drops the other's projects — and `list` reads it fresh. Lookups use the copy in memory, refreshed
+/// when a project isn't in it (one the other just created).
 pub struct ProjectStore {
     file: PathBuf,
     projects: Mutex<Vec<Project>>,
@@ -31,10 +35,7 @@ pub struct ProjectStore {
 impl ProjectStore {
     pub fn load(data_dir: &Path) -> Self {
         let file = data_dir.join("projects.json");
-        let projects = std::fs::read_to_string(&file)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        let projects = read_list(&file).unwrap_or_default();
         Self { file, projects: Mutex::new(projects) }
     }
 
@@ -44,18 +45,25 @@ impl ProjectStore {
         Ok(())
     }
 
+    /// The list as it is on disk now (kept as is when the file can't be read, rather than lose projects).
+    fn fresh(&self) -> std::sync::MutexGuard<'_, Vec<Project>> {
+        let mut all = self.projects.lock().unwrap();
+        if let Some(disk) = read_list(&self.file) {
+            *all = disk;
+        }
+        all
+    }
+
     pub fn list(&self) -> Vec<Project> {
-        self.projects.lock().unwrap().clone()
+        self.fresh().clone()
     }
 
     pub fn get(&self, id: &str) -> Result<Project> {
-        self.projects
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|p| p.id == id)
-            .cloned()
-            .ok_or_else(|| AppError::NotFound(format!("project {id} not found")))
+        let find = |all: &[Project]| all.iter().find(|p| p.id == id).cloned();
+        if let Some(p) = find(&self.projects.lock().unwrap()) {
+            return Ok(p);
+        }
+        find(&self.fresh()).ok_or_else(|| AppError::NotFound(format!("project {id} not found")))
     }
 
     /// The project's folder as a canonical path.
@@ -75,14 +83,14 @@ impl ProjectStore {
             created_at: chrono::Utc::now().to_rfc3339(),
             last_opened_at: None,
         };
-        let mut all = self.projects.lock().unwrap();
+        let mut all = self.fresh();
         all.push(project.clone());
         self.save(&all)?;
         Ok(project)
     }
 
     pub fn update(&self, id: &str, f: impl FnOnce(&mut Project)) -> Result<Project> {
-        let mut all = self.projects.lock().unwrap();
+        let mut all = self.fresh();
         let p = all
             .iter_mut()
             .find(|p| p.id == id)
@@ -94,9 +102,18 @@ impl ProjectStore {
     }
 
     pub fn delete(&self, id: &str) -> Result<()> {
-        let mut all = self.projects.lock().unwrap();
+        let mut all = self.fresh();
         all.retain(|p| p.id != id);
         self.save(&all)
+    }
+}
+
+/// The list in `file`: empty when there's no file yet; None when it can't be read or parsed.
+fn read_list(file: &Path) -> Option<Vec<Project>> {
+    match std::fs::read_to_string(file) {
+        Ok(s) => serde_json::from_str(&s).ok(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
+        Err(_) => None,
     }
 }
 
@@ -188,4 +205,28 @@ async fn update(
 async fn delete(State(state): State<AppState>, AxPath(id): AxPath<String>) -> Result<Json<serde_json::Value>> {
     state.projects.delete(&id)?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn two_apps_sharing_the_data_folder_keep_each_others_projects() {
+        let dir = tempfile::tempdir().unwrap();
+        // The desktop app and the browser server, both started on the same data folder.
+        let desktop = ProjectStore::load(dir.path());
+        let browser = ProjectStore::load(dir.path());
+        let a = desktop.create("xlang".into(), "/x".into()).unwrap();
+        // The browser server never saw "xlang" in memory; its own change must not drop it.
+        let b = browser.create("Biz".into(), "/b".into()).unwrap();
+        browser.update(&b.id, |p| p.last_opened_at = Some("now".into())).unwrap();
+        let names = |s: &ProjectStore| { let mut n: Vec<String> = s.list().into_iter().map(|p| p.name).collect(); n.sort(); n };
+        assert_eq!(names(&desktop), vec!["Biz", "xlang"]);
+        assert_eq!(names(&browser), vec!["Biz", "xlang"]);
+        // A project the other app created is found by id.
+        assert_eq!(browser.get(&a.id).unwrap().name, "xlang");
+        desktop.delete(&b.id).unwrap();
+        assert_eq!(names(&browser), vec!["xlang"]);
+    }
 }
