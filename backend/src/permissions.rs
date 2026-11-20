@@ -80,7 +80,7 @@ fn decision(allow: bool, reason: &str) -> Value {
 }
 
 /// Canonicalize the deepest existing ancestor (the file may not exist yet).
-fn resolve(root: &Path, target: &str) -> PathBuf {
+pub(crate) fn resolve(root: &Path, target: &str) -> PathBuf {
     let p = Path::new(target);
     let abs: PathBuf = if p.is_absolute() { p.to_path_buf() } else { root.join(p) };
     let mut probe = abs.clone();
@@ -172,11 +172,91 @@ async fn hook(
     if !token_ok(&headers, &state.token) {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let verdict = decide(&state, &q, &body).await;
+    // Allowed (or left to the CLI): take the file lock it needs first — it may wait for another agent.
+    let denied = verdict.pointer("/hookSpecificOutput/permissionDecision").and_then(|d| d.as_str()) == Some("deny");
+    if !denied {
+        if let Some(turned_back) = take_file_lock(&state, &q.chat, &body).await {
+            return Json(turned_back).into_response();
+        }
+    }
+    Json(verdict).into_response()
+}
+
+/// Several agents in one project: hold the files this call reads/writes (agent_locks.rs) until its
+/// result comes back. Waits while another agent's running call needs them (with a note in the chat);
+/// Some(deny) if that takes too long.
+async fn take_file_lock(state: &AppState, chat_id: &str, body: &Value) -> Option<Value> {
+    use crate::agent_locks::{Hold, MAX_WAIT};
+    let turn = state.chats.running_turn(chat_id)?;
+    let chat = state.chats.get(chat_id)?;
+    let root = state.projects.folder(&chat.project_id).ok()?;
+    let tool = body.get("tool_name").and_then(|t| t.as_str())?;
+    let access = crate::agent_access::classify(tool, body.get("tool_input").unwrap_or(&Value::Null), &root);
+    if access.is_empty() {
+        return None;
+    }
+    let id = match body.get("tool_use_id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => {
+            tracing::warn!("hook input without tool_use_id — the lock is released when the turn ends");
+            format!("{chat_id}:{}", uuid::Uuid::new_v4())
+        }
+    };
+    let hold = Hold::new(id, chat.project_id.clone(), chat_id.to_string(), chat.title.clone(), access);
+    // Shown to the user on the turn's status line while it waits (not in the transcript, not to the agent).
+    let waited = std::sync::atomic::AtomicBool::new(false);
+    let live = || state.chats.turn_live(chat_id, &turn);
+    let result = state
+        .locks
+        .acquire(hold, &root, MAX_WAIT, live, |b| {
+            waited.store(true, std::sync::atomic::Ordering::Relaxed);
+            let doing = if b.writing { "changing" } else { "reading" };
+            crate::chat::emit(state, chat_id, &turn, json!({ "kind": "status", "text": format!("Waiting for the agent in “{}” to finish {doing} {}…", b.chat_title, b.what) }));
+        })
+        .await;
+    if waited.load(std::sync::atomic::Ordering::Relaxed) {
+        crate::chat::emit(state, chat_id, &turn, json!({ "kind": "status", "text": null }));
+    }
+    if !live() {
+        // Stopped while it waited: don't keep (or take) anything for a turn that's over.
+        if let Some(id) = body.get("tool_use_id").and_then(|v| v.as_str()) {
+            state.locks.release(id);
+        }
+        return Some(decision(false, "The turn was stopped."));
+    }
+    match result {
+        Ok(waited) => {
+            if waited > Duration::from_secs(1) {
+                tracing::info!("chat {chat_id}: {tool} waited {:.1} s for another agent", waited.as_secs_f64());
+            }
+            None
+        }
+        Err(b) => Some(decision(
+            false,
+            &format!(
+                "Another agent (in the chat “{}”) is still {} {} after {} minutes. Wait a little and try this again, or do other work meanwhile.",
+                b.chat_title,
+                if b.writing { "changing" } else { "reading" },
+                b.what,
+                MAX_WAIT.as_secs() / 60
+            ),
+        )),
+    }
+}
+
+/// Whether the call may run: the running turn's approval mode, the user's answer to a card, or
+/// (`{}`) the CLI's own rules.
+async fn decide(state: &AppState, q: &HookQuery, body: &Value) -> Value {
+    // Summarizing the conversation for a split: text only, no tools.
+    if state.chats.summarizing(&q.chat) {
+        return decision(false, "You're writing a summary — use no tools; reply with the summary text only.");
+    }
     let Some(chat) = state.chats.get(&q.chat) else {
-        return Json(decision(false, "unknown chat")).into_response();
+        return decision(false, "unknown chat");
     };
     let Ok(root) = state.projects.folder(&chat.project_id) else {
-        return Json(decision(false, "project folder missing")).into_response();
+        return decision(false, "project folder missing");
     };
     let turn_id = state.chats.running_turn(&q.chat);
     let mode = state.chats.turn_mode(&q.chat).unwrap_or_else(|| chat.mode.clone());
@@ -185,9 +265,9 @@ async fn hook(
     let always = |bucket: &str| state.perms.always.lock().unwrap().get(&q.chat).is_some_and(|s| s.contains(bucket));
     let auto_deny = |reason: &str, lead: &str| {
         if let Some(t) = &turn_id {
-            notice_once(&state, &q.chat, t, format!("Declined {lead} automatically — {}", reason.split(". ").next().unwrap_or(reason)));
+            notice_once(state, &q.chat, t, format!("Declined {lead} automatically — {}", reason.split(". ").next().unwrap_or(reason)));
         }
-        Json(decision(false, reason)).into_response()
+        decision(false, reason)
     };
 
     // (always-allow bucket, card kind, detail, description, preview)
@@ -200,11 +280,11 @@ async fn hook(
                 .unwrap_or("")
                 .to_string();
             if target.is_empty() {
-                return Json(decision(false, "edit without a target path")).into_response();
+                return decision(false, "edit without a target path");
             }
             if mode == "plan" {
                 if is_plan_file(&target) {
-                    return Json(decision(true, "plan file")).into_response();
+                    return decision(true, "plan file");
                 }
                 return auto_deny(
                     "Plan mode — make no edits this turn. Describe the change in your plan; the user approves it before an implement turn.",
@@ -218,10 +298,10 @@ async fn hook(
                 );
             }
             if mode == "auto" || mode == "acceptEdits" {
-                return Json(decision(true, "auto-approved (edits inside the project folder)")).into_response();
+                return decision(true, "auto-approved (edits inside the project folder)");
             }
             if always("Edit") {
-                return Json(decision(true, "allowed for this chat")).into_response();
+                return decision(true, "allowed for this chat");
             }
             let rel = resolve(&root, &target)
                 .strip_prefix(&root)
@@ -233,10 +313,10 @@ async fn hook(
         "Bash" => {
             // Plan mode defers commands to the CLI's own read-only classifier.
             if mode == "plan" {
-                return Json(json!({})).into_response();
+                return json!({});
             }
             if mode == "auto" || always("Bash") {
-                return Json(decision(true, "auto-approved")).into_response();
+                return decision(true, "auto-approved");
             }
             let command = input.get("command").and_then(|c| c.as_str()).unwrap_or("").to_string();
             let description = input.get("description").and_then(|c| c.as_str()).unwrap_or("").to_string();
@@ -245,25 +325,25 @@ async fn hook(
         // Web tools reach the hook only when Agent settings → Web access is "Ask first" — asked in every mode.
         "WebSearch" | "WebFetch" => {
             if state.settings.get().web_access != "ask" || always("Web") {
-                return Json(decision(true, "web access allowed")).into_response();
+                return decision(true, "web access allowed");
             }
             let s = |k: &str| input.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
             let (detail, description) = if tool == "WebSearch" { (s("query"), "search the web".to_string()) } else { (s("url"), s("prompt")) };
             ("Web".to_string(), "Web", detail, description, None)
         }
         // The app's own tools (notes, view, screenshots).
-        t if t.starts_with("mcp__deck__") => return Json(decision(true, "app tool")).into_response(),
+        t if t.starts_with("mcp__deck__") => return decision(true, "app tool"),
         // The user's own MCP servers / connectors (only loaded when enabled in Settings).
         t if t.starts_with("mcp__") => {
             if mode == "plan" {
-                return Json(json!({})).into_response(); // the CLI's plan mode decides (read-only tools only)
+                return json!({}); // the CLI's plan mode decides (read-only tools only)
             }
             let mut parts = t.splitn(3, "__").skip(1);
             let server = parts.next().unwrap_or("").to_string();
             let action = parts.next().unwrap_or("").to_string();
             let bucket = format!("mcp:{server}");
             if mode == "auto" || always(&bucket) {
-                return Json(decision(true, "auto-approved")).into_response();
+                return decision(true, "auto-approved");
             }
             let args = serde_json::to_string_pretty(&input).unwrap_or_default();
             let args: String = if args.chars().count() > 600 { format!("{}…", args.chars().take(600).collect::<String>()) } else { args };
@@ -273,17 +353,19 @@ async fn hook(
             let pretty_action = action.strip_prefix(&format!("{lower}_")).unwrap_or(&action).replace('_', " ");
             (bucket, "Connector", format!("{pretty_server} · {pretty_action}"), args, None)
         }
-        _ => return Json(decision(true, "not gated")).into_response(),
+        // Read-only tools reach the hook only for the file lock: the CLI's own rules decide.
+        "Read" | "Grep" | "Glob" | "LS" | "NotebookRead" => return json!({}),
+        _ => return decision(true, "not gated"),
     };
 
     let Some(turn_id) = turn_id else {
-        return Json(decision(false, "no running turn to approve this")).into_response();
+        return decision(false, "no running turn to approve this");
     };
     let request_id = uuid::Uuid::new_v4().to_string();
     let (tx, rx) = oneshot::channel();
     state.perms.pending.lock().unwrap().insert(request_id.clone(), (q.chat.clone(), tx));
     crate::chat::emit(
-        &state,
+        state,
         &q.chat,
         &turn_id,
         json!({
@@ -307,12 +389,12 @@ async fn hook(
     }
     let allow = d == "allow" || d == "allowAlways";
     crate::chat::emit(
-        &state,
+        state,
         &q.chat,
         &turn_id,
         json!({"kind": "permissionResolved", "requestId": request_id, "decision": if allow { "allow" } else { "deny" }}),
     );
-    Json(decision(allow, if allow { "approved by user" } else { "denied by user" })).into_response()
+    decision(allow, if allow { "approved by user" } else { "denied by user" })
 }
 
 #[derive(Deserialize)]

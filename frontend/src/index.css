@@ -28,6 +28,13 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
       display: none;
     }
   }
+  /* Scrolls, but shows no scrollbar (the tab strip has its own arrows). */
+  .no-scrollbar {
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
   .input {
     @apply rounded-md border border-hair px-2.5 py-1.5 text-sm outline-none focus:border-accent;
   }

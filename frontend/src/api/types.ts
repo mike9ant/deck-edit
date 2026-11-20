@@ -56,6 +56,8 @@ export type TurnEvent =
   | { kind: 'activity'; tool: string; detail: string; /** A finished step (replaces the earlier event for the same tool). */ done?: boolean }
   | { kind: 'command'; command: string; exitCode: number; output: string }
   | { kind: 'fileEdited'; path: string }
+  /** Live only (never stored): what the turn is doing now, e.g. waiting for another agent; null clears it. */
+  | { kind: 'status'; text: string | null; /** Offer Kill: a stopped turn waits for a command it started to finish. */ kill?: boolean }
   | { kind: 'todos'; items: { text: string; status: string }[] }
   | { kind: 'permission'; requestId: string; tool: 'Bash' | 'Edit' | 'Connector' | 'Web'; detail: string; description?: string; preview?: { old?: string; new?: string } | null }
   | { kind: 'permissionResolved'; requestId: string; decision: 'allow' | 'deny' }
@@ -89,7 +91,11 @@ export interface Turn {
   reverted?: string
   /** Only present when the turn was billed to an API key (a subscription turn costs nothing extra). */
   costUsd?: number
-  usage?: { input: number; cached: number; output: number }
+  usage?: TokenUsage
+  /** Whether the prompt cache was predicted warm when the turn started. */
+  cache?: CacheCheck
+  /** This turn continued in a fresh conversation that starts from a summary of the earlier one. */
+  split?: SplitInfo
   error?: string
   mode?: ApprovalMode
   model?: string
@@ -221,4 +227,49 @@ export interface ConversationDetail {
   messages: { role: 'user' | 'assistant'; text: string; tools?: string[]; timestamp?: string }[]
   outputs: { path: string; size: number }[]
   transcriptPath?: string
+}
+
+/** Tokens a turn used. `cacheRead`…`context` are only on turns since they were recorded. */
+export interface TokenUsage {
+  /** All input tokens, including the cached part. */
+  input: number
+  /** The part of `input` read from or written to the prompt cache. */
+  cached: number
+  output: number
+  /** Of `cached`: read (cheap) / written (the costly part of a cold start). */
+  cacheRead?: number
+  cacheWrite?: number
+  /** The turn's first API call: mostly written means it started on a cold cache. */
+  firstRead?: number
+  firstWrite?: number
+  /** The conversation's size after the turn (what the next turn re-sends). */
+  context?: number
+  /** Model calls in the turn; each re-sends the conversation, so `input` is the sum over them. */
+  calls?: number
+}
+
+/** Would a chat's next turn start on a cold prompt cache (backend cache_check.rs)? */
+export interface CacheCheck {
+  contextTokens: number
+  idleSecs?: number
+  ttlSecs: number
+  ttlLearned: boolean
+  cold: boolean
+  reason?: string
+  /** Cold and at least `threshold` tokens. */
+  offerSplit: boolean
+  /** The previous turn's settings still have a warm cache (cold only because e.g. fast mode was switched on). */
+  previousWarm?: boolean
+  threshold: number
+}
+
+/** A conversation split (backend conversation_split.rs). */
+export interface SplitInfo {
+  previousSession?: string
+  /** The earlier conversation's size in tokens (0: unknown). */
+  previousTokens: number
+  /** 'warm': summarized by the same model from its cache · 'sonnet': from a condensed transcript. */
+  method: 'warm' | 'sonnet'
+  summary: string
+  recentTurns: number
 }

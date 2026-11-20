@@ -4,8 +4,9 @@
  * as slide fractions, drawn over the slide, and sent to the agent with the
  * area they cover (see backend notes.rs `describe_place`).
  *
- * - `NoteToolButton` — the toolbar's "Note" split button: toggles note mode,
- *   and its ▾ menu picks Pin or Draw (remembered).
+ * - `NoteToolButton` — the toolbar's [AI Note: 📍 ✏️] group: "AI Note" toggles
+ *   note mode with the last tool; the pin / draw buttons turn it on with that
+ *   tool (or switch tools); the one in use is highlighted while it's on.
  * - `SelectToolButton` — the pointer tool: back to selecting shapes (as does Esc,
  *   see `useEscapeEndsNoteMode`).
  * - `DrawLayer` — captures strokes over the stage while drawing.
@@ -13,7 +14,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { BotMessageSquare, Check, ChevronDown, MapPin, MousePointer2, PenLine } from 'lucide-react'
+import { BotMessageSquare, MapPin, MousePointer2, PenLine } from 'lucide-react'
 import clsx from 'clsx'
 import type { Stroke } from '../api/types'
 import { useNotes, type NoteTool } from '../store/notesStore'
@@ -28,50 +29,36 @@ const TOOLS: { id: NoteTool; label: string; hint: string; icon: typeof MapPin }[
 export function NoteToolButton({ active, onToggle }: { active: boolean; onToggle(): void }) {
   const tool = useNotes((s) => s.tool)
   const setTool = useNotes((s) => s.setTool)
-  const [menu, setMenu] = useState(false)
-  const Icon = tool === 'draw' ? PenLine : BotMessageSquare
+  /** A tool's button: turns note mode on with it, switches to it, or (already on with it) turns note mode off. */
+  const pick = (t: NoteTool) => {
+    if (active && tool === t) return onToggle()
+    setTool(t)
+    if (!active) onToggle()
+  }
   return (
-    <div className="relative flex items-center">
+    <div
+      className={clsx('flex h-7 shrink-0 items-center gap-0.5 rounded-md border pl-0.5 pr-0.5', active ? 'border-amber-300 bg-amber-50' : 'border-hair')}
+      role="group"
+      aria-label="AI note"
+    >
       <button
-        className={clsx('tool-btn rounded-r-none pr-1.5', active && 'bg-amber-100 text-amber-900')}
+        className={clsx('tool-btn h-6 px-1.5', active && 'text-amber-900 hover:bg-amber-100')}
         onClick={onToggle}
-        title={tool === 'draw' ? 'Draw a note for the AI agent: circle or mark an area' : 'Pin a note for the AI agent: click where it goes'}
+        title={active ? 'Stop adding notes for the AI agent (Esc)' : `Add a note for the AI agent — ${tool === 'draw' ? 'draw a mark' : 'pin it at a point'}`}
       >
-        <Icon size={15} /> <span className="tb-label">{tool === 'draw' ? 'Draw for AI' : 'Note for AI'}</span>
+        <BotMessageSquare size={15} /> <span className="tb-label">AI Note:</span>
       </button>
-      <button
-        className={clsx('tool-btn rounded-l-none px-1', active && 'bg-amber-100 text-amber-900')}
-        title="Pin or draw"
-        onClick={() => setMenu(!menu)}
-      >
-        <ChevronDown size={13} />
-      </button>
-      {menu && (
-        <>
-          <div className="fixed inset-0 z-40" onMouseDown={() => setMenu(false)} />
-          <div className="absolute right-0 top-8 z-50 w-64 rounded-lg border border-hair bg-white p-1 shadow-xl">
-            <div className="px-2 pb-1 pt-1.5 text-[11px] font-medium text-ink-3">Notes for the AI agent</div>
-            {TOOLS.map((t) => (
-              <button
-                key={t.id}
-                className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-paper"
-                onClick={() => {
-                  setTool(t.id)
-                  setMenu(false)
-                  if (!active) onToggle()
-                }}
-              >
-                <t.icon size={15} className="mt-0.5 shrink-0 text-ink-2" />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-xs font-medium text-ink">{t.label}</span>
-                  <span className="block text-[11px] text-ink-3">{t.hint}</span>
-                </span>
-                {tool === t.id && <Check size={14} className="mt-0.5 text-accent" />}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
+      {TOOLS.map((t) => (
+        <button
+          key={t.id}
+          className={clsx('icon-btn h-6 w-6', active && tool === t.id ? 'bg-amber-200 text-amber-900 hover:bg-amber-200' : active && 'hover:bg-amber-100')}
+          aria-pressed={active && tool === t.id}
+          title={`${t.label} — ${t.hint.toLowerCase()}`}
+          onClick={() => pick(t.id)}
+        >
+          <t.icon size={14} />
+        </button>
+      ))}
     </div>
   )
 }

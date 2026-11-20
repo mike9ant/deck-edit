@@ -107,7 +107,7 @@ fn list_dirs(root: &Path) -> Vec<String> {
 }
 
 /// Every regular file under `root` the app tracks (same skip rules as the tree).
-fn list_files(root: &Path) -> Vec<(String, u64, u128)> {
+pub(crate) fn list_files(root: &Path) -> Vec<(String, u64, u128)> {
     let mut out = Vec::new();
     let walker = WalkDir::new(root).follow_links(false).into_iter().filter_entry(|e| {
         if e.depth() == 0 {
@@ -313,14 +313,18 @@ pub fn changes(m: &Manifest, root: &Path) -> Vec<Change> {
     out
 }
 
-/// Put the folder back the way the snapshot recorded it. Returns the id of the
-/// safety snapshot taken first (restore it to undo the revert).
-pub fn restore(data_dir: &Path, project_id: &str, id: &str, root: &Path) -> Result<String> {
+/// Put the folder back the way the snapshot recorded it — or, with `only`, just those
+/// files (a turn's own changes: other agents' and the user's later work elsewhere stays).
+/// Returns the id of the safety snapshot taken first (restore it to undo the revert).
+pub fn restore(data_dir: &Path, project_id: &str, id: &str, root: &Path, only: Option<&std::collections::HashSet<String>>) -> Result<String> {
     let m = load(data_dir, project_id, id)?;
     let safety = create(data_dir, project_id, root)?;
     let dir = snapshot_dir(data_dir, project_id, id);
     let created_dir = dir.join("created").join(&safety.id);
-    let all = changes(&m, root);
+    let mut all = changes(&m, root);
+    if let Some(only) = only {
+        all.retain(|c| only.contains(&c.path) || c.from.as_ref().is_some_and(|f| only.contains(f)));
+    }
     // Moves first: put each moved file back where it was (a rename — no copy,
     // and it works even for files too big to have been backed up). Doing these
     // before anything else frees the old paths and empties the new folders.
@@ -356,7 +360,20 @@ pub fn restore(data_dir: &Path, project_id: &str, id: &str, root: &Path) -> Resu
             _ => tracing::warn!("cannot restore {} (not backed up)", c.path),
         }
     }
-    restore_dirs(&m, root);
+    if only.is_none() {
+        restore_dirs(&m, root);
+    } else {
+        // Folders the turn created for files now taken away: removed once empty (never one with files).
+        for c in all.iter().filter(|c| c.kind == "created") {
+            let mut dir = Path::new(&c.path).parent();
+            while let Some(d) = dir.filter(|d| !d.as_os_str().is_empty()) {
+                if std::fs::remove_dir(root.join(d)).is_err() {
+                    break;
+                }
+                dir = d.parent();
+            }
+        }
+    }
     Ok(safety.id)
 }
 
@@ -427,7 +444,7 @@ mod tests {
 
         // Restoring writes new files into the folder; the backup copies are untouched.
         std::fs::write(root.path().join("big.pptx"), b"agent rewrote it").unwrap();
-        restore(data.path(), "p", &m2.id, root.path()).unwrap();
+        restore(data.path(), "p", &m2.id, root.path(), None).unwrap();
         assert_eq!(std::fs::read(root.path().join("big.pptx")).unwrap().len(), 100_000);
         assert_eq!(std::fs::read(f(&m2, "big.pptx")).unwrap().len(), 100_000);
     }
@@ -475,7 +492,7 @@ mod tests {
         assert!(moved.contains(&("old/huge.mov", "media/huge.mov")));
         assert!(ch.iter().any(|c| c.kind == "created" && c.path == "docs/new-file.md"));
 
-        restore(data.path(), "p", &m.id, r).unwrap();
+        restore(data.path(), "p", &m.id, r, None).unwrap();
         assert_eq!(std::fs::read(r.join("deck.pptx")).unwrap().len(), 5000);
         assert_eq!(std::fs::read(r.join("old/sub/notes.md")).unwrap(), b"notes");
         assert_eq!(std::fs::read(r.join("old/huge.mov")).unwrap().len(), 3000, "un-backed-up file moved back");
@@ -506,14 +523,34 @@ mod tests {
         let kinds: Vec<_> = ch.iter().map(|c| (c.path.as_str(), c.kind.as_str())).collect();
         assert_eq!(kinds, vec![("a.pptx", "modified"), ("keep.md", "deleted"), ("new.pdf", "created")]);
 
-        let safety = restore(data.path(), "p", &m.id, root.path()).unwrap();
+        let safety = restore(data.path(), "p", &m.id, root.path(), None).unwrap();
         assert_eq!(std::fs::read(root.path().join("a.pptx")).unwrap(), b"v1");
         assert_eq!(std::fs::read(root.path().join("keep.md")).unwrap(), b"same");
         assert!(!root.path().join("new.pdf").exists());
 
         // The revert itself can be undone.
-        restore(data.path(), "p", &safety, root.path()).unwrap();
+        restore(data.path(), "p", &safety, root.path(), None).unwrap();
         assert_eq!(std::fs::read(root.path().join("a.pptx")).unwrap(), b"v2-longer");
         assert!(root.path().join("new.pdf").exists());
+    }
+
+    #[test]
+    fn a_turn_reverts_only_its_own_files() {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("mine.pptx"), b"v1").unwrap();
+        std::fs::write(root.path().join("theirs.pptx"), b"t1").unwrap();
+        let m = create(data.path(), "p", root.path()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        // This turn changed mine.pptx and created out/chart.png; another agent changed theirs.pptx.
+        std::fs::write(root.path().join("mine.pptx"), b"v2-longer").unwrap();
+        std::fs::create_dir(root.path().join("out")).unwrap();
+        std::fs::write(root.path().join("out/chart.png"), b"png").unwrap();
+        std::fs::write(root.path().join("theirs.pptx"), b"t2-longer").unwrap();
+        let only: std::collections::HashSet<String> = ["mine.pptx".to_string(), "out/chart.png".to_string()].into();
+        restore(data.path(), "p", &m.id, root.path(), Some(&only)).unwrap();
+        assert_eq!(std::fs::read(root.path().join("mine.pptx")).unwrap(), b"v1");
+        assert!(!root.path().join("out").exists(), "the emptied folder the turn made is gone");
+        assert_eq!(std::fs::read(root.path().join("theirs.pptx")).unwrap(), b"t2-longer", "the other agent's work stays");
     }
 }

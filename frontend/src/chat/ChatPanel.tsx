@@ -10,7 +10,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import {
   AlertTriangle, BotMessageSquare, Check, ChevronDown, ChevronRight, CircleDot, FileEdit, History, Loader2, MessageSquare, SquarePlus, Trash2,
-  Plus, RotateCcw, Send, Square, Terminal, Wrench, X, StickyNote, Pencil, Play, ImagePlus, Library,
+  Plus, RotateCcw, Send, Square, Terminal, Wrench, X, StickyNote, Pencil, Play, ImagePlus, Library, Snowflake, Scissors,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { askConfirm } from '../components/confirmDialog'
@@ -24,12 +24,12 @@ import { notePlaceLabel, noteNumber, notesForChat, useNotes } from '../store/not
 import { useAgent } from '../store/agentStore'
 import { useDecks } from '../deck/deckStore'
 import { usePdfs } from '../pdf/pdfStore'
-import type { Chat, Posture, Turn, TurnEvent } from '../api/types'
+import type { CacheCheck, Chat, Posture, Turn, TurnEvent } from '../api/types'
 import { buildTurnContext, pendingEditCount } from './turnContext'
 import { useTextEditTick } from '../viewers/textEdits'
 import { PosturePopover } from './PosturePopover'
 import { ConversationsPanel } from './ConversationsPanel'
-import { APPROVAL_MODES, FALLBACK_MODELS, chatPosture, turnPostureLabel } from './posture'
+import { APPROVAL_MODES, FALLBACK_MODELS, chatPosture, fastSupported, turnPostureLabel } from './posture'
 import { api } from '../api/client'
 import { MAX_IMAGES, dragHasFiles, maxImageEdgeFor, prepareImage, splitImageFiles, type PendingImage } from './imageAttachments'
 
@@ -422,6 +422,8 @@ function contextSummary(t: Turn) {
 }
 
 function TurnView({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; draft?: string; isLast: boolean }) {
+  const status = useChat((s) => s.statuses[turn.id])
+  const [showSummary, setShowSummary] = useState(false)
   const { revert, unrevert, answer } = useChat()
   const openFile = useApp((s) => s.openFile)
   const resolved = useMemo(() => {
@@ -467,6 +469,24 @@ function TurnView({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; draft
         ) : null}
       </div>
       {posture && <div className="mt-0.5 text-right text-[10px] text-ink-3" title="How this turn ran: approval mode · model · effort">{posture}</div>}
+      {turn.split && (
+        <div className="mt-2 rounded-md border border-violet-200 bg-violet-50/60 text-xs text-violet-900">
+          <button className="flex w-full items-center gap-1.5 px-2 py-1 text-left" onClick={() => setShowSummary(!showSummary)} title="Show the summary the fresh conversation started from">
+            {showSummary ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <Scissors size={12} />
+            <span className="truncate">
+              Conversation split — continued from a summary ({turn.split.method === 'warm' ? 'by the same model, from its cache' : 'by Sonnet'})
+              {turn.split.recentTurns ? ` · last ${turn.split.recentTurns} turn${turn.split.recentTurns > 1 ? 's' : ''} carried over` : ''}
+              {turn.split.previousTokens ? ` · earlier conversation ${fmtTokens(turn.split.previousTokens)} tokens` : ''}
+            </span>
+          </button>
+          {showSummary && (
+            <div className="prose prose-sm max-w-none border-t border-violet-200 px-3 py-2 text-ink prose-headings:mb-1 prose-headings:mt-3 prose-headings:text-[13px]">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.split.summary}</ReactMarkdown>
+            </div>
+          )}
+        </div>
+      )}
       <div className="mt-2 space-y-1.5">
         {groupEvents(turn.events).map((g, i) =>
           g.type === 'tools' ? (
@@ -479,7 +499,18 @@ function TurnView({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; draft
           <div className="prose prose-sm max-w-none text-ink"><ReactMarkdown remarkPlugins={[remarkGfm]}>{draft}</ReactMarkdown></div>
         )}
         {turn.status === 'running' && !draft && (
-          <div className="flex items-center gap-2 text-xs text-ink-3"><Loader2 size={13} className="animate-spin" /> Working…</div>
+          <div className={clsx('flex items-center gap-2 text-xs', status ? 'text-violet-700' : 'text-ink-3')}>
+            <Loader2 size={13} className="animate-spin" /> {status?.text ?? 'Working…'}
+            {status?.kill && (
+              <button
+                className="rounded border border-red-200 bg-white px-1.5 py-0.5 text-[11px] font-medium text-red-700 hover:bg-red-50"
+                title="End the command now instead of letting it finish (if it's saving a file, that file may be left incomplete — Revert restores the backup)"
+                onClick={() => void api.killChat(chat.id)}
+              >
+                Kill
+              </button>
+            )}
+          </div>
         )}
         {turn.status === 'stopped' && <div className="text-xs text-ink-3">(Stopped.)</div>}
         {canImplement && (
@@ -526,6 +557,49 @@ function TurnView({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; draft
   )
 }
 
+/**
+ * Asked when a message would re-send a big conversation on a cold cache: split (summary + fresh
+ * conversation) or continue as is. The message waits in the composer meanwhile.
+ */
+function SplitBadge({ cache, fast, onSplit, onContinue, onCancel }: { cache: CacheCheck; fast: boolean; onSplit(): void; onContinue(): void; onCancel(): void }) {
+  return (
+    <div className="mb-2 rounded-lg border border-sky-200 bg-sky-50 p-2.5 text-xs text-sky-950">
+      <div className="flex items-center gap-1.5 font-medium"><Scissors size={13} /> Split this conversation?</div>
+      <p className="mt-1 leading-snug">
+        It's {fmtTokens(cache.contextTokens)} tokens, and its cache has expired{cache.reason ? ` (${cache.reason})` : ''}: continuing re-sends all of it and writes it to the cache again{fast ? ' — at fast-mode rates' : ''}.
+        Splitting summarizes it {cache.previousWarm ? 'with the same model, from its still-warm cache' : 'with Sonnet'} and continues in a fresh conversation that starts from the summary and the last few turns — your message goes there.
+      </p>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        <button className="btn-primary px-2.5 py-1" onClick={onSplit}><Scissors size={12} /> Split &amp; continue</button>
+        <button className="btn-ghost border border-sky-200 bg-white px-2.5 py-1" onClick={onContinue}>Continue as is</button>
+        <button className="btn-ghost px-2 py-1" onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  )
+}
+
+/** A turn that had to write at least this much to the cache before its first reply is flagged as a cold start. */
+const COLD_START_SHOWN = 20_000
+
+/**
+ * Would the chat's next turn start on a cold prompt cache — and is the conversation big enough
+ * that this matters (`offerSplit`)? Asked again when the chat or its settings change, after each
+ * turn, and every 30 s while idle (the cache expires with time).
+ */
+function useCacheCheck(chat: Chat, running: boolean): CacheCheck | null {
+  const [check, setCheck] = useState<CacheCheck | null>(null)
+  const last = chat.turns[chat.turns.length - 1]
+  useEffect(() => {
+    if (running || !chat.turns.length) return setCheck(null)
+    let live = true
+    const ask = () => void api.chatCache(chat.id).then((c) => live && setCheck(c)).catch(() => {})
+    ask()
+    const timer = setInterval(ask, 30_000)
+    return () => { live = false; clearInterval(timer) }
+  }, [chat.id, running, chat.turns.length, last?.status, chat.model, chat.effort, chat.fast])
+  return check
+}
+
 const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k` : String(n))
 
 /** Tokens for every turn; dollars only when the turn was billed to the API key —
@@ -534,13 +608,32 @@ function UsageLine({ turn }: { turn: Turn }) {
   const u = turn.usage
   const billed = turn.auth === 'key' && turn.costUsd != null && turn.costUsd > 0
   if (!u && !billed) return null
+  // Turns since the split was recorded: cache reads vs writes, and whether the turn started cold.
+  const split = u?.cacheRead != null && u.cacheWrite != null
+  // Flagged only where it costs: tokens billed at API prices (an API key, or fast mode).
+  const startedCold = (turn.auth === 'key' || !!turn.fast) && !!u?.firstWrite && u.firstWrite > (u.firstRead ?? 0) && u.firstWrite >= COLD_START_SHOWN
+  const c = turn.cache
   const title = u
-    ? `${u.input.toLocaleString()} input tokens (${u.cached.toLocaleString()} from the prompt cache) · ${u.output.toLocaleString()} output tokens` +
-      (billed ? ` · billed to the API key` : turn.auth === 'key' ? '' : ' · on your Claude subscription (no per-token charge)')
+    ? [
+        split
+          ? `${u.input.toLocaleString()} input tokens: ${u.cacheRead!.toLocaleString()} read from the prompt cache, ${u.cacheWrite!.toLocaleString()} written to it`
+          : `${u.input.toLocaleString()} input tokens (${u.cached.toLocaleString()} from the prompt cache)`,
+        `${u.output.toLocaleString()} output tokens`,
+        u.context ? `conversation now ${u.context.toLocaleString()} tokens` : '',
+        u.calls && u.calls > 1 ? `${u.calls} model calls — each re-sends the conversation, so "in" is the sum over them` : '',
+        u.firstRead != null && (u.firstRead || u.firstWrite)
+          ? `started ${u.firstWrite! > u.firstRead ? 'cold' : 'warm'} (first call read ${u.firstRead.toLocaleString()}, wrote ${u.firstWrite!.toLocaleString()})`
+          : '',
+        c ? `predicted ${c.cold ? `cold${c.reason ? ` — ${c.reason}` : ''}` : 'warm'}` : '',
+        billed ? 'billed to the API key' : turn.auth === 'key' ? '' : 'on your Claude subscription (no per-token charge)',
+      ].filter(Boolean).join(' · ')
     : 'Billed to the API key'
   return (
     <div className="mt-1 text-right text-[10px] text-ink-3" title={title}>
-      {u && `${fmtTokens(u.input)} in${u.cached ? ` (${fmtTokens(u.cached)} cached)` : ''} · ${fmtTokens(u.output)} out`}
+      {startedCold && <span className="mr-1 inline-flex items-center gap-0.5 text-sky-700"><Snowflake size={10} /> cold start ·</span>}
+      {u && (split
+        ? `${u.context ? `${fmtTokens(u.context)} context · ` : ''}${fmtTokens(u.input)} in${u.calls && u.calls > 1 ? ` over ${u.calls} calls` : ''} (${fmtTokens(u.cacheRead!)} cache read${u.cacheWrite ? ` · ${fmtTokens(u.cacheWrite)} written` : ''}) · ${fmtTokens(u.output)} out`
+        : `${fmtTokens(u.input)} in${u.cached ? ` (${fmtTokens(u.cached)} cached)` : ''} · ${fmtTokens(u.output)} out`)}
       {billed && <span className="ml-1 font-medium text-ink-2">· ${turn.costUsd!.toFixed(3)}</span>}
     </div>
   )
@@ -729,6 +822,16 @@ function Composer({ chat }: { chat: Chat }) {
   const posture: Posture = chatPosture(chat, { auth: settings?.auth ?? 'subscription' })
   if (!apiKeyAvailable) posture.auth = 'subscription'
   const runningMode = running ? (runningModes[chat.id] ?? runningTurn?.mode ?? null) : null
+  const cache = useCacheCheck(chat, running)
+  /** The next message continues in a fresh conversation from a summary (chosen on the chip). */
+  const [splitNext, setSplitNext] = useState(false)
+  /** A message waiting for the user's choice: split first, or continue as is. */
+  const [askSplit, setAskSplit] = useState(false)
+  useEffect(() => { setSplitNext(false); setAskSplit(false) }, [chat.id])
+  // Only worth raising where tokens are billed at API prices: an API key, or fast mode. On a
+  // subscription at normal speed a long or cold conversation costs nothing extra.
+  const apiPriced = posture.auth === 'key' || (!!posture.fast && fastSupported(posture.model ?? ''))
+  const longChat = apiPriced && !!cache && cache.contextTokens >= cache.threshold
 
   /** A posture pick applies to this chat AND becomes the default for new chats (as in Code Navigator). */
   const changePosture = (p: Partial<Posture>) => {
@@ -769,7 +872,7 @@ function Composer({ chat }: { chat: Chat }) {
     setImageNote(notes.length ? notes.join('; ') : null)
   }
 
-  const submit = async () => {
+  const submit = async (choice?: 'split' | 'continue') => {
     const t = text.trim()
     if ((!t && !images.length) || running) return
     // `/fast on|off` toggles fast mode instead of sending (as in Code Navigator).
@@ -779,12 +882,20 @@ function Composer({ chat }: { chat: Chat }) {
       setText('')
       return
     }
+    // A big conversation on a cold cache: ask before re-sending all of it.
+    if (!choice && !splitNext && apiPriced && cache?.offerSplit) {
+      setAskSplit(true)
+      return
+    }
+    const split = choice === 'split' || (choice !== 'continue' && splitNext)
+    setAskSplit(false)
+    setSplitNext(false)
     const ctx = await buildTurnContext(true)
     const sentImages = images
     setText('')
     setImages([])
     setImageNote(null)
-    const ok = await send(chat.id, t, ctx, posture, sentImages.map((i) => ({ data: i.data, name: i.name, width: i.width, height: i.height })))
+    const ok = await send(chat.id, t, ctx, posture, sentImages.map((i) => ({ data: i.data, name: i.name, width: i.width, height: i.height })), split)
     if (!ok) {
       setText(t)
       setImages(sentImages)
@@ -814,8 +925,34 @@ function Composer({ chat }: { chat: Chat }) {
           Drop images to attach
         </div>
       )}
-      {(openNotes.length > 0 || edits > 0) && (
+      {askSplit && cache && (
+        <SplitBadge cache={cache} fast={!!posture.fast} onSplit={() => void submit('split')} onContinue={() => void submit('continue')} onCancel={() => setAskSplit(false)} />
+      )}
+      {(openNotes.length > 0 || edits > 0 || (longChat && !askSplit)) && (
         <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-3">
+          {longChat && !askSplit && cache && (splitNext ? (
+            <span className="flex items-center gap-1 rounded bg-violet-50 px-1.5 py-0.5 text-violet-900">
+              <Scissors size={11} /> Next message continues in a fresh conversation, from a summary of this one
+              <button className="ml-1 underline hover:text-violet-700" onClick={() => setSplitNext(false)}>Undo</button>
+            </span>
+          ) : (
+            <span
+              className={clsx('flex items-center gap-1 rounded px-1.5 py-0.5', cache.cold ? 'bg-sky-50 text-sky-900' : 'bg-paper')}
+              title={cache.cold
+                ? `The provider's prompt cache for this conversation has expired (${cache.reason ?? 'cold'}; cache lifetime ${Math.round(cache.ttlSecs / 60)} min${cache.ttlLearned ? ', learned from your turns' : ', assumed'}). The next message re-sends all ${cache.contextTokens.toLocaleString()} tokens and writes them to the cache again — the costly kind of turn, twice so in fast mode.${cache.previousWarm ? ' Its earlier cache is still warm, so a split now is cheap (the summary is a cache read).' : ''}`
+                : `This conversation is ${cache.contextTokens.toLocaleString()} tokens: every message re-sends all of it (cheaply while cached, but slower and more costly as it grows).`}
+            >
+              {cache.cold ? <Snowflake size={11} /> : null}
+              {cache.cold ? `Cold: next message re-sends ${fmtTokens(cache.contextTokens)} tokens${cache.reason ? ` (${cache.reason})` : ''}` : `Long conversation: ${fmtTokens(cache.contextTokens)} tokens`}
+              <button
+                className="ml-1 flex items-center gap-0.5 rounded border border-current/20 bg-white px-1 font-medium hover:bg-white/60"
+                title="Continue in a fresh conversation that starts from a summary of this one (and its last few turns)"
+                onClick={() => setSplitNext(true)}
+              >
+                <Scissors size={10} /> Split
+              </button>
+            </span>
+          ))}
           {edits > 0 && <span className="flex items-center gap-1 rounded bg-paper px-1.5 py-0.5"><Pencil size={11} /> {edits} edit{edits > 1 ? 's' : ''} since last turn will be shared</span>}
           {openNotes.length > 0 && (
             <button className="flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-amber-900" onClick={() => setShowNotes(!showNotes)}>

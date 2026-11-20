@@ -4,23 +4,20 @@
  * (mode, model, effort) and the usual context block, exactly as if typed.
  */
 
-import { useChat } from '../store/chatStore'
+import { chatIsRunning, useChat } from '../store/chatStore'
 import { useAgent } from '../store/agentStore'
 import { useApp } from '../store/appStore'
 import { buildTurnContext } from './turnContext'
 import { chatPosture } from './posture'
 
-/** Is an agent turn running in the current project (a new message can't start yet)? */
-export const agentBusy = () => {
-  const { pid, busyProjects } = useChat.getState()
-  return !!pid && !!busyProjects[pid]
-}
+/** Is the active chat's agent working (a new message can't go into that chat yet)? Other chats may run alongside. */
+export const agentBusy = () => chatIsRunning(useChat.getState(), useChat.getState().activeId)
 
 export async function sendToAgent(text: string): Promise<boolean> {
   const chats = useChat.getState()
   if (!chats.pid) return false
   if (agentBusy()) {
-    useApp.getState().toast('The agent is working — try again when its turn ends.')
+    useApp.getState().toast('The agent in this chat is working — try again when its turn ends, or switch to another chat tab.')
     return false
   }
   const id = chats.activeId ?? (await chats.newChat())

@@ -30,6 +30,8 @@ pub struct AppState {
     pub events: broadcast::Sender<Value>,
     pub chats: Arc<ChatRegistry>,
     pub perms: Arc<Permissions>,
+    /// Files held by the agents' running tool calls (several agents in one project; agent_locks.rs).
+    pub locks: Arc<crate::agent_locks::AgentLocks>,
     pub notes: Arc<NotesStore>,
     pub settings: Arc<SettingsStore>,
     /// The user's past Claude conversations on this machine (CLI, desktop Code, Cowork).

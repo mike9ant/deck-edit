@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use axum::extract::{Path as AxPath, Query, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
@@ -68,6 +70,19 @@ pub struct Turn {
     /// Images attached to the user's message.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<crate::chat_images::ChatImage>,
+    /// Whether the prompt cache was predicted warm when the turn started (see cache_check.rs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<crate::cache_check::CacheCheck>,
+    /// Another agent ran in the project during this turn: its changes are the files it wrote
+    /// itself (`touched`), not everything that changed in the folder meanwhile.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub overlapped: bool,
+    /// Files (or folders) this turn's tool calls wrote, relative to the project folder ("" = all of it).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub touched: Vec<String>,
+    /// This turn started a fresh conversation from a summary of the earlier one (conversation_split.rs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split: Option<crate::conversation_split::SplitInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +129,12 @@ pub fn normalize_mode(m: &str) -> String {
 struct RunningTurn {
     turn_id: String,
     stop: Option<oneshot::Sender<()>>,
+    /// Stop was pressed: the agent is gone, a command it started may still be finishing.
+    stopping: bool,
+    /// Kill: end that command now instead of letting it finish.
+    kill: Arc<tokio::sync::Notify>,
+    /// Summarizing the conversation for a split (no tools allowed meanwhile).
+    summarizing: bool,
     /// The approval mode governing the running turn (switchable mid-turn,
     /// except into or out of plan, which is fixed by the CLI flag).
     mode: String,
@@ -138,12 +159,15 @@ pub struct ChatRegistry {
     chats: Mutex<HashMap<String, Chat>>,
     /// chat id → the turn running in it
     running: Mutex<HashMap<String, RunningTurn>>,
+    /// (chat, turn) left running when the app last quit — see `settle_interrupted`.
+    interrupted: Mutex<Vec<(String, String)>>,
 }
 
 impl ChatRegistry {
     pub fn load(data_dir: &Path) -> Self {
         let dir = data_dir.join("chats");
         let mut chats = HashMap::new();
+        let mut interrupted = Vec::new();
         if let Ok(projects) = std::fs::read_dir(&dir) {
             for p in projects.filter_map(|e| e.ok()) {
                 let Ok(files) = std::fs::read_dir(p.path()) else { continue };
@@ -151,17 +175,28 @@ impl ChatRegistry {
                     let Ok(text) = std::fs::read_to_string(f.path()) else { continue };
                     let Ok(mut chat) = serde_json::from_str::<Chat>(&text) else { continue };
                     chat.mode = normalize_mode(&chat.mode);
-                    // A turn left "running" by a crash/restart is over.
+                    // A turn left "running" by a crash/restart is over — but its CLI session (saved as soon as
+                    // it started) holds what it did, so a new message continues it.
                     for t in chat.turns.iter_mut() {
                         if t.status == "running" {
                             t.status = "stopped".into();
+                            t.ended_at.get_or_insert_with(|| chrono::Utc::now().to_rfc3339());
+                            // Did the agent get going (anything from it beyond the app's own backup step)?
+                            let started = t.events.iter().any(|e| match e.get("kind").and_then(|k| k.as_str()) {
+                                Some("activity") => e.get("tool").and_then(|k| k.as_str()) != Some("backup"),
+                                Some("message" | "command" | "fileEdited" | "permission" | "todos") => true,
+                                _ => false,
+                            });
+                            let text = if started { INTERRUPTED_NOTICE } else { INTERRUPTED_BEFORE_START };
+                            t.events.push(json!({ "kind": "notice", "text": text }));
+                            interrupted.push((chat.id.clone(), t.id.clone()));
                         }
                     }
                     chats.insert(chat.id.clone(), chat);
                 }
             }
         }
-        Self { dir, chats: Mutex::new(chats), running: Mutex::new(HashMap::new()) }
+        Self { dir, chats: Mutex::new(chats), running: Mutex::new(HashMap::new()), interrupted: Mutex::new(interrupted) }
     }
 
     pub fn get(&self, id: &str) -> Option<Chat> {
@@ -177,6 +212,32 @@ impl ChatRegistry {
             .values()
             .filter_map(|c| c.cli_session_id.clone().map(|s| (s, format!("Deck Edit chat: {}", c.title))))
             .collect()
+    }
+
+    /// Other chats of `project_id` with a running turn: (chat id, turn id).
+    fn running_in_project(&self, project_id: &str, except: &str) -> Vec<(String, String)> {
+        let running = self.running.lock().unwrap();
+        let chats = self.chats.lock().unwrap();
+        running
+            .iter()
+            .filter(|(id, _)| id.as_str() != except && chats.get(*id).is_some_and(|c| c.project_id == project_id))
+            .map(|(id, r)| (id.clone(), r.turn_id.clone()))
+            .collect()
+    }
+
+    pub fn summarizing(&self, chat_id: &str) -> bool {
+        self.running.lock().unwrap().get(chat_id).is_some_and(|r| r.summarizing)
+    }
+
+    fn set_summarizing(&self, chat_id: &str, on: bool) {
+        if let Some(r) = self.running.lock().unwrap().get_mut(chat_id) {
+            r.summarizing = on;
+        }
+    }
+
+    /// Whether `turn_id` is the chat's running turn and its agent hasn't been stopped.
+    pub fn turn_live(&self, chat_id: &str, turn_id: &str) -> bool {
+        self.running.lock().unwrap().get(chat_id).is_some_and(|r| r.turn_id == turn_id && !r.stopping)
     }
 
     pub fn running_turn(&self, chat_id: &str) -> Option<String> {
@@ -224,7 +285,8 @@ impl ChatRegistry {
 /// Record one turn event (everything except live text deltas) and broadcast it.
 pub fn emit(state: &AppState, chat_id: &str, turn_id: &str, event: Value) {
     let kind = event.get("kind").and_then(|k| k.as_str()).unwrap_or("");
-    if kind != "delta" && kind != "thinking" {
+    // Live-only: text deltas, thinking, and the status line ("waiting for another agent…").
+    if kind != "delta" && kind != "thinking" && kind != "status" {
         state.chats.with_turn(chat_id, turn_id, |t| {
             if kind == "todos" {
                 t.events.retain(|e| e.get("kind").and_then(|k| k.as_str()) != Some("todos"));
@@ -233,6 +295,71 @@ pub fn emit(state: &AppState, chat_id: &str, turn_id: &str, event: Value) {
         });
     }
     state.publish(json!({ "type": "chat", "chatId": chat_id, "turnId": turn_id, "event": event }));
+}
+
+/// Credit the files a finished tool call wrote to its turn (`Turn::touched`): the paths it was
+/// classified as writing, or — for a call that could write anything — what actually changed
+/// while it ran (nobody else could write meanwhile).
+fn credit(state: &AppState, chat_id: &str, turn_id: &str, root: &Path, hold: crate::agent_locks::Hold) {
+    let mut paths: Vec<String> = hold
+        .access
+        .writes
+        .iter()
+        .filter_map(|p| p.strip_prefix(root).ok().map(|r| r.to_string_lossy().replace('\\', "/")))
+        .collect();
+    if let Some(before) = &hold.before {
+        paths.extend(crate::agent_locks::changed_between(before, &crate::agent_locks::snapshot(root)));
+    }
+    if paths.is_empty() {
+        return;
+    }
+    let _ = state.chats.update(chat_id, |c| {
+        if let Some(t) = c.turns.iter_mut().find(|t| t.id == turn_id) {
+            for p in paths {
+                if !t.touched.contains(&p) {
+                    t.touched.push(p);
+                }
+            }
+        }
+    });
+}
+
+/// A turn's own changes: all of the folder's when it ran alone; with other agents at work at the
+/// same time, only those under the paths it wrote itself.
+fn own_changes(turn: Option<&Turn>, all: Vec<backups::Change>) -> Vec<backups::Change> {
+    let Some(t) = turn.filter(|t| t.overlapped) else { return all };
+    let under = |p: &str| t.touched.iter().any(|w| w.is_empty() || p == w || p.starts_with(&format!("{w}/")));
+    all.into_iter().filter(|c| under(&c.path) || c.from.as_deref().is_some_and(under)).collect()
+}
+
+/// After a restart: turns the app's quitting cut short get their change lists (so they can be
+/// reviewed and reverted); their chats continue from the saved CLI session on the next message.
+pub async fn settle_interrupted(state: AppState) {
+    let list = std::mem::take(&mut *state.chats.interrupted.lock().unwrap());
+    for (cid, tid) in list {
+        let Some(chat) = state.chats.get(&cid) else { continue };
+        let Some(turn) = chat.turns.iter().find(|t| t.id == tid).cloned() else { continue };
+        let (Some(sid), Ok(root)) = (turn.snapshot_id.clone(), state.projects.folder(&chat.project_id)) else { continue };
+        if !turn.changes.is_empty() {
+            continue;
+        }
+        let (dd, pid) = (state.data_dir.clone(), chat.project_id.clone());
+        let all = tokio::task::spawn_blocking(move || backups::load(&dd, &pid, &sid).map(|m| backups::changes(&m, &root)))
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .unwrap_or_default();
+        let changes = own_changes(Some(&turn), all);
+        if changes.is_empty() {
+            continue;
+        }
+        let _ = state.chats.update(&cid, |c| {
+            if let Some(t) = c.turns.iter_mut().find(|t| t.id == tid) {
+                t.changes = changes;
+            }
+        });
+        state.publish(json!({ "type": "chatUpdated", "chatId": cid }));
+    }
 }
 
 /// Update the turn's last `tool` activity in place to a finished state and
@@ -256,7 +383,9 @@ pub fn routes() -> Router<AppState> {
         .route("/projects/{id}/chats", get(list).post(create))
         .route("/chats/{cid}", get(get_chat).patch(update).delete(delete))
         .route("/chats/{cid}/turns", post(start_turn))
+        .route("/chats/{cid}/cache", get(cache_state))
         .route("/chats/{cid}/stop", post(stop))
+        .route("/chats/{cid}/kill", post(kill))
         .route("/chats/{cid}/mode", post(set_mode))
         .route("/chats/{cid}/images/{file}", get(crate::chat_images::serve_image))
         .route("/chats/{cid}/turns/{tid}/revert", post(revert))
@@ -324,6 +453,35 @@ async fn get_chat(State(state): State<AppState>, AxPath(cid): AxPath<String>) ->
     let mut v = serde_json::to_value(&chat)?;
     v["runningTurnId"] = json!(state.chats.running_turn(&cid));
     Ok(Json(v))
+}
+
+/// Whether the chat's next turn would start on a cold prompt cache (its current settings, now).
+async fn cache_state(State(state): State<AppState>, AxPath(cid): AxPath<String>) -> Result<Json<crate::cache_check::CacheCheck>> {
+    let chat = state.chats.get(&cid).ok_or_else(|| AppError::NotFound("chat not found".into()))?;
+    let auth = chat.auth.clone().unwrap_or_else(|| state.settings.get().auth);
+    Ok(Json(predict_cache(&state, &chat, &auth)))
+}
+
+/// The cache prediction for `chat`'s next turn (its model / effort / fast settings), on login `auth`.
+fn predict_cache(state: &AppState, chat: &Chat, auth: &str) -> crate::cache_check::CacheCheck {
+    use crate::cache_check::{learn_ttl, predict, CacheKey};
+    let key = CacheKey { model: chat.model.clone(), effort: chat.effort.clone(), fast: chat.fast && fast_supported(chat.model.as_deref()) };
+    let mut ttl = learn_ttl(state.chats.chats.lock().unwrap().values(), Some(auth));
+    // No turn on this login reported it yet: the chat's CLI transcript has the API's report.
+    if !ttl.1 {
+        if let Some(t) = chat.cli_session_id.as_deref().and_then(crate::conversations::session_cache_ttl) {
+            ttl = (t, true);
+        }
+    }
+    let mut c = predict(chat, &key, chrono::Utc::now(), ttl);
+    // The last turn predates size tracking (or didn't report it): the CLI's own transcript knows.
+    if c.context_tokens == 0 {
+        if let Some(n) = chat.cli_session_id.as_deref().and_then(crate::conversations::session_context_tokens) {
+            c.context_tokens = n;
+            c.offer_split = c.cold && n >= crate::cache_check::SPLIT_THRESHOLD;
+        }
+    }
+    c
 }
 
 /// The posture fields a chat (and a turn request) can carry. Empty strings
@@ -425,6 +583,9 @@ struct TurnBody {
     /// The composer's posture for this turn (also becomes the chat's).
     #[serde(flatten)]
     posture: Posture,
+    /// Start a fresh conversation from a summary of this one first (conversation_split.rs).
+    #[serde(default)]
+    split: bool,
 }
 
 async fn start_turn(
@@ -437,16 +598,10 @@ async fn start_turn(
     }
     let chat = state.chats.get(&cid).ok_or_else(|| AppError::NotFound("chat not found".into()))?;
     let root = state.projects.folder(&chat.project_id)?;
-    // One agent turn per project at a time: two agents editing the same deck
-    // would overwrite each other's saves.
-    {
-        let running = state.chats.running.lock().unwrap();
-        let chats = state.chats.chats.lock().unwrap();
-        if running.keys().any(|id| chats.get(id).is_some_and(|c| c.project_id == chat.project_id)) {
-            return Err(AppError::Conflict(
-                "Another chat in this project is still working — wait for it or stop it first.".into(),
-            ));
-        }
+    // One turn per chat. Chats of the same project may run at once: their tool calls take turns
+    // on the files they share (agent_locks.rs), so no save overwrites another.
+    if state.chats.running_turn(&cid).is_some() {
+        return Err(AppError::Conflict("This chat is still working — wait for its turn to end, or stop it first.".into()));
     }
     // Store the attachments first: a turn never runs with an image silently missing.
     let images = crate::chat_images::store_images(&state.data_dir, &cid, b.images)?;
@@ -461,9 +616,19 @@ async fn start_turn(
     let (stop_tx, stop_rx) = oneshot::channel();
     state.chats.running.lock().unwrap().insert(
         cid.clone(),
-        RunningTurn { turn_id: turn_id.clone(), stop: Some(stop_tx), mode: chat.mode.clone() },
+        RunningTurn { turn_id: turn_id.clone(), stop: Some(stop_tx), stopping: false, kill: Arc::new(tokio::sync::Notify::new()), summarizing: false, mode: chat.mode.clone() },
     );
     let auth = chat.auth.clone().unwrap_or_else(|| state.settings.get().auth);
+    let cache = predict_cache(&state, &chat, &auth);
+    tracing::info!(
+        "chat {cid}: turn starts {} — conversation {} tokens, idle {}, cache lifetime {} s{}{}",
+        if cache.cold { "COLD" } else { "warm" },
+        cache.context_tokens,
+        cache.idle_secs.map_or("-".into(), |s| format!("{s} s")),
+        cache.ttl_secs,
+        if cache.ttl_learned { " (learned)" } else { " (assumed)" },
+        cache.reason.as_deref().map(|r| format!(" ({r})")).unwrap_or_default(),
+    );
     let turn = Turn {
         id: turn_id.clone(),
         prompt: text.clone(),
@@ -484,6 +649,10 @@ async fn start_turn(
         fast: chat.fast && fast_supported(chat.model.as_deref()),
         auth: Some(auth),
         images: images.iter().map(|i| i.meta.clone()).collect(),
+        cache: Some(cache),
+        overlapped: false,
+        touched: Vec::new(),
+        split: None,
     };
     let first = chat.turns.is_empty();
     state.chats.update(&cid, |c| {
@@ -492,6 +661,13 @@ async fn start_turn(
             c.title = title_from(&text);
         }
     })?;
+    // Other agents already at work here: from now on each turn's changes are only its own.
+    let others = state.chats.running_in_project(&chat.project_id, &cid);
+    if !others.is_empty() {
+        for (oc, ot) in others.iter().chain(std::iter::once(&(cid.clone(), turn_id.clone()))) {
+            state.chats.with_turn(oc, ot, |t| t.overlapped = true);
+        }
+    }
     state.publish(json!({ "type": "turn", "chatId": cid, "turnId": turn_id, "status": "running", "projectId": chat.project_id }));
 
     let mut prompt = compose_prompt(&state, &chat.project_id, &chat.id, &root, &text, b.context.as_ref());
@@ -503,7 +679,7 @@ async fn start_turn(
         }
     }
     let attached: Vec<(String, String)> = images.into_iter().map(|i| (i.meta.media_type, i.data)).collect();
-    tokio::spawn(run_turn(state.clone(), cid.clone(), turn_id.clone(), root, prompt, attached, stop_rx));
+    tokio::spawn(run_turn(state.clone(), cid.clone(), turn_id.clone(), root, prompt, attached, stop_rx, b.split));
     Ok(Json(json!({ "turnId": turn_id })))
 }
 
@@ -534,6 +710,14 @@ fn title_from(text: &str) -> String {
 }
 
 /// The user's message plus an app-generated context block.
+/// Where a chat's agent keeps its scratch scripts — its own, so agents never run each other's.
+pub fn scratch_dir(chat_id: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("deck-edit-{}", &chat_id[..chat_id.len().min(8)]))
+}
+
+const INTERRUPTED_NOTICE: &str = "The app closed while this turn was running. Send a message (for example “continue”) to pick up where it left off.";
+const INTERRUPTED_BEFORE_START: &str = "The app closed before the agent started on this message. Send it again to run it.";
+
 fn compose_prompt(state: &AppState, project_id: &str, chat_id: &str, root: &Path, text: &str, ctx: Option<&Value>) -> String {
     let mut out = String::from(text.trim());
     out.push_str("\n\n---\n[Context from the Deck Edit app — generated automatically, not typed by the user]\n");
@@ -570,6 +754,19 @@ fn compose_prompt(state: &AppState, project_id: &str, chat_id: &str, root: &Path
         }
     } else if let Some(f) = ctx.and_then(|c| c.get("openFile")).and_then(|v| v.as_str()) {
         out.push_str(&format!("The user has open: {f}\n"));
+    }
+    out.push_str(&format!("Scratch folder for your scripts (yours alone): {}\n", scratch_dir(chat_id).display()));
+    let others = state.chats.running_in_project(project_id, chat_id);
+    if !others.is_empty() {
+        out.push_str("Other agents are working in this project at the same time (the user's other chat tabs):\n");
+        for (oc, ot) in &others {
+            let Some(c) = state.chats.get(oc) else { continue };
+            let Some(t) = c.turns.iter().find(|t| &t.id == ot) else { continue };
+            let task: String = t.prompt.chars().take(140).collect();
+            let changed = if t.touched.is_empty() { String::new() } else { format!(" — changed so far: {}", t.touched.iter().take(8).cloned().collect::<Vec<_>>().join(", ")) };
+            out.push_str(&format!("- “{}”: {}{changed}\n", c.title, task.trim()));
+        }
+        out.push_str("Your file reads and writes take turns with theirs automatically (a command may briefly wait), so no save overwrites another. Unless the user asks, don't change the files they're changing, and re-read a file right before you change it.\n");
     }
     if let Some(tabs) = ctx.and_then(|c| c.get("openTabs")).and_then(|v| v.as_array()).filter(|a| !a.is_empty()) {
         let names: Vec<&str> = tabs.iter().filter_map(|t| t.as_str()).take(20).collect();
@@ -632,7 +829,8 @@ Editing PowerPoint files:
 - Use python-pptx (installed; run scripts with {python}). Modify the existing presentation — keep the theme, layouts, fonts, colors and positioning conventions already used in the deck. Never rebuild a deck from scratch unless asked.
 - Keep the file valid for PowerPoint: don't hand-edit zip parts unless python-pptx can't do it; when duplicating slides, copy image relationships properly.
 - Slide numbers the user mentions are 1-based in the current order. Notes reference slides by number and stable slideId (the p:sldId id in presentation.xml).
-- Write scratch scripts to /tmp, not into the project folder.
+- Write scratch scripts to your scratch folder (named in the context block, under /tmp), not into the project folder.
+- Edit files in place: never copy a deck elsewhere, change the copy over several commands and copy it back — the user, or another agent, may change the original meanwhile.
 - The user's past Claude conversations (Claude Code CLI, the Claude desktop app's Code sessions, and Cowork) can be searched with the `deck` tools `search_conversations` and read with `read_conversation` (pass `query` to get just the relevant parts). When the user mentions an earlier conversation, a Cowork session, or text like `[Conversation: … — id cowork:…]`, use these instead of searching the disk yourself. Cowork output files are listed by `read_conversation`; ask before copying them into the project.
 - Speaker notes are shown and edited in the app under each slide. Read/write them with python-pptx (`slide.notes_slide.notes_text_frame.text`); keep the user's notes unless asked to change them.
 - Spreadsheets (.xlsx): read/write them with openpyxl (installed; same Python). The app shows them as a read-only preview. openpyxl doesn't calculate formulas — a formula you write shows as the formula in the preview (and gets its value when the user opens the file in Excel); for figures the user should see right away, also write the computed value somewhere or tell them.{connectors}{web}
@@ -651,7 +849,8 @@ async fn run_turn(
     root: PathBuf,
     prompt: String,
     images: Vec<(String, String)>,
-    stop_rx: oneshot::Receiver<()>,
+    mut stop_rx: oneshot::Receiver<()>,
+    split: bool,
 ) {
     let chat = match state.chats.get(&chat_id) {
         Some(c) => c,
@@ -671,7 +870,23 @@ async fn run_turn(
     emit(&state, &chat_id, &turn_id, json!({"kind": "activity", "tool": "backup", "detail": "saving a backup of the folder"}));
     let (dd, pid, r2) = (state.data_dir.clone(), project_id.clone(), root.clone());
     let backup_started = std::time::Instant::now();
+    // Read the folder only while no other agent is saving into it (no half-written deck in the backup).
+    let backup_hold = format!("backup:{turn_id}");
+    let reading_all = crate::agent_access::Access { reads: vec![root.clone()], ..Default::default() };
+    let hold = crate::agent_locks::Hold::new(backup_hold.clone(), project_id.clone(), chat_id.clone(), chat.title.clone(), reading_all);
+    let waited = std::sync::atomic::AtomicBool::new(false);
+    let _ = state
+        .locks
+        .acquire(hold, &root, crate::agent_locks::MAX_WAIT, || true, |b| {
+            waited.store(true, std::sync::atomic::Ordering::Relaxed);
+            emit(&state, &chat_id, &turn_id, json!({"kind": "status", "text": format!("Waiting for the agent in “{}” to finish changing {} before backing up the folder…", b.chat_title, b.what)}));
+        })
+        .await;
+    if waited.load(std::sync::atomic::Ordering::Relaxed) {
+        emit(&state, &chat_id, &turn_id, json!({"kind": "status", "text": null}));
+    }
     let snapshot = tokio::task::spawn_blocking(move || backups::create(&dd, &pid, &r2)).await;
+    state.locks.release(&backup_hold);
     let snapshot = match snapshot {
         Ok(Ok(m)) => Some(m),
         other => {
@@ -701,10 +916,23 @@ async fn run_turn(
     // 2. Run the CLI, forwarding its events.
     let (tx, mut rx) = mpsc::unbounded_channel::<Value>();
     let fwd_state = state.clone();
-    let (fc, ft) = (chat_id.clone(), turn_id.clone());
+    let (fc, ft, froot) = (chat_id.clone(), turn_id.clone(), root.clone());
     let forwarder = tokio::spawn(async move {
         while let Some(ev) = rx.recv().await {
-            emit(&fwd_state, &fc, &ft, ev);
+            let id = ev.get("id").and_then(|v| v.as_str()).map(String::from);
+            match (ev.get("kind").and_then(|k| k.as_str()), id) {
+                // A tool call finished: release its file lock, credit the files it wrote to this turn.
+                (Some("toolDone"), Some(id)) => {
+                    if let Some(hold) = fwd_state.locks.release(&id) {
+                        credit(&fwd_state, &fc, &ft, &froot, hold);
+                    }
+                }
+                // The CLI session is known: save it now, so the chat can continue even if the app quits mid-turn.
+                (Some("session"), Some(id)) => {
+                    let _ = fwd_state.chats.update(&fc, |c| c.cli_session_id = Some(id));
+                }
+                _ => emit(&fwd_state, &fc, &ft, ev),
+            }
         }
     });
     let slot: claude_cli::CliIdSlot = Arc::new(Mutex::new(chat.cli_session_id.clone()));
@@ -718,8 +946,124 @@ async fn run_turn(
     }
     let claude_bin = state.settings.claude_bin();
     let python_bin = state.python.bin();
+
+    // Split: continue in a fresh session that starts from a summary of this one (conversation_split.rs).
+    let mut prompt = prompt;
+    let mut resume = resume;
+    if split {
+        if let Some(prev) = resume.clone() {
+            use crate::conversation_split::{carry_over, recent_turns, summarize_with_sonnet, SplitInfo, SUMMARY_INSTRUCTIONS};
+            let check = turn.as_ref().and_then(|t| t.cache.clone());
+            // The turn before, whose settings the old session's cache is under.
+            let before = chat.turns.iter().rev().find(|t| t.id != turn_id && t.status != "running").cloned();
+            let warm = check.as_ref().is_some_and(|c| c.previous_warm) && before.is_some();
+            emit(&state, &chat_id, &turn_id, json!({"kind": "activity", "tool": "summary", "detail": if warm { "summarizing the conversation (from its still-warm cache)…" } else { "summarizing the conversation with Sonnet…" }}));
+            state.chats.set_summarizing(&chat_id, true);
+            let summarize = async {
+                if let (true, Some(b)) = (warm, &before) {
+                    // The same model and settings resume a throwaway copy of the session: the conversation is a cache read.
+                    let (wtx, mut wrx) = mpsc::unbounded_channel::<Value>();
+                    let collect = tokio::spawn(async move {
+                        let mut texts = Vec::new();
+                        while let Some(ev) = wrx.recv().await {
+                            if ev.get("kind").and_then(|k| k.as_str()) == Some("message") {
+                                texts.extend(ev.get("text").and_then(|t| t.as_str()).map(String::from));
+                            }
+                        }
+                        texts
+                    });
+                    let wparams = claude_cli::TurnParams {
+                        claude_bin: &claude_bin,
+                        pid: None,
+                        fork: true,
+                        root: &root,
+                        prompt: SUMMARY_INSTRUCTIONS,
+                        images: &[],
+                        system_prompt: &system,
+                        resume: Some(&prev),
+                        model: b.model.as_deref(),
+                        effort: b.effort.as_deref(),
+                        fast: b.fast,
+                        plan: b.mode.as_deref() == Some("plan"),
+                        api_key: api_key.as_deref(),
+                        max_budget_usd: settings.max_budget_usd,
+                        port: state.port,
+                        chat_id: &chat_id,
+                        token: &state.token,
+                        python_bin: python_bin.as_deref(),
+                        user_mcp: settings.user_mcp,
+                        web_access: &settings.web_access,
+                    };
+                    let r = claude_cli::run(wparams, wtx, Arc::new(Mutex::new(Some(prev.clone())))).await;
+                    let texts = collect.await.unwrap_or_default();
+                    match (r, texts.last()) {
+                        (Ok(o), Some(t)) if o.error.is_none() && t.trim().len() > 200 => return Ok((t.clone(), "warm")),
+                        (r, _) => tracing::warn!("warm summary failed ({:?}) — using Sonnet", r.err().or(Some("no summary text".into()))),
+                    }
+                }
+                summarize_with_sonnet(&claude_bin, &root, api_key.as_deref(), &prev).await.map(|s| (s, "sonnet"))
+            };
+            let outcome = tokio::select! {
+                r = summarize => Some(r),
+                _ = &mut stop_rx => None,
+            };
+            state.chats.set_summarizing(&chat_id, false);
+            match outcome {
+                Some(Ok((summary, method))) => {
+                    let recent: Vec<Turn> = recent_turns(&chat.turns, &turn_id).into_iter().cloned().collect();
+                    let info = SplitInfo {
+                        previous_session: Some(prev.clone()),
+                        previous_tokens: check.as_ref().map_or(0, |c| c.context_tokens),
+                        method: method.into(),
+                        summary,
+                        recent_turns: recent.len(),
+                    };
+                    prompt = format!("{}{}", carry_over(&info, &recent.iter().collect::<Vec<_>>()), prompt);
+                    resume = None;
+                    *slot.lock().unwrap() = None;
+                    let _ = state.chats.update(&chat_id, |c| {
+                        c.cli_session_id = None;
+                        if let Some(t) = c.turns.iter_mut().find(|t| t.id == turn_id) {
+                            t.split = Some(info.clone());
+                        }
+                    });
+                    let how = if method == "warm" { "from its warm cache" } else { "by Sonnet" };
+                    finish_activity(&state, &chat_id, &turn_id, "summary", &format!("summarized {how} — continuing in a fresh conversation"));
+                    state.publish(json!({ "type": "chatUpdated", "chatId": chat_id }));
+                }
+                failed => {
+                    let (status, error) = match failed {
+                        None => ("stopped", None),
+                        Some(Err(e)) => ("error", Some(format!("Couldn't split the conversation: {e}. Your message wasn't sent — send it again (or continue without splitting)."))),
+                        Some(Ok(_)) => unreachable!(),
+                    };
+                    if let Some(e) = &error {
+                        emit(&state, &chat_id, &turn_id, json!({"kind": "error", "text": e}));
+                    }
+                    let _ = state.chats.update(&chat_id, |c| {
+                        if let Some(t) = c.turns.iter_mut().find(|t| t.id == turn_id) {
+                            t.status = status.into();
+                            t.error = error.clone();
+                            t.ended_at = Some(chrono::Utc::now().to_rfc3339());
+                        }
+                    });
+                    state.locks.release_chat(&chat_id);
+                    state.perms.cancel_chat(&chat_id);
+                    state.chats.running.lock().unwrap().remove(&chat_id);
+                    state.publish(json!({ "type": "turn", "chatId": chat_id, "turnId": turn_id, "projectId": project_id, "status": status, "changes": [] }));
+                    return;
+                }
+            }
+        } else {
+            emit(&state, &chat_id, &turn_id, json!({"kind": "notice", "text": "Nothing to split yet — this chat has no earlier conversation. Sending normally."}));
+        }
+    }
+
+    let cli_pid: Mutex<Option<u32>> = Mutex::new(None);
     let params = claude_cli::TurnParams {
         claude_bin: &claude_bin,
+        pid: Some(&cli_pid),
+        fork: false,
         root: &root,
         prompt: &prompt,
         images: &images,
@@ -738,12 +1082,37 @@ async fn run_turn(
         user_mcp: settings.user_mcp,
         web_access: &settings.web_access,
     };
-    let result = tokio::select! {
-        r = claude_cli::run(params, tx, slot.clone()) => Some(r),
-        _ = stop_rx => None,
+    // Stop: note the commands the CLI is running before it goes (it's killed when `run` is dropped).
+    let (result, leftover) = {
+        let run = claude_cli::run(params, tx, slot.clone());
+        tokio::pin!(run);
+        tokio::select! {
+            r = &mut run => (Some(r), Vec::new()),
+            _ = &mut stop_rx => (None, cli_pid.lock().unwrap().map(crate::proc_tree::descendants).unwrap_or_default()),
+        }
     };
+    // A command it was running (say, a script saving a deck) is let finish — killing it mid-save would
+    // break the file — while the turn keeps its file locks; the user can Kill it from the status line.
+    if leftover.iter().any(|&p| crate::proc_tree::alive(p)) {
+        let kill = state.chats.running.lock().unwrap().get(&chat_id).map(|r| r.kill.clone());
+        emit(&state, &chat_id, &turn_id, json!({"kind": "status", "text": "Stopping — waiting for the running command to finish…", "kill": true}));
+        while leftover.iter().any(|&p| crate::proc_tree::alive(p)) {
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(400)) => {}
+                _ = async { if let Some(k) = &kill { k.notified().await } else { std::future::pending::<()>().await } } => {
+                    crate::proc_tree::kill_all(&leftover);
+                    emit(&state, &chat_id, &turn_id, json!({"kind": "notice", "text": "Killed the command that was still running — if it was saving a file, check that file (Revert restores the backup)."}));
+                }
+            }
+        }
+        emit(&state, &chat_id, &turn_id, json!({"kind": "status", "text": null}));
+    }
     state.perms.cancel_chat(&chat_id);
     let _ = forwarder.await;
+    // Locks a call never reported back on (stopped mid-call) go with the turn.
+    for hold in state.locks.release_chat(&chat_id) {
+        credit(&state, &chat_id, &turn_id, &root, hold);
+    }
 
     // 3. Wrap up: status, changed files, resume token.
     let (status, error, cost, usage) = match result {
@@ -764,10 +1133,20 @@ async fn run_turn(
     let changes = match &snapshot {
         Some(m) => {
             let (m2, r2) = (m.clone(), root.clone());
-            tokio::task::spawn_blocking(move || backups::changes(&m2, &r2)).await.unwrap_or_default()
+            let all = tokio::task::spawn_blocking(move || backups::changes(&m2, &r2)).await.unwrap_or_default();
+            own_changes(state.chats.get(&chat_id).and_then(|c| c.turns.into_iter().find(|t| t.id == turn_id)).as_ref(), all)
         }
         None => Vec::new(),
     };
+    // How the cache prediction held up: the turn's first API call read or (re)wrote the conversation.
+    if let Some(u) = &usage {
+        let predicted = turn.as_ref().and_then(|t| t.cache.as_ref()).map(|c| if c.cold { "cold" } else { "warm" }).unwrap_or("-");
+        let observed = crate::cache_check::observed_cold(u).map_or("unknown", |c| if c { "cold" } else { "warm" });
+        tracing::info!(
+            "chat {chat_id}: turn done — cache predicted {predicted}, observed {observed} (first call read {} / wrote {}); conversation now {} tokens",
+            u.first_read, u.first_write, u.context
+        );
+    }
     let new_session = slot.lock().unwrap().clone();
     let _ = state.chats.update(&chat_id, |c| {
         if new_session.is_some() {
@@ -794,10 +1173,22 @@ async fn run_turn(
 }
 
 async fn stop(State(state): State<AppState>, AxPath(cid): AxPath<String>) -> Json<Value> {
-    let tx = state.chats.running.lock().unwrap().get_mut(&cid).and_then(|r| r.stop.take());
+    let tx = state.chats.running.lock().unwrap().get_mut(&cid).and_then(|r| {
+        r.stopping = true;
+        r.stop.take()
+    });
     let ok = tx.is_some_and(|tx| tx.send(()).is_ok());
     state.perms.cancel_chat(&cid);
     Json(json!({ "ok": ok }))
+}
+
+/// Kill the command a stopped turn is still waiting on (it may leave a half-written file — Revert has the backup).
+async fn kill(State(state): State<AppState>, AxPath(cid): AxPath<String>) -> Json<Value> {
+    let k = state.chats.running.lock().unwrap().get(&cid).map(|r| r.kill.clone());
+    if let Some(k) = &k {
+        k.notify_one();
+    }
+    Json(json!({ "ok": k.is_some() }))
 }
 
 fn find_turn(state: &AppState, cid: &str, tid: &str) -> Result<(Chat, Turn)> {
@@ -811,18 +1202,57 @@ fn find_turn(state: &AppState, cid: &str, tid: &str) -> Result<(Chat, Turn)> {
     Ok((chat, turn))
 }
 
+#[derive(Deserialize, Default)]
+struct RevertQuery {
+    /// Revert even though a later turn (another agent's) also changed some of these files.
+    #[serde(default)]
+    force: bool,
+}
+
+/// No agent may be working in the project while files are put back (it could be mid-save).
+fn ensure_project_idle(state: &AppState, project_id: &str) -> Result<()> {
+    if !state.chats.running_in_project(project_id, "").is_empty() {
+        return Err(AppError::Conflict("An agent is working in this project — wait for it to finish (or stop it) before reverting.".into()));
+    }
+    Ok(())
+}
+
+/// The files a turn changed (both ends of a move): what its revert puts back.
+fn turn_paths(turn: &Turn) -> std::collections::HashSet<String> {
+    turn.changes.iter().flat_map(|c| std::iter::once(c.path.clone()).chain(c.from.clone())).collect()
+}
+
 async fn revert(
     State(state): State<AppState>,
     AxPath((cid, tid)): AxPath<(String, String)>,
-) -> Result<Json<Value>> {
-    if state.chats.running_turn(&cid).is_some() {
-        return Err(AppError::Conflict("stop the running turn first".into()));
-    }
+    Query(q): Query<RevertQuery>,
+) -> Result<Response> {
     let (chat, turn) = find_turn(&state, &cid, &tid)?;
-    let sid = turn.snapshot_id.ok_or_else(|| AppError::BadRequest("this turn has no backup".into()))?;
+    ensure_project_idle(&state, &chat.project_id)?;
+    let sid = turn.snapshot_id.clone().ok_or_else(|| AppError::BadRequest("this turn has no backup".into()))?;
+    let paths = turn_paths(&turn);
+    // A later turn (any chat of the project) that changed the same files: those changes go too — ask first.
+    if !q.force {
+        let mut later: Vec<String> = Vec::new();
+        for c in state.chats.chats.lock().unwrap().values().filter(|c| c.project_id == chat.project_id) {
+            for t in c.turns.iter().filter(|t| t.id != tid && t.reverted.is_none() && t.started_at > turn.started_at) {
+                let shared: Vec<&str> = t.changes.iter().map(|x| x.path.as_str()).filter(|p| paths.contains(*p)).collect();
+                if !shared.is_empty() {
+                    later.push(format!("{} (in “{}”)", shared.join(", "), c.title));
+                }
+            }
+        }
+        if !later.is_empty() {
+            let msg = format!(
+                "A later turn also changed {}. Reverting puts these files back as they were before this turn — undoing that later work too. Revert anyway?",
+                later.join("; ")
+            );
+            return Ok((StatusCode::PRECONDITION_REQUIRED, Json(json!({ "error": msg }))).into_response());
+        }
+    }
     let root = state.projects.folder(&chat.project_id)?;
     let (dd, pid) = (state.data_dir.clone(), chat.project_id.clone());
-    let safety = tokio::task::spawn_blocking(move || backups::restore(&dd, &pid, &sid, &root))
+    let safety = tokio::task::spawn_blocking(move || backups::restore(&dd, &pid, &sid, &root, Some(&paths)))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))??;
     state.chats.update(&cid, |c| {
@@ -831,7 +1261,7 @@ async fn revert(
         }
     })?;
     state.publish(json!({ "type": "chatUpdated", "chatId": cid }));
-    Ok(Json(json!({ "ok": true, "safetySnapshotId": safety })))
+    Ok(Json(json!({ "ok": true, "safetySnapshotId": safety })).into_response())
 }
 
 async fn unrevert(
@@ -839,10 +1269,12 @@ async fn unrevert(
     AxPath((cid, tid)): AxPath<(String, String)>,
 ) -> Result<Json<Value>> {
     let (chat, turn) = find_turn(&state, &cid, &tid)?;
-    let sid = turn.reverted.ok_or_else(|| AppError::BadRequest("this turn was not reverted".into()))?;
+    ensure_project_idle(&state, &chat.project_id)?;
+    let sid = turn.reverted.clone().ok_or_else(|| AppError::BadRequest("this turn was not reverted".into()))?;
+    let paths = turn_paths(&turn);
     let root = state.projects.folder(&chat.project_id)?;
     let (dd, pid) = (state.data_dir.clone(), chat.project_id.clone());
-    tokio::task::spawn_blocking(move || backups::restore(&dd, &pid, &sid, &root))
+    tokio::task::spawn_blocking(move || backups::restore(&dd, &pid, &sid, &root, Some(&paths)))
         .await
         .map_err(|e| AppError::Internal(e.to_string()))??;
     state.chats.update(&cid, |c| {

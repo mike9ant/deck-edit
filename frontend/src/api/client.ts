@@ -1,6 +1,6 @@
 /** Thin typed wrappers over the backend's /api endpoints. */
 
-import type { AgentSettings, AgentStatus, ApprovalMode, Chat, ChatSummary, ConversationDetail, ConversationHit, ModelOption, Note, Posture, Project, Stroke, TreeNode, TurnContext } from './types'
+import type { AgentSettings, CacheCheck, AgentStatus, ApprovalMode, Chat, ChatSummary, ConversationDetail, ConversationHit, ModelOption, Note, Posture, Project, Stroke, TreeNode, TurnContext } from './types'
 
 /** Identifies this browser tab, so the watcher event for our own save can be skipped. */
 export const CLIENT_ID: string = (() => {
@@ -126,15 +126,21 @@ export const api = {
   chats: (pid: string) => json<ChatSummary[]>('GET', `/projects/${pid}/chats`),
   createChat: (pid: string) => json<Chat>('POST', `/projects/${pid}/chats`, {}),
   chat: (cid: string) => json<Chat>('GET', `/chats/${cid}`),
+  /** Whether the chat's next turn would start on a cold prompt cache. */
+  chatCache: (cid: string) => json<CacheCheck>('GET', `/chats/${cid}/cache`),
   updateChat: (cid: string, body: { title?: string } & Partial<Posture>) => json<Chat>('PATCH', `/chats/${cid}`, body),
   setMode: (cid: string, mode: ApprovalMode) =>
     json<{ mode: ApprovalMode; applied: boolean; runningMode: ApprovalMode | null }>('POST', `/chats/${cid}/mode`, { mode }),
   deleteChat: (cid: string) => json('DELETE', `/chats/${cid}`),
-  sendTurn: (cid: string, text: string, context: TurnContext, posture: Posture, images: OutgoingImage[] = []) =>
-    json<{ turnId: string }>('POST', `/chats/${cid}/turns`, { text, context, images, ...posture }),
+  /** `split`: continue in a fresh conversation that starts from a summary of this one. */
+  sendTurn: (cid: string, text: string, context: TurnContext, posture: Posture, images: OutgoingImage[] = [], split = false) =>
+    json<{ turnId: string }>('POST', `/chats/${cid}/turns`, { text, context, images, ...posture, split }),
   chatImageUrl: (cid: string, file: string) => `/api/chats/${cid}/images/${file}`,
   stop: (cid: string) => json('POST', `/chats/${cid}/stop`),
-  revert: (cid: string, tid: string) => json('POST', `/chats/${cid}/turns/${tid}/revert`),
+  /** A stopped turn still waiting for a command it started: end that command now. */
+  killChat: (cid: string) => json('POST', `/chats/${cid}/kill`),
+  /** `force`: revert even though a later turn also changed some of the files (otherwise a 428 asks first). */
+  revert: (cid: string, tid: string, force = false) => json('POST', `/chats/${cid}/turns/${tid}/revert${force ? '?force=true' : ''}`),
   unrevert: (cid: string, tid: string) => json('POST', `/chats/${cid}/turns/${tid}/unrevert`),
   answerPermission: (rid: string, decision: 'allow' | 'allowAlways' | 'deny') =>
     json('POST', `/permissions/${rid}`, { decision }),

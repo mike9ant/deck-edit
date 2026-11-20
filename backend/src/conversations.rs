@@ -359,6 +359,90 @@ fn glob_files(root: &Path, depth: usize, prefix: &str, suffix: &str) -> Vec<Path
         .collect()
 }
 
+/// The transcript file of a Claude Code CLI session (`<config>/projects/*/<session>.jsonl`).
+pub fn session_transcript_path(session: &str) -> Option<PathBuf> {
+    if session.is_empty() || session.contains('/') {
+        return None;
+    }
+    let projects = claude_config_dir().join("projects");
+    walkdir::WalkDir::new(&projects)
+        .max_depth(2)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .find(|e| e.path().file_stem().is_some_and(|s| s == session) && e.path().extension().is_some_and(|x| x == "jsonl"))
+        .map(|e| e.into_path())
+}
+
+/// The size of a CLI session's conversation: the whole input of its last main-thread model call,
+/// from the session's transcript (only its tail is read).
+pub fn session_context_tokens(session: &str) -> Option<u64> {
+    use std::io::{Read, Seek, SeekFrom};
+    let path = session_transcript_path(session)?;
+    let mut f = std::fs::File::open(&path).ok()?;
+    let len = f.metadata().ok()?.len();
+    const TAIL: u64 = 8 * 1024 * 1024;
+    f.seek(SeekFrom::Start(len.saturating_sub(TAIL))).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    for line in text.lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        if v.get("type").and_then(|t| t.as_str()) != Some("assistant") || v.get("isSidechain").and_then(|s| s.as_bool()) == Some(true) {
+            continue;
+        }
+        let Some(u) = v.pointer("/message/usage") else { continue };
+        let n = |k: &str| u.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+        let total = n("input_tokens") + n("cache_read_input_tokens") + n("cache_creation_input_tokens");
+        if total > 0 {
+            return Some(total);
+        }
+    }
+    None
+}
+
+/// The cache lifetime a CLI session's requests use (seconds), from the latest model call in its
+/// transcript that wrote to the cache (the API's `cache_creation` split); only its tail is read.
+pub fn session_cache_ttl(session: &str) -> Option<i64> {
+    use std::io::{Read, Seek, SeekFrom};
+    let path = session_transcript_path(session)?;
+    let mut f = std::fs::File::open(&path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(8 * 1024 * 1024))).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    for line in String::from_utf8_lossy(&buf).lines().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        let Some(split) = v.pointer("/message/usage/cache_creation") else { continue };
+        let n = |k: &str| split.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+        match (n("ephemeral_1h_input_tokens"), n("ephemeral_5m_input_tokens")) {
+            (_, m) if m > 0 => return Some(300),
+            (h, _) if h > 0 => return Some(3600),
+            _ => continue,
+        }
+    }
+    None
+}
+
+/// A CLI session as readable text for summarizing: the user's and the agent's messages with
+/// one-line notes of the tools used (tool output left out), at most `max_chars` (the latest part).
+pub fn condensed_transcript(session: &str, max_chars: usize) -> Option<String> {
+    let path = session_transcript_path(session)?;
+    let mut out = String::new();
+    for m in read_transcript(&path) {
+        let who = if m.role == "user" { "User" } else { "Agent" };
+        out.push_str(&format!("### {who}\n{}\n", m.text.trim()));
+        if !m.tools.is_empty() {
+            out.push_str(&format!("(tools: {})\n", m.tools.join("; ")));
+        }
+        out.push('\n');
+    }
+    if out.chars().count() > max_chars {
+        let skip = out.chars().count() - max_chars;
+        out = format!("[… the earliest part of the conversation is left out for length …]\n\n{}", out.chars().skip(skip).collect::<String>());
+    }
+    (!out.trim().is_empty()).then_some(out)
+}
+
 fn find_jsonl(projects: &Path, session: &str) -> Option<PathBuf> {
     let mut any = None;
     for e in walkdir::WalkDir::new(projects).max_depth(2).into_iter().filter_map(|e| e.ok()) {

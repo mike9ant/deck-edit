@@ -12,7 +12,7 @@ import { Check, GripHorizontal, MessageSquarePlus, RotateCcw, Trash2, X, Zap } f
 import clsx from 'clsx'
 import type { Note, Stroke } from '../api/types'
 import { noteNumber, useNotes } from '../store/notesStore'
-import { useChat } from '../store/chatStore'
+import { chatIsRunning, useChat } from '../store/chatStore'
 import { NOTE_COLORS, StrokesSvg, pinNearMark } from './NoteDrawing'
 
 export interface NoteDraft {
@@ -168,7 +168,7 @@ function popoverPos(flipX: boolean, flipY: boolean) {
 }
 
 function DraftPopover({ draft, onSave, onCancel, flipX, flipY }: { draft: NoteDraft; onSave(t: string, actNow: boolean): Promise<void>; onCancel(): void; flipX: boolean; flipY: boolean }) {
-  const agentBusy = useChat((s) => !!s.pid && !!s.busyProjects[s.pid])
+  const agentBusy = useChat((s) => chatIsRunning(s, s.activeId))
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)

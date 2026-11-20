@@ -8,11 +8,15 @@
 //! Run by the `deck-edit` binary (`./run.sh`, port 3101) and, in-process, by
 //! the desktop app (`desktop/`), which shows it in its own window.
 
+mod agent_access;
+mod agent_locks;
 mod backups;
+mod cache_check;
 mod chat;
 mod chat_images;
 mod claude_cli;
 mod clipboard;
+mod conversation_split;
 mod conversations;
 mod error;
 mod events;
@@ -22,6 +26,7 @@ mod local_only;
 mod mcp;
 mod notes;
 mod permissions;
+mod proc_tree;
 mod projects;
 mod python_env;
 mod settings;
@@ -122,6 +127,7 @@ pub async fn run_server(listener: std::net::TcpListener, config: ServerConfig, r
         events,
         chats: Arc::new(chat::ChatRegistry::load(&data_dir)),
         perms: Arc::new(permissions::Permissions::default()),
+        locks: Arc::new(agent_locks::AgentLocks::default()),
         notes: Arc::new(notes::NotesStore::new(&data_dir)),
         settings: Arc::new(settings::SettingsStore::load(&data_dir)),
         conversations: Arc::new(conversations::ConversationIndex::default()),
@@ -129,6 +135,9 @@ pub async fn run_server(listener: std::net::TcpListener, config: ServerConfig, r
         deck_maps: Arc::new(Mutex::new(HashMap::new())),
         screenshots: Arc::new(Mutex::new(HashMap::new())),
     };
+
+    // Turns cut short by the app quitting: work out what they changed (they can be resumed with a new message).
+    tokio::spawn(chat::settle_interrupted(state.clone()));
 
     let api = Router::new()
         .route("/health", get(|| async { Json(serde_json::json!({ "ok": true })) }))

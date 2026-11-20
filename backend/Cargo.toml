@@ -19,6 +19,8 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 notify = "8"
 dirs = "6"
+regex = "1"
+libc = "0.2"
 walkdir = "2"
 mime_guess = "2"
 base64 = "0.22"

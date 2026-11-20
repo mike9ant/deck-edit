@@ -13,7 +13,7 @@ import { BotMessageSquare, Check, RotateCcw, StickyNote, Trash2, X, Zap } from '
 import clsx from 'clsx'
 import type { Note } from '../api/types'
 import { noteNumber, useNotes } from '../store/notesStore'
-import { useChat } from '../store/chatStore'
+import { chatIsRunning, useChat } from '../store/chatStore'
 import { sendToAgent } from '../chat/sendToAgent'
 import { actNowPrompt } from './NotePins'
 import type { TextSelection } from '../viewers/TextEditor'
@@ -76,7 +76,7 @@ export function QuoteNoteBox({ heading, quote, placeholder, onPin, actNow, onClo
 }) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
-  const agentBusy = useChat((s) => !!s.pid && !!s.busyProjects[s.pid])
+  const agentBusy = useChat((s) => chatIsRunning(s, s.activeId))
   const ref = useRef<HTMLTextAreaElement>(null)
   useEffect(() => ref.current?.focus(), [])
   const save = async (now: boolean) => {

@@ -61,6 +61,11 @@ pub fn gated_tools(user_mcp: bool, web_access: &str) -> String {
 pub struct TurnParams<'a> {
     /// The `claude` command (Settings → Claude Code CLI path).
     pub claude_bin: &'a str,
+    /// Set to the CLI's process id once it's started (to find the commands it runs, on Stop).
+    pub pid: Option<&'a Mutex<Option<u32>>>,
+    /// With `resume`: work on a throwaway copy of the session (`--fork-session`, nothing saved) —
+    /// for summarizing a conversation from its cache without adding to it.
+    pub fork: bool,
     pub root: &'a Path,
     pub prompt: &'a str,
     /// (media type, base64) images for the message. Non-empty switches the
@@ -91,15 +96,32 @@ pub struct TurnParams<'a> {
     pub web_access: &'a str,
 }
 
-/// Token counts the CLI reports for a turn (from the final `result` line).
+/// Token counts for a turn: totals from the CLI's final `result` line (over all the
+/// turn's API calls), plus the first and last call of the main conversation (from its
+/// `assistant` lines) — the first shows whether the turn started on a warm prompt cache,
+/// the last how big the conversation now is (what the next turn re-sends).
 #[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 pub struct TokenUsage {
     /// All input tokens, including the cached part.
     pub input: u64,
     /// The part of `input` served from (or written to) the prompt cache.
     pub cached: u64,
     pub output: u64,
+    /// Of `cached`: read from the cache (cheap) / written to it (the expensive part of a cold start).
+    pub cache_read: u64,
+    pub cache_write: u64,
+    /// The first API call's cache read / write: mostly written = the turn started cold.
+    pub first_read: u64,
+    pub first_write: u64,
+    /// The last API call's whole input: the conversation's size after this turn.
+    pub context: u64,
+    /// Model calls in the turn (each re-sends the conversation: `input` is the sum over them).
+    pub calls: u64,
+    /// Cache writes by lifetime (the API's `cache_creation` split): which cache lifetime this
+    /// login's requests use — 1 hour or 5 minutes (cache_check.rs).
+    pub write_1h: u64,
+    pub write_5m: u64,
 }
 
 pub struct TurnOutcome {
@@ -112,20 +134,25 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// Tools that only read files: they pass the hook too, for the file lock shared with other agents.
+pub const READ_TOOLS: &str = "Read|Grep|Glob|LS|NotebookRead";
+
 fn settings_json(port: u16, chat_id: &str, token: &str, fast: bool, matcher: &str) -> String {
     let url = format!("http://127.0.0.1:{port}/api/agent/hook?chat={chat_id}");
     let header = shell_quote(&format!("X-DeckEdit-Token: {token}"));
+    // If the app can't be reached (it quit mid-turn), the call is blocked rather than run unchecked.
     let command = format!(
-        "curl -sS -m {} -X POST -H 'Content-Type: application/json' -H {header} --data-binary @- {}",
+        "curl -sS -m {} -X POST -H 'Content-Type: application/json' -H {header} --data-binary @- {} || {{ echo 'Deck Edit is not running — the tool call was not run.' >&2; exit 2; }}",
         HOOK_TIMEOUT_SECS + 30,
         shell_quote(&url)
     );
+    let hook = json!([{ "type": "command", "command": command, "timeout": HOOK_TIMEOUT_SECS }]);
     let mut settings = json!({
         "hooks": {
-            "PreToolUse": [{
-                "matcher": matcher,
-                "hooks": [{ "type": "command", "command": command, "timeout": HOOK_TIMEOUT_SECS }]
-            }]
+            "PreToolUse": [
+                { "matcher": matcher, "hooks": hook },
+                { "matcher": READ_TOOLS, "hooks": hook },
+            ]
         }
     });
     if fast {
@@ -180,6 +207,9 @@ pub fn build_command(p: &TurnParams<'_>) -> tokio::process::Command {
     }
     if let Some(id) = p.resume {
         cmd.args(["--resume", id]);
+        if p.fork {
+            cmd.args(["--fork-session", "--no-session-persistence"]);
+        }
     }
     if let Some(m) = p.model.filter(|m| !m.is_empty()) {
         cmd.args(["--model", m]);
@@ -262,6 +292,12 @@ pub struct StreamState {
     pub cli_session_id: CliIdSlot,
     pub cost_usd: Option<f64>,
     pub usage: Option<TokenUsage>,
+    /// Per-call usage of the main conversation: (message id, cache read, cache write, whole input).
+    first_call: Option<(String, u64, u64, u64)>,
+    last_call: Option<(String, u64, u64, u64)>,
+    calls: u64,
+    write_1h: u64,
+    write_5m: u64,
     pending_bash: HashMap<String, String>,
     pending_edits: HashMap<String, String>,
     last_text: String,
@@ -292,7 +328,12 @@ pub fn handle_line(line: &Value, root: &Path, sink: &EventSink, st: &mut StreamS
     match line.get("type").and_then(|t| t.as_str()) {
         Some("system") => {
             if let Some(id) = line.get("session_id").and_then(|s| s.as_str()) {
-                *st.cli_session_id.lock().unwrap() = Some(id.to_string());
+                let mut slot = st.cli_session_id.lock().unwrap();
+                if slot.as_deref() != Some(id) {
+                    *slot = Some(id.to_string());
+                    // Saved with the chat right away: if the app quits mid-turn, the next message resumes this session.
+                    let _ = sink.send(json!({"kind": "session", "id": id}));
+                }
             }
             if line.get("subtype").and_then(|s| s.as_str()) == Some("api_retry") {
                 let _ = sink.send(json!({"kind": "activity", "tool": "api", "detail": "provider hiccup — retrying"}));
@@ -328,6 +369,26 @@ pub fn handle_line(line: &Value, root: &Path, sink: &EventSink, st: &mut StreamS
             }
         }
         Some("assistant") => {
+            // Each API call's usage (a message comes as several lines, each with the same usage).
+            if !in_subagent {
+                if let Some(u) = line.pointer("/message/usage") {
+                    let n = |k: &str| u.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+                    let id = line.pointer("/message/id").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let (read, write) = (n("cache_read_input_tokens"), n("cache_creation_input_tokens"));
+                    let call = (id, read, write, n("input_tokens") + read + write);
+                    if st.first_call.is_none() {
+                        st.first_call = Some(call.clone());
+                    }
+                    if st.last_call.as_ref().is_none_or(|l| l.0 != call.0) {
+                        st.calls += 1;
+                        // Once per call (a message comes as several lines with the same usage).
+                        let split = |k: &str| u.pointer(&format!("/cache_creation/{k}")).and_then(|v| v.as_u64()).unwrap_or(0);
+                        st.write_1h += split("ephemeral_1h_input_tokens");
+                        st.write_5m += split("ephemeral_5m_input_tokens");
+                    }
+                    st.last_call = Some(call);
+                }
+            }
             let blocks = line.pointer("/message/content").and_then(|c| c.as_array()).cloned().unwrap_or_default();
             for block in blocks {
                 match block.get("type").and_then(|t| t.as_str()) {
@@ -355,6 +416,8 @@ pub fn handle_line(line: &Value, root: &Path, sink: &EventSink, st: &mut StreamS
                     continue;
                 }
                 let Some(id) = block.get("tool_use_id").and_then(|i| i.as_str()) else { continue };
+                // The call is over (done or failed): the app releases its file lock (agent_locks.rs).
+                let _ = sink.send(json!({"kind": "toolDone", "id": id}));
                 let is_error = block.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false);
                 if let Some(path) = st.pending_edits.remove(id) {
                     if !is_error {
@@ -385,8 +448,22 @@ pub fn handle_line(line: &Value, root: &Path, sink: &EventSink, st: &mut StreamS
             st.cost_usd = line.get("total_cost_usd").and_then(|v| v.as_f64());
             if let Some(u) = line.get("usage") {
                 let n = |k: &str| u.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
-                let cached = n("cache_read_input_tokens") + n("cache_creation_input_tokens");
-                st.usage = Some(TokenUsage { input: n("input_tokens") + cached, cached, output: n("output_tokens") });
+                let (cache_read, cache_write) = (n("cache_read_input_tokens"), n("cache_creation_input_tokens"));
+                let cached = cache_read + cache_write;
+                let (first_read, first_write) = st.first_call.as_ref().map_or((0, 0), |c| (c.1, c.2));
+                st.usage = Some(TokenUsage {
+                    input: n("input_tokens") + cached,
+                    cached,
+                    output: n("output_tokens"),
+                    cache_read,
+                    cache_write,
+                    first_read,
+                    first_write,
+                    context: st.last_call.as_ref().map_or(0, |c| c.3),
+                    calls: st.calls,
+                    write_1h: st.write_1h,
+                    write_5m: st.write_5m,
+                });
             }
             let subtype = line.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
             let is_error = line.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false);
@@ -476,6 +553,9 @@ pub async fn run(p: TurnParams<'_>, sink: EventSink, slot: CliIdSlot) -> Result<
             format!("failed to start claude: {e}")
         }
     })?;
+    if let Some(slot) = p.pid {
+        *slot.lock().unwrap() = child.id();
+    }
     // Deliver the image message off-thread (it can be megabytes of base64) and
     // close stdin — EOF tells the CLI no further input is coming.
     if !p.images.is_empty() {
@@ -572,7 +652,8 @@ mod tests {
         handle_line(&json!({"type":"system","subtype":"init","session_id":"s1"}), root, &tx, &mut st);
         assert_eq!(st.cli_session_id.lock().unwrap().as_deref(), Some("s1"));
         handle_line(
-            &json!({"type":"assistant","message":{"content":[
+            &json!({"type":"assistant","message":{"id":"m1","usage":{"input_tokens":3,"cache_read_input_tokens":100,"cache_creation_input_tokens":800,
+                "cache_creation":{"ephemeral_1h_input_tokens":800,"ephemeral_5m_input_tokens":0}},"content":[
                 {"type":"text","text":"Updating slide 3."},
                 {"type":"tool_use","id":"t1","name":"Bash","input":{"command":"python3 edit.py","description":"Edit deck"}},
                 {"type":"tool_use","id":"t2","name":"Write","input":{"file_path":"/tmp/proj/notes.md","content":"x"}}
@@ -597,13 +678,20 @@ mod tests {
             &tx,
             &mut st,
         );
-        let ev = drain(&mut rx);
+        let all = drain(&mut rx);
+        // App-internal events: the session id (saved right away) and each finished call (releases its file lock).
+        assert_eq!(all.iter().filter(|e| e["kind"] == "toolDone").count(), 2);
+        assert!(all.iter().any(|e| e["kind"] == "session" && e["id"] == "s1"));
+        let ev: Vec<Value> = all.into_iter().filter(|e| e["kind"] != "toolDone" && e["kind"] != "session").collect();
         let kinds: Vec<&str> = ev.iter().map(|e| e["kind"].as_str().unwrap()).collect();
         assert_eq!(kinds, vec!["message", "activity", "activity", "command", "fileEdited"]);
         assert_eq!(ev[3]["command"], "python3 edit.py");
         assert_eq!(ev[4]["path"], "notes.md");
         assert_eq!(st.cost_usd, Some(0.01));
-        assert_eq!(st.usage, Some(TokenUsage { input: 1000, cached: 990, output: 5 }));
+        assert_eq!(
+            st.usage,
+            Some(TokenUsage { input: 1000, cached: 990, output: 5, cache_read: 900, cache_write: 90, first_read: 100, first_write: 800, context: 903, calls: 1, write_1h: 800, write_5m: 0 })
+        );
         assert!(st.result_error.is_none());
     }
 
@@ -615,12 +703,14 @@ mod tests {
         let cmd = s["hooks"]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap();
         assert!(cmd.contains("X-DeckEdit-Token: tok'\\''en"));
         assert!(cmd.contains("/api/agent/hook?chat=c1"));
+        assert!(cmd.ends_with("exit 2; }"), "fails closed: {cmd}");
+        assert_eq!(s["hooks"]["PreToolUse"][1]["matcher"], READ_TOOLS);
     }
 
     #[test]
     fn user_connectors_are_opt_in() {
         let params = |user_mcp| TurnParams {
-            claude_bin: "claude", root: Path::new("/tmp"), prompt: "hi", images: &[], system_prompt: "", resume: None,
+            claude_bin: "claude", pid: None, fork: false, root: Path::new("/tmp"), prompt: "hi", images: &[], system_prompt: "", resume: None,
             model: None, effort: None, fast: false, plan: false, api_key: None, max_budget_usd: None, port: 3101,
             chat_id: "c1", token: "t", python_bin: None, user_mcp, web_access: "allow",
         };
@@ -635,7 +725,7 @@ mod tests {
     fn web_access_setting() {
         let args = |web: &'static str| {
             let p = TurnParams {
-                claude_bin: "claude", root: Path::new("/tmp"), prompt: "hi", images: &[], system_prompt: "", resume: None,
+                claude_bin: "claude", pid: None, fork: false, root: Path::new("/tmp"), prompt: "hi", images: &[], system_prompt: "", resume: None,
                 model: None, effort: None, fast: false, plan: false, api_key: None, max_budget_usd: None, port: 3101,
                 chat_id: "c1", token: "t", python_bin: None, user_mcp: false, web_access: web,
             };

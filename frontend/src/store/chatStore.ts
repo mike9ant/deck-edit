@@ -5,7 +5,8 @@
  */
 
 import { create } from 'zustand'
-import { api, type OutgoingImage } from '../api/client'
+import { ApiError, api, type OutgoingImage } from '../api/client'
+import { askConfirm } from '../components/confirmDialog'
 import type { ApprovalMode, Chat, ChatSummary, Posture, ServerEvent, TurnContext } from '../api/types'
 import { flushHeldEdits, setBusyProbe } from '../deck/deckStore'
 import { useApp } from './appStore'
@@ -18,7 +19,11 @@ interface ChatState {
   chats: Record<string, Chat>
   /** turn id → streamed text not yet completed into a message */
   drafts: Record<string, string>
+  /** turn id → its live status line (e.g. "Waiting for the agent in …"), while it lasts. */
+  statuses: Record<string, { text: string; kill?: boolean }>
   busyProjects: Record<string, boolean>
+  /** chat id → project id, for every chat with a running turn (several agents may work in one project). */
+  runningChats: Record<string, string>
   load(pid: string): Promise<void>
   refreshSummaries(): Promise<void>
   newChat(): Promise<string | undefined>
@@ -27,7 +32,7 @@ interface ChatState {
   /** Show a chat in the active tab (replacing what the tab showed), or go to its tab if already open. */
   openInThisTab(id: string): Promise<void>
   reloadChat(id: string): Promise<void>
-  send(chatId: string, text: string, context: TurnContext, posture: Posture, images?: OutgoingImage[]): Promise<boolean>
+  send(chatId: string, text: string, context: TurnContext, posture: Posture, images?: OutgoingImage[], split?: boolean): Promise<boolean>
   stop(chatId: string): Promise<void>
   revert(chatId: string, turnId: string): Promise<void>
   unrevert(chatId: string, turnId: string): Promise<void>
@@ -59,7 +64,9 @@ export const useChat = create<ChatState>((set, get) => {
     activeId: null,
     chats: {},
     drafts: {},
+    statuses: {},
     busyProjects: {},
+    runningChats: {},
     runningModes: {},
     composerInsert: null,
     // Inserts made while the composer isn't on screen (e.g. several quotes
@@ -93,7 +100,9 @@ export const useChat = create<ChatState>((set, get) => {
       const pid = get().pid
       if (!pid) return
       const summaries = await api.chats(pid)
-      set({ summaries, busyProjects: { ...get().busyProjects, [pid]: summaries.some((s) => s.running) } })
+      const runningChats = Object.fromEntries(Object.entries(get().runningChats).filter(([, p]) => p !== pid))
+      for (const s of summaries) if (s.running) runningChats[s.id] = pid
+      set({ summaries, runningChats, busyProjects: { ...get().busyProjects, [pid]: summaries.some((s) => s.running) } })
     },
 
     async newChat() {
@@ -144,10 +153,10 @@ export const useChat = create<ChatState>((set, get) => {
       }
     },
 
-    async send(chatId, text, context, posture, images = []) {
+    async send(chatId, text, context, posture, images = [], split = false) {
       const pid = get().pid
       try {
-        const { turnId } = await api.sendTurn(chatId, text, context, posture, images)
+        const { turnId } = await api.sendTurn(chatId, text, context, posture, images, split)
         const chat = get().chats[chatId]
         if (chat && !chat.turns.some((t) => t.id === turnId)) {
           const turn = {
@@ -157,7 +166,7 @@ export const useChat = create<ChatState>((set, get) => {
           set({ chats: { ...get().chats, [chatId]: { ...chat, ...posture, model: posture.model || undefined, effort: posture.effort || undefined, turns: [...chat.turns, turn], runningTurnId: turnId } } })
         }
         set({ runningModes: { ...get().runningModes, [chatId]: posture.mode } })
-        if (pid) set({ busyProjects: { ...get().busyProjects, [pid]: true } })
+        if (pid) set({ busyProjects: { ...get().busyProjects, [pid]: true }, runningChats: { ...get().runningChats, [chatId]: pid } })
         return true
       } catch (e) {
         useApp.getState().toast((e as Error).message, 'error')
@@ -171,9 +180,16 @@ export const useChat = create<ChatState>((set, get) => {
 
     async revert(chatId, turnId) {
       try {
-        await api.revert(chatId, turnId)
+        try {
+          await api.revert(chatId, turnId)
+        } catch (e) {
+          // A later turn (another agent's) also changed some of these files: ask before undoing that too.
+          if (!(e instanceof ApiError) || e.status !== 428) throw e
+          if (!(await askConfirm(e.message, 'Revert anyway'))) return
+          await api.revert(chatId, turnId, true)
+        }
         await get().reloadChat(chatId)
-        useApp.getState().toast('Reverted the files to how they were before that turn.')
+        useApp.getState().toast('Reverted the files this turn changed to how they were before it.')
       } catch (e) {
         useApp.getState().toast((e as Error).message, 'error')
       }
@@ -238,6 +254,11 @@ export const useChat = create<ChatState>((set, get) => {
           return
         }
         if (e.kind === 'thinking') return
+        if (e.kind === 'status') {
+          const { [ev.turnId]: _s, ...statuses } = get().statuses
+          set({ statuses: e.text ? { ...statuses, [ev.turnId]: { text: e.text, kill: e.kill } } : statuses })
+          return
+        }
         const drafts = e.kind === 'message' ? { ...get().drafts, [ev.turnId]: '' } : get().drafts
         const events = e.kind === 'todos' ? turn.events.filter((x) => x.kind !== 'todos') : turn.events
         let nextEvents = [...events, e]
@@ -252,13 +273,19 @@ export const useChat = create<ChatState>((set, get) => {
           chats: { ...get().chats, [ev.chatId]: { ...chat, turns: chat.turns.map((t) => (t.id === turn.id ? nextTurn : t)) } },
         })
       } else if (ev.type === 'turn') {
-        set({ busyProjects: { ...get().busyProjects, [ev.projectId]: ev.status === 'running' } })
+        // The project stays busy while any of its chats still has a turn running.
+        const runningChats = { ...get().runningChats }
+        if (ev.status === 'running') runningChats[ev.chatId] = ev.projectId
+        else delete runningChats[ev.chatId]
+        set({ runningChats, busyProjects: { ...get().busyProjects, [ev.projectId]: Object.values(runningChats).includes(ev.projectId) } })
         if (ev.projectId === get().pid) {
           void get().reloadChat(ev.chatId)
           void get().refreshSummaries()
         }
         if (ev.status !== 'running') {
           const { [ev.turnId]: _d, ...drafts } = get().drafts
+          const { [ev.turnId]: _s, ...statuses } = get().statuses
+          set({ statuses })
           const { [ev.chatId]: _m, ...runningModes } = get().runningModes
           set({ drafts, runningModes })
         }
@@ -282,3 +309,7 @@ useChat.subscribe((s, prev) => {
   if (s.busyProjects === prev.busyProjects) return
   for (const pid of Object.keys(prev.busyProjects)) if (prev.busyProjects[pid] && !s.busyProjects[pid]) void flushHeldEdits(pid)
 })
+
+/** Whether the chat's own turn is running (other chats of the project may run at the same time). */
+export const chatIsRunning = (s: { chats: Record<string, Chat> }, chatId: string | null | undefined) =>
+  !!chatId && !!s.chats[chatId]?.turns.some((t) => t.status === 'running')
