@@ -6,8 +6,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { ChatMarkdown } from './chatLinks'
 import {
   AlertTriangle, BotMessageSquare, Check, ChevronDown, ChevronRight, CircleDot, FileEdit, History, Loader2, MessageSquare, SquarePlus, Trash2,
   Plus, RotateCcw, Send, Square, Terminal, Wrench, X, StickyNote, Pencil, Play, ImagePlus, Library, Snowflake, Scissors,
@@ -482,7 +481,7 @@ function TurnView({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; draft
           </button>
           {showSummary && (
             <div className="prose prose-sm max-w-none border-t border-violet-200 px-3 py-2 text-ink prose-headings:mb-1 prose-headings:mt-3 prose-headings:text-[13px]">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{turn.split.summary}</ReactMarkdown>
+              <ChatMarkdown text={turn.split.summary} />
             </div>
           )}
         </div>
@@ -496,7 +495,7 @@ function TurnView({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; draft
           ),
         )}
         {draft && (
-          <div className="prose prose-sm max-w-none text-ink"><ReactMarkdown remarkPlugins={[remarkGfm]}>{draft}</ReactMarkdown></div>
+          <div className="prose prose-sm max-w-none text-ink"><ChatMarkdown text={draft} /></div>
         )}
         {turn.status === 'running' && !draft && (
           <div className={clsx('flex items-center gap-2 text-xs', status ? 'text-violet-700' : 'text-ink-3')}>
@@ -707,7 +706,7 @@ const toolLabel = (t: string) =>
 function EventView({ e, resolved, onAnswer, onOpen }: { e: TurnEvent; resolved: Map<string, string>; onAnswer: (rid: string, d: 'allow' | 'allowAlways' | 'deny') => Promise<void>; onOpen(p: string): void }) {
   switch (e.kind) {
     case 'message':
-      return <div className="prose prose-sm max-w-none text-ink prose-p:my-1.5 prose-ul:my-1.5 prose-pre:text-xs"><ReactMarkdown remarkPlugins={[remarkGfm]}>{e.text}</ReactMarkdown></div>
+      return <div className="prose prose-sm max-w-none text-ink prose-p:my-1.5 prose-ul:my-1.5 prose-pre:text-xs"><ChatMarkdown text={e.text} /></div>
     case 'todos':
       return (
         <div className="rounded-md border border-hair bg-white p-2 text-xs">

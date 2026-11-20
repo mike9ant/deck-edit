@@ -25,6 +25,7 @@ import { NotePins, actNowPrompt, type NoteDraft } from '../notes/NotePins'
 import { DrawLayer, NoteToolButton, SelectToolButton, pinFor, strokesBox, useEscapeEndsNoteMode } from '../notes/NoteDrawing'
 import { notesForSlide, useNotes } from '../store/notesStore'
 import { sendToAgent } from '../chat/sendToAgent'
+import { useReveal } from '../store/revealStore'
 
 /** A lazily loaded chunk that no longer exists (Chrome / Safari / Firefox wording). */
 const STALE_BUILD = /dynamically imported module|Importing a module script failed|error loading dynamically imported/i
@@ -129,6 +130,20 @@ export function SheetView({ pid, path }: { pid: string; path: string }) {
 
   const sheet = sheets?.find((s) => s.name === active) ?? null
 
+  // A chat link to a sheet / cell of this file: switch to the sheet, select the cell and scroll to it.
+  const pendingReveal = useReveal((s) => s.pending)
+  const [jump, setJump] = useState(0)
+  useEffect(() => {
+    if (!sheets || pendingReveal?.path !== path) return
+    const loc = useReveal.getState().take(path)
+    if (!loc) return
+    const want = loc.sheet && sheets.find((m) => m.name.toLowerCase() === loc.sheet!.toLowerCase())
+    if (want) setActive(want.name)
+    const cell = loc.cell ? parseRange(loc.cell) : null
+    setSel(cell ? { r: cell.r1, c: cell.c1 } : null)
+    if (cell) setJump((n) => n + 1)
+  }, [pendingReveal, sheets, path])
+
   // Tell the agent which sheet/cell is in view.
   useEffect(() => {
     if (!sheet) return
@@ -175,6 +190,7 @@ export function SheetView({ pid, path }: { pid: string; path: string }) {
           key={sheet.name}
           sheet={sheet}
           sel={sel}
+          jump={jump}
           onSelect={setSel}
           notes={notesForSlide(allNotes, path, sheet.name, sheets.indexOf(sheet) + 1)}
           showResolved={showResolved}
@@ -221,9 +237,11 @@ function firstAfter(off: number[], pos: number): number {
 
 type NewSheetNote = { x: number; y: number; shapeName?: string; strokes?: Stroke[]; shapes?: string[]; text: string }
 
-function Grid({ sheet, sel, onSelect, notes, showResolved, noteMode, onPinned }: {
+function Grid({ sheet, sel, jump, onSelect, notes, showResolved, noteMode, onPinned }: {
   sheet: SheetModel
   sel: { r: number; c: number } | null
+  /** Bumped to scroll the selected cell into the middle of the view. */
+  jump: number
   onSelect(s: { r: number; c: number }): void
   notes: Note[]
   showResolved: boolean
@@ -255,6 +273,15 @@ function Grid({ sheet, sel, onSelect, notes, showResolved, noteMode, onPinned }:
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
+
+  useEffect(() => {
+    const el = scroller.current
+    if (!jump || !sel || !el) return
+    const top = rowOff[Math.min(sel.r, rows)] ?? 0
+    const left = colOff[Math.min(sel.c, cols)] ?? 0
+    el.scrollTo({ top: Math.max(0, top - el.clientHeight / 2 + HDR_H), left: Math.max(0, left - el.clientWidth / 3 + HDR_W) })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jump])
 
   const r0 = firstAfter(rowOff, view.top), r1 = Math.min(rows, firstAfter(rowOff, view.top + view.h) + 1)
   const c0 = firstAfter(colOff, view.left), c1 = Math.min(cols, firstAfter(colOff, view.left + view.w) + 1)

@@ -22,6 +22,7 @@ import { DrawLayer, NoteToolButton, SelectToolButton, pinFor, useEscapeEndsNoteM
 import { sendToAgent } from '../chat/sendToAgent'
 import { MarkdownEditable } from './MarkdownEditable'
 import { docHistory } from './docHistory'
+import { useReveal } from '../store/revealStore'
 
 type MdMode = 'preview' | 'edit'
 const MD_MODE_KEY = 'deckedit-md-mode'
@@ -73,6 +74,20 @@ function TextDoc({ pid, path, mode, tools }: { pid: string; path: string; mode: 
   const loaded = !!doc
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const history = useMemo(() => (loaded ? docHistory(`${pid}:${path}`, current()) : undefined), [pid, path, loaded])
+  // A chat link to a line of this file: select the line(s) in the shared cursor and re-open the
+  // view there (both views open at that cursor).
+  const pendingReveal = useReveal((s) => s.pending)
+  const [viewSeq, setViewSeq] = useState(0)
+  useEffect(() => {
+    if (!history || pendingReveal?.path !== path) return
+    const loc = useReveal.getState().take(path)
+    if (!loc?.line) return
+    const d = history.state.doc
+    const from = d.line(Math.min(loc.line, d.lines)).from
+    const to = d.line(Math.min(Math.max(loc.endLine ?? loc.line, loc.line), d.lines)).to
+    history.setCursor(from, to)
+    setViewSeq((n) => n + 1)
+  }, [pendingReveal, history, path])
   const reveal = (quote: string, line?: number) => {
     if (mode === 'edit') return revealRef.current?.(quote, line)
     // Formatted view: scroll the highlighted text into view.
@@ -100,10 +115,10 @@ function TextDoc({ pid, path, mode, tools }: { pid: string; path: string; mode: 
         </div>
       )}
       {mode === 'edit' ? (
-        <CodeEditor path={path} doc={doc} initialText={current()} readOnly={false} onSelection={setSelection} marks={marks} revealRef={revealRef} onChange={change} onSave={() => void flush()} history={history} />
+        <CodeEditor key={viewSeq} path={path} doc={doc} initialText={current()} readOnly={false} onSelection={setSelection} marks={marks} revealRef={revealRef} onChange={change} onSave={() => void flush()} history={history} />
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <MarkdownEditable text={current()} editable onChange={change} onSelection={setSelection} marks={marks} history={history} />
+          <MarkdownEditable key={viewSeq} text={current()} editable onChange={change} onSelection={setSelection} marks={marks} history={history} />
         </div>
       )}
     </div>

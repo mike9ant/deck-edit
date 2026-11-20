@@ -19,6 +19,7 @@ import { NoteToolButton, SelectToolButton, useEscapeEndsNoteMode } from '../note
 import { Splitter } from '../components/Splitter'
 import { useInnerWidth } from '../components/useInnerWidth'
 import { useApp } from '../store/appStore'
+import { useReveal } from '../store/revealStore'
 import { useChat } from '../store/chatStore'
 import { api } from '../api/client'
 
@@ -45,6 +46,15 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   useEffect(() => {
     void open(pid, path)
   }, [pid, path, open])
+
+  // A chat link to a slide of this deck: go there once the deck is loaded.
+  const reveal = useReveal((s) => s.pending)
+  const loaded = !!session?.pres
+  useEffect(() => {
+    if (!loaded || reveal?.path !== path) return
+    const loc = useReveal.getState().take(path)
+    if (loc?.slide) setSlide(key, loc.slide - 1)
+  }, [reveal, loaded, path, key, setSlide])
 
   // Report what the user is looking at (the agent's get_user_view tool).
   const slide = session?.pres?.slides[session.slideIndex]

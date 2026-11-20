@@ -19,6 +19,7 @@ import { sendToAgent } from '../chat/sendToAgent'
 import { DrawLayer, NoteToolButton, SelectToolButton, pinFor, useEscapeEndsNoteMode } from '../notes/NoteDrawing'
 import { notesForSlide, useNotes } from '../store/notesStore'
 import { useApp } from '../store/appStore'
+import { useReveal } from '../store/revealStore'
 import { useChat } from '../store/chatStore'
 import { api } from '../api/client'
 import { prepareImage } from '../deck/images'
@@ -183,6 +184,16 @@ export function PdfView({ pid, path }: { pid: string; path: string }) {
   useEffect(() => {
     void open(pid, path)
   }, [pid, path, open])
+
+  // A chat link to a page of this PDF: go there once it is loaded.
+  const reveal = useReveal((s) => s.pending)
+  const loaded = !!session?.doc
+  useEffect(() => {
+    if (!loaded || reveal?.path !== path) return
+    const loc = useReveal.getState().take(path)
+    const page = loc?.page ?? loc?.slide
+    if (page) usePdfs.getState().setPage(key, page - 1)
+  }, [reveal, loaded, path, key])
 
   useEffect(() => {
     if (!session?.doc) return
