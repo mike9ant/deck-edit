@@ -30,7 +30,7 @@ import { loadEmbeddedFonts } from '@diceui/pptx-core/fonts'
 import { api, ApiError, CLIENT_ID } from '../api/client'
 import { useApp } from '../store/appStore'
 import { repairPackage, uniqueShapeIds } from './packageHygiene'
-import { readSlideIds, slideTitle, slideXmlBySldId } from './deckModel'
+import { readSlideParts, slideIdsFromXml, slideTitle, slideXmlFromParts } from './deckModel'
 
 /** How to apply an edit again onto a freshly loaded deck: data, or a function given the slide ids it refers to. */
 export type Replay =
@@ -145,13 +145,58 @@ function remapOp(op: EditOperation, map: (id: string) => string | null): EditOpe
 }
 
 const reloadChains = new Map<string, Promise<void>>()
+/** A reload waiting for the one before it to finish (at most one per deck). */
+const queuedReloads = new Map<string, { external: boolean; done: Promise<void> }>()
 
-async function parse(bytes: ArrayBuffer): Promise<PresentationData> {
-  const files = await readPptx(bytes, { keepSourcePackage: true })
+/**
+ * What the last read of each deck left for the next one (see `parse`): every zip entry it read with
+ * its fingerprint, and the parts each slide depends on.
+ */
+interface ReadMemo {
+  entryCache: NonNullable<Awaited<ReturnType<typeof readPptx>>['entryCache']>
+  shared: string
+  slideRels: Map<string, string>
+}
+const readMemos = new Map<string, ReadMemo>()
+
+/** Layouts, masters, themes, charts and diagrams: a change to any of them can change every slide. */
+function sharedParts(files: Awaited<ReturnType<typeof readPptx>>): string {
+  const maps = [files.slideLayouts, files.slideLayoutRels, files.slideMasters, files.slideMasterRels, files.themes, files.themeOverrides, files.charts, files.chartRels, files.chartStyles, files.chartColors, files.diagramDrawings]
+  return JSON.stringify([files.tableStyles ?? '', ...maps.map((m) => (m ? [...m].sort(([a], [b]) => a.localeCompare(b)) : []))])
+}
+
+interface Parsed {
+  pres: PresentationData
+  sldIds: Map<string, string>
+  /** Each slide's raw XML by stable id. */
+  slideXml: Map<string, string>
+  /** Stable ids of the slides that may render differently from the previous read (all of them when that can't be told). */
+  changedSlides: Set<string> | 'all'
+}
+
+/**
+ * Read a deck in one pass: the presentation, its stable slide ids and slide XML. Parts unchanged
+ * since the previous read of `key` (media, fonts, layouts — most of a big deck's bytes) are reused
+ * rather than inflated again, and it reports which slides changed, so only those re-render.
+ */
+async function parse(bytes: ArrayBuffer, key: string): Promise<Parsed> {
+  const prev = readMemos.get(key)
+  const files = await readPptx(bytes, { keepSourcePackage: true, reuse: prev })
+  const sldIds = slideIdsFromXml(files.presentation, files.presentationRels)
+  const slideXml = slideXmlFromParts(sldIds, files.slides)
+  const shared = sharedParts(files)
+  const entryCache = files.entryCache ?? new Map()
+  const slideRels = new Map<string, string>()
+  for (const [part, sid] of sldIds) slideRels.set(sid, files.slideRels.get(part.replace(/slides\/([^/]+)$/, 'slides/_rels/$1.rels')) ?? '')
+  // Media replaced under the same name, or a shared part changed: every slide may look different.
+  const mediaReplaced = !!prev && [...entryCache].some(([path, e]) => /^ppt\/media\//.test(path) && prev.entryCache.has(path) && prev.entryCache.get(path)!.signature !== e.signature)
+  let changedSlides: Set<string> | 'all' = 'all'
+  if (prev && !mediaReplaced && prev.shared === shared) changedSlides = new Set([...slideRels].filter(([sid, rels]) => prev.slideRels.get(sid) !== rels).map(([sid]) => sid))
+  readMemos.set(key, { entryCache, shared, slideRels })
   // Shapes are addressed by id: repeated ids (common in script-built decks) would make a click
   // select — and an edit change — the wrong shape.
   for (const [path, xml] of files.slides) files.slides.set(path, uniqueShapeIds(xml))
-  return buildPresentation(files)
+  return { pres: buildPresentation(files), sldIds, slideXml, changedSlides }
 }
 
 export const useDecks = create<DeckStore>((set, get) => {
@@ -271,11 +316,9 @@ export const useDecks = create<DeckStore>((set, get) => {
     for (let attempt = 0; attempt < 6; attempt++) {
       try {
         const { bytes, etag } = await api.readFile(s0.pid, s0.path)
-        const keep = bytes.slice(0)
-        const pres = await parse(bytes)
+        const { pres, sldIds, slideXml, changedSlides } = await parse(bytes, key)
         if (!fontHandles.has(key)) fontHandles.set(key, loadEmbeddedFonts(pres))
         await fontHandles.get(key)!.ready
-        const [sldIds, slideXml] = await Promise.all([readSlideIds(keep), slideXmlBySldId(keep)])
         const s = get().sessions[key]
         if (!s) return
         // Stay on the same slide (by stable id) across the reload.
@@ -315,9 +358,21 @@ export const useDecks = create<DeckStore>((set, get) => {
           }
         }
         const version = s.version + 1
-        const slideVersions: Record<string, number> = {}
-        for (const sl of pres.slides) slideVersions[sl.id] = version
         const s1 = get().sessions[key] ?? s
+        // Only slides that changed re-render: one the agent didn't touch keeps its version (by stable
+        // id — python-pptx renumbers slide parts). Edits replayed onto the new file re-render all.
+        // Not when the screen may show something the file doesn't: unsaved edits (dropped by this
+        // reload) or a slide that moved (its slide number field).
+        const prevAt = new Map<string, { version: number; index: number }>()
+        if (s1.pres) s1.pres.slides.forEach((sl, index) => prevAt.set(s1.sldIds.get(sl.id) ?? '', { version: s1.slideVersions[sl.id] ?? s1.version, index }))
+        const reuse = external && !holding && !s1.dirty && changedSlides !== 'all'
+        const slideVersions: Record<string, number> = {}
+        pres.slides.forEach((sl, index) => {
+          const sid = sldIds.get(sl.id) ?? ''
+          const before = prevAt.get(sid)
+          const same = reuse && sid && before && before.index === index && !changedSlides.has(sid) && s1.lastSlideXml.get(sid) === slideXml.get(sid)
+          slideVersions[sl.id] = same ? before.version : version
+        })
         const next: DeckSession = {
           ...s1, pres, etag, loading: false, error: null, version, slideVersions, slideIndex: Math.max(0, slideIndex),
           selection: external ? [] : s1.selection,
@@ -360,16 +415,25 @@ export const useDecks = create<DeckStore>((set, get) => {
     },
 
     reload(key, external) {
-      // One reload at a time per deck: a replay must start from the previous one's result.
-      const next = (reloadChains.get(key) ?? Promise.resolve()).then(() => reloadOnce(key, external))
-      reloadChains.set(key, next.catch(() => {}))
-      return next
+      // One reload at a time per deck: a replay must start from the previous one's result. Saves in
+      // quick succession (the agent saving slide by slide) share one waiting reload — it reads the
+      // file as it is when it starts, so the ones in between would only repeat the work.
+      const waiting = queuedReloads.get(key)
+      if (waiting && waiting.external === external) return waiting.done
+      const done = (reloadChains.get(key) ?? Promise.resolve()).then(() => {
+        if (queuedReloads.get(key)?.done === done) queuedReloads.delete(key)
+        return reloadOnce(key, external)
+      })
+      queuedReloads.set(key, { external, done })
+      reloadChains.set(key, done.catch(() => {}))
+      return done
     },
 
     close(key) {
       const { [key]: _gone, ...rest } = get().sessions
       fontHandles.get(key)?.dispose()
       fontHandles.delete(key)
+      readMemos.delete(key)
       set({ sessions: rest })
     },
 
@@ -498,7 +562,7 @@ export const useDecks = create<DeckStore>((set, get) => {
         const raw = await writePptx(s.pres)
         const { bytes } = await repairPackage(raw)
         const { etag } = await api.writeFile(s.pid, s.path, bytes, s.etag)
-        const [sldIds, slideXml] = await Promise.all([readSlideIds(bytes), slideXmlBySldId(bytes)])
+        const { sldIds, slideXml } = await readSlideParts(bytes)
         patch(key, { etag, saving: false, sldIds, lastSlideXml: slideXml, heldFrom: null, agentChangedWhileHeld: [], savedAt: upTo })
         publishMap(get().sessions[key]!)
       } catch (e) {

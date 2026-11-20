@@ -21,13 +21,10 @@ export const short = (s: string, n = 60) => {
 
 /**
  * Stable slide ids (`p:sldId/@id` in presentation.xml) keyed by slide part
- * path, read from saved package bytes. The engine's own slide ids are part
- * paths, which python-pptx renumbers on every save; `sldId` survives both.
+ * path. The engine's own slide ids are part paths, which python-pptx
+ * renumbers on every save; `sldId` survives both.
  */
-export async function readSlideIds(bytes: ArrayBuffer | Uint8Array): Promise<Map<string, string>> {
-  const zip = await JSZip.loadAsync(bytes)
-  const presXml = await zip.file('ppt/presentation.xml')?.async('string')
-  const relsXml = await zip.file('ppt/_rels/presentation.xml.rels')?.async('string')
+export function slideIdsFromXml(presXml: string | undefined, relsXml: string | undefined): Map<string, string> {
   const out = new Map<string, string>()
   if (!presXml || !relsXml) return out
   const targets = new Map<string, string>()
@@ -46,15 +43,25 @@ export async function readSlideIds(bytes: ArrayBuffer | Uint8Array): Promise<Map
 }
 
 /** Raw XML of every slide keyed by stable slide id — used to spot which slides an external save changed. */
-export async function slideXmlBySldId(bytes: ArrayBuffer | Uint8Array): Promise<Map<string, string>> {
-  const ids = await readSlideIds(bytes)
-  const zip = await JSZip.loadAsync(bytes)
+export function slideXmlFromParts(sldIds: Map<string, string>, slides: Map<string, string>): Map<string, string> {
   const out = new Map<string, string>()
-  for (const [part, sid] of ids) {
-    const xml = await zip.file(part)?.async('string')
+  for (const [part, sid] of sldIds) {
+    const xml = slides.get(part)
     if (xml !== undefined) out.set(sid, xml)
   }
   return out
+}
+
+/** Stable slide ids and each slide's raw XML, read from saved package bytes (one unzip). */
+export async function readSlideParts(bytes: ArrayBuffer | Uint8Array): Promise<{ sldIds: Map<string, string>; slideXml: Map<string, string> }> {
+  const zip = await JSZip.loadAsync(bytes)
+  const sldIds = slideIdsFromXml(await zip.file('ppt/presentation.xml')?.async('string'), await zip.file('ppt/_rels/presentation.xml.rels')?.async('string'))
+  const slides = new Map<string, string>()
+  for (const part of sldIds.keys()) {
+    const xml = await zip.file(part)?.async('string')
+    if (xml !== undefined) slides.set(part, xml)
+  }
+  return { sldIds, slideXml: slideXmlFromParts(sldIds, slides) }
 }
 
 export const slideById = (pres: PresentationData, id: string) => pres.slides.find((s) => s.id === id)
