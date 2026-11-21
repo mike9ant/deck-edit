@@ -9,6 +9,10 @@ interface AgentState {
   status: AgentStatus | null
   statusLoading: boolean
   models: ModelOption[]
+  /** The Settings dialog is open (from the top bar, or the chat's setup card). */
+  settingsOpen: boolean
+  openSettings(): void
+  closeSettings(): void
   load(): Promise<void>
   refreshStatus(): Promise<void>
   update(body: Parameters<typeof api.updateSettings>[0]): Promise<void>
@@ -20,6 +24,9 @@ export const useAgent = create<AgentState>((set, get) => ({
   status: null,
   statusLoading: false,
   models: [],
+  settingsOpen: false,
+  openSettings: () => set({ settingsOpen: true }),
+  closeSettings: () => set({ settingsOpen: false }),
   async load() {
     const [settings] = await Promise.all([api.settings()])
     set({ settings })
@@ -30,7 +37,13 @@ export const useAgent = create<AgentState>((set, get) => ({
   async refreshStatus() {
     set({ statusLoading: true })
     try {
-      set({ status: await api.agentStatus() })
+      const status = await api.agentStatus()
+      const before = get().status
+      set({ status })
+      // Just installed: the model picker's options come from the CLI.
+      if (status.cli.found && before && !before.cli.found) api.models().then((models) => set({ models })).catch(() => {})
+    } catch {
+      /* the status stays as it was */
     } finally {
       set({ statusLoading: false })
     }

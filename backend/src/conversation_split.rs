@@ -112,7 +112,7 @@ pub fn carry_over(info: &SplitInfo, recent: &[&Turn]) -> String {
 /// A summary by Sonnet of the session's condensed transcript (no tools, no session kept).
 pub async fn summarize_with_sonnet(claude_bin: &str, root: &Path, api_key: Option<&str>, session: &str) -> Result<String, String> {
     let transcript = crate::conversations::condensed_transcript(session, TRANSCRIPT_CHARS).ok_or("the earlier conversation's transcript wasn't found")?;
-    let mut cmd = tokio::process::Command::new(claude_bin);
+    let mut cmd = crate::login_path::command(claude_bin);
     cmd.current_dir(root)
         // Medium effort is plenty for a summary (the warm route keeps the session's own effort: changing it would miss the cache).
         .args(["-p", "--model", "sonnet", "--effort", "medium", "--output-format", "text", "--no-session-persistence", "--tools", ""])

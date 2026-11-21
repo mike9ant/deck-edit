@@ -23,6 +23,7 @@ mod events;
 mod file_ops;
 mod files;
 mod local_only;
+pub mod login_path;
 mod mcp;
 mod notes;
 mod permissions;

@@ -175,7 +175,7 @@ fn mcp_config(port: u16, chat_id: &str, token: &str) -> String {
 }
 
 pub fn build_command(p: &TurnParams<'_>) -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new(p.claude_bin);
+    let mut cmd = crate::login_path::command(p.claude_bin);
     cmd.current_dir(p.root).arg("-p");
     if p.images.is_empty() {
         cmd.arg(p.prompt);
@@ -222,8 +222,7 @@ pub fn build_command(p: &TurnParams<'_>) -> tokio::process::Command {
     }
     // Put the app's Python env (python-pptx, pymupdf, pypdf) first on PATH.
     if let Some(bin) = p.python_bin {
-        let path = std::env::var("PATH").unwrap_or_default();
-        cmd.env("PATH", format!("{}:{path}", bin.display()));
+        cmd.env("PATH", format!("{}:{}", bin.display(), crate::login_path::run_path(p.claude_bin)));
         if let Some(venv) = bin.parent() {
             cmd.env("VIRTUAL_ENV", venv);
         }

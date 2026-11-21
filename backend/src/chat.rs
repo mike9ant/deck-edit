@@ -718,6 +718,11 @@ pub fn scratch_dir(chat_id: &str) -> PathBuf {
 const INTERRUPTED_NOTICE: &str = "The app closed while this turn was running. Send a message (for example “continue”) to pick up where it left off.";
 const INTERRUPTED_BEFORE_START: &str = "The app closed before the agent started on this message. Send it again to run it.";
 
+/// Every turn: places in project files are written as links (the app makes them clickable).
+/// Repeated here, near the message, because a long conversation's own unlinked replies outweigh
+/// the system prompt.
+const LINK_REMINDER: &str = "Links: write every slide, page, line or file of the project you mention as a markdown link, e.g. [Deck.pptx, slide 5](<Deck.pptx#slide=5>), [Report.pdf p. 3](<Report.pdf#page=3>), [notes.md line 12](<notes.md#line=12>), [Model.xlsx Sheet1!B4](<Model.xlsx#cell=Sheet1!B4>) — path relative to the project folder. The app makes them clickable links that open the file at that place; they work for these local files, so never say links aren't possible. In tables and lists too, and name the deck in each link (not \"same deck\").\n";
+
 fn compose_prompt(state: &AppState, project_id: &str, chat_id: &str, root: &Path, text: &str, ctx: Option<&Value>) -> String {
     let mut out = String::from(text.trim());
     out.push_str("\n\n---\n[Context from the Deck Edit app — generated automatically, not typed by the user]\n");
@@ -729,15 +734,17 @@ fn compose_prompt(state: &AppState, project_id: &str, chat_id: &str, root: &Path
         let count = ctx.and_then(|c| c.get("slideCount")).and_then(|v| v.as_u64()).unwrap_or(0);
         let kind = if deck.to_lowercase().ends_with(".pdf") { "page" } else { "slide" };
         if idx > 0 {
+            // Written as a link, the way the agent should write places (it mirrors this format).
+            let frag = if kind == "page" { "page" } else { "slide" };
             out.push_str(&format!(
-                "The user is viewing: {deck} — {kind} {idx} of {count}{}\n",
+                "The user is viewing: [{deck}, {kind} {idx}](<{deck}#{frag}={idx}>) — {kind} {idx} of {count}{}\n",
                 match s(ctx.and_then(|c| c.get("slideId"))) {
                     id if !id.is_empty() => format!(" (slideId {id})"),
                     _ => String::new(),
                 }
             ));
         } else {
-            out.push_str(&format!("The user has open: {deck}\n"));
+            out.push_str(&format!("The user has open: [{deck}](<{deck}>)\n"));
         }
         if let Some(sel) = ctx.and_then(|c| c.get("selection")).and_then(|v| v.as_array()).filter(|a| !a.is_empty()) {
             out.push_str("Selected on that slide:\n");
@@ -756,6 +763,7 @@ fn compose_prompt(state: &AppState, project_id: &str, chat_id: &str, root: &Path
         out.push_str(&format!("The user has open: {f}\n"));
     }
     out.push_str(&format!("Scratch folder for your scripts (yours alone): {}\n", scratch_dir(chat_id).display()));
+    out.push_str(LINK_REMINDER);
     let others = state.chats.running_in_project(project_id, chat_id);
     if !others.is_empty() {
         out.push_str("Other agents are working in this project at the same time (the user's other chat tabs):\n");
@@ -840,6 +848,7 @@ Editing PowerPoint files:
 
 Linking to places in the project (the user clicks a link to open the file there):
 - EVERY time you mention a slide, page, line or cell of a project file, write it as a link — not only for search results: also when citing a source for a figure or claim, referring to another deck, summarizing, or mentioning it in passing. Earlier replies in this conversation may lack links; don't copy that — link from now on. Write it as a markdown link whose target is the file's path relative to the project folder plus a location: `[Deck.pptx, slide 5](Deck.pptx#slide=5)`, `[Report.pdf p. 3](Report.pdf#page=3)`, `[plan.md line 42](notes/plan.md#line=42)` (a range: `#line=42-48`), `[Model.xlsx Sheet1!B4](Model.xlsx#cell=Sheet1!B4)` (or just `#sheet=Sheet1`). With no `#…` the link just opens the file. Name the file in the link text unless the sentence already makes it obvious (then `[slide 5](…)` is fine).
+- These links work for local files: the app makes them clickable. Never answer that there are no URLs or that links aren't possible — write the links.
 - If the path has spaces, put it in angle brackets: `[slide 5](<Investor Deck.pptx#slide=5>)`. Slide/page numbers are 1-based in the file's current order; line numbers are in the file's source text.
 - When listing several finds, link each one (e.g. a bullet per match). Keep ordinary web links as usual.
 

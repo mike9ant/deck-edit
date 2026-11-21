@@ -207,7 +207,7 @@ async fn put_key(State(state): State<AppState>, Json(b): Json<KeyBody>) -> Resul
 async fn run_capture(bin: &str, args: &[&str], secs: u64) -> Option<String> {
     let out = tokio::time::timeout(
         Duration::from_secs(secs),
-        tokio::process::Command::new(bin).args(args).stdin(Stdio::null()).kill_on_drop(true).output(),
+        crate::login_path::command(bin).args(args).stdin(Stdio::null()).kill_on_drop(true).output(),
     )
     .await
     .ok()?
@@ -216,20 +216,17 @@ async fn run_capture(bin: &str, args: &[&str], secs: u64) -> Option<String> {
 }
 
 fn which(bin: &str) -> Option<String> {
-    if bin.contains('/') {
-        return Path::new(bin).exists().then(|| bin.to_string());
-    }
-    std::env::var("PATH")
-        .ok()?
-        .split(':')
-        .map(|d| Path::new(d).join(bin))
-        .find(|p| p.is_file())
-        .map(|p| p.to_string_lossy().into_owned())
+    crate::login_path::which(bin).map(|p| p.to_string_lossy().into_owned())
 }
 
 async fn status(State(state): State<AppState>) -> Json<Value> {
     let bin = state.settings.claude_bin();
-    let path = which(&bin);
+    let mut path = which(&bin);
+    if path.is_none() {
+        // Maybe installed since the app started (or the shell profile changed): ask the login shell again.
+        crate::login_path::refresh().await;
+        path = which(&bin);
+    }
     let version = match &path {
         Some(p) => run_capture(p, &["--version"], 10).await.map(|s| s.trim().to_string()),
         None => None,
@@ -318,7 +315,7 @@ async fn probe_model(bin: &str, alias: Option<&str>) -> Option<String> {
     if let Some(a) = alias {
         args.extend(["--model", a]);
     }
-    let mut child = tokio::process::Command::new(bin)
+    let mut child = crate::login_path::command(bin)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

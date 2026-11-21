@@ -6,6 +6,7 @@ import clsx from 'clsx'
 import { useApp, currentProject } from '../store/appStore'
 import { api } from '../api/client'
 import { SettingsDialog } from '../chat/AgentSettings'
+import { useAgent } from '../store/agentStore'
 import { askConfirm } from './confirmDialog'
 
 export function TopBar() {
@@ -13,7 +14,7 @@ export function TopBar() {
   const project = currentProject()
   const [menu, setMenu] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [settings, setSettings] = useState(false)
+  const settings = useAgent((s) => s.settingsOpen)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -70,9 +71,9 @@ export function TopBar() {
           <FolderOpen size={13} /> <span className="truncate">{project.folder}</span>
         </button>
       )}
-      <button className="icon-btn ml-auto shrink-0" title="Settings — agent (Claude Code CLI, billing, defaults…) and About" onClick={() => setSettings(true)}><Settings size={16} /></button>
+      <button className="icon-btn ml-auto shrink-0" title="Settings — agent (Claude Code CLI, billing, defaults…) and About" onClick={() => useAgent.getState().openSettings()}><Settings size={16} /></button>
       {creating && <NewProjectDialog onClose={() => setCreating(false)} />}
-      {settings && <SettingsDialog onClose={() => setSettings(false)} />}
+      {settings && <SettingsDialog onClose={() => useAgent.getState().closeSettings()} />}
     </div>
   )
 }

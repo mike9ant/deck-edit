@@ -4,7 +4,8 @@
  * "plan.md lines 4–9" — become links when the name is one of the project's files.
  *
  * - A mention is a location word (slide / page / p. / line) with a number, and next to it a file
- *   name: just before it, or after "of" / "in" / "from".
+ *   name: just before it ("Deck.pptx — slide 4", "Deck (slide 4)"), or after "of" / "in" / "from";
+ *   or "same deck" / "that deck", meaning the file named last in the message.
  * - The name may be written with or without its extension, folder or underscores, in any case,
  *   or shortened to the start of the file name (long enough, and only one file starts so).
  * - Only files of the right kind count: slides are in decks, pages in PDFs (or decks), lines in
@@ -53,8 +54,10 @@ export function matchFile(text: string, refs: FileRef[], kind: Kind): FileRef | 
 /** Code, links, autolinks / HTML and URLs: left exactly as written. */
 const PROTECTED = /```[\s\S]*?(?:```|$)|`[^`\n]*`|!?\[[^\]\n]*\]\([^)\n]*\)|<[^>\n]*>|https?:\/\/[^\s)]+/g
 const ANCHOR = /\b(slides?|pages?|pp?\.|lines?)\s*(\d+)(?:\s*(?:-|–|—|to)\s*(\d+))?\b/gi
-/** What may sit between a name and its location word ("*Talk*: slide 4", "Talk's slide 4"). */
-const GAP_END = /(?:'s|’s)?[\s,:;*_"”’')-]*$/i
+/** What may sit between a name and its location word ("*Talk*: slide 4", "Talk's slide 4", "Talk — slide 4", "Talk (slide 4)"). */
+const GAP_END = /(?:'s|’s)?[\s,:;*_"”’')(·\-–—]*$/i
+/** "same deck, slide 12": the deck named last in the message. */
+const SAME_FILE = /\b(?:the\s+)?(?:same|that|this)\s+(?:deck|presentation|pdf|file|document|doc)[\s,:;·(\-–—]*$/i
 /** A word after the name that isn't part of it ("the Q3 Plan deck, slide 4"). */
 const KIND_WORD = /\s+(?:deck|presentation|pdf|file|doc|document)$/i
 const CLOSERS = /[\s,.;:!?)*_"”’']+$/
@@ -69,16 +72,24 @@ const WINDOW = 120
 
 export function autoLink(md: string, refs: FileRef[]): string {
   if (!refs.length || !/\b(slide|page|p\.|line)/i.test(md)) return md
+  const state: { last: FileRef | null } = { last: null }
   let out = ''
   let last = 0
   for (const m of md.matchAll(PROTECTED)) {
-    out += linkPlain(md.slice(last, m.index), refs) + m[0]
+    out += linkPlain(md.slice(last, m.index), refs, state) + m[0]
     last = m.index! + m[0].length
+    // A link the agent wrote itself counts as the last file named ("…, and the same deck's slide 4").
+    const target = m[0].match(/^\[[^\]]*\]\(<?([^)>#]+)/)?.[1]
+    if (target) {
+      let path = target
+      try { path = decodeURIComponent(target) } catch { /* as written */ }
+      state.last = refs.find((r) => r.path === path) ?? state.last
+    }
   }
-  return out + linkPlain(md.slice(last), refs)
+  return out + linkPlain(md.slice(last), refs, state)
 }
 
-function linkPlain(seg: string, refs: FileRef[]): string {
+function linkPlain(seg: string, refs: FileRef[], state: { last: FileRef | null }): string {
   let out = ''
   let done = 0
   for (const m of seg.matchAll(ANCHOR)) {
@@ -87,16 +98,24 @@ function linkPlain(seg: string, refs: FileRef[]): string {
     const word = m[1].toLowerCase()
     const kind: Kind = word.startsWith('slide') ? 'slide' : word.startsWith('line') ? 'line' : 'page'
     const end = at + m[0].length
-    const hit = nameBefore(seg, Math.max(done, at - WINDOW), at, refs, kind) ?? nameAfter(seg, end, refs, kind)
+    let hit = nameBefore(seg, Math.max(done, at - WINDOW), at, refs, kind) ?? nameAfter(seg, end, refs, kind)
+    if (!hit && state.last && fits(kind, state.last.ext)) {
+      const lineStart = Math.max(done, seg.lastIndexOf('\n', at - 1) + 1)
+      const same = seg.slice(lineStart, at).match(SAME_FILE)
+      if (same) hit = { ref: state.last, from: lineStart + same.index!, to: at }
+    }
     if (!hit) continue
     const from = Math.min(hit.from, at)
-    const to = Math.max(hit.to, end)
-    const label = seg.slice(from, to)
+    let to = Math.max(hit.to, end)
+    let label = seg.slice(from, to)
+    // "Talk (slide 4)": the closing parenthesis goes in the link with its opening one.
+    if ((label.match(/\(/g) ?? []).length > (label.match(/\)/g) ?? []).length && seg[to] === ')') label = seg.slice(from, ++to)
     if (/[[\]\n]/.test(label)) continue
     const a = Number(m[2])
     const b = m[3] ? Number(m[3]) : undefined
     const frag = kind === 'line' ? `line=${a}${b && b > a ? `-${b}` : ''}` : kind === 'page' && hit.ref.ext === 'pdf' ? `page=${a}` : `slide=${a}`
     out += `${seg.slice(done, from)}[${label}](<${hit.ref.path}#${frag}>)`
+    state.last = hit.ref
     done = to
   }
   return out + seg.slice(done)

@@ -10,8 +10,7 @@
 
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Command;
 
 use tauri::menu::{AboutMetadataBuilder, Menu, MenuBuilder, SubmenuBuilder};
 use tauri::webview::NewWindowResponse;
@@ -37,57 +36,6 @@ fn bind_sticky(port_file: &Path) -> anyhow::Result<TcpListener> {
     }
     std::fs::write(port_file, port.to_string())?;
     Ok(listener)
-}
-
-/// An app opened from the Finder or the Dock gets a bare PATH
-/// (`/usr/bin:/bin:/usr/sbin:/sbin`): neither `claude` nor the tools the agent
-/// runs (python3, git, brew-installed commands) would be found. Take the PATH
-/// the user's interactive login shell sets up, plus the usual install places.
-fn adopt_login_path() {
-    const MARK: &str = "__DECK_EDIT_PATH__";
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let from_shell = Command::new(&shell)
-        .args(["-ilc", &format!("printf '{MARK}%s{MARK}' \"$PATH\"")])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()
-        .and_then(|mut child| {
-            // A slow or interactive shell profile mustn't hold up the app.
-            let deadline = Instant::now() + Duration::from_secs(5);
-            loop {
-                match child.try_wait() {
-                    Ok(Some(_)) => break,
-                    Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
-                    _ => {
-                        let _ = child.kill();
-                        return None;
-                    }
-                }
-            }
-            let out = child.wait_with_output().ok()?;
-            let text = String::from_utf8_lossy(&out.stdout).into_owned();
-            let start = text.find(MARK)? + MARK.len();
-            let end = start + text[start..].find(MARK)?;
-            Some(text[start..end].to_string())
-        })
-        .unwrap_or_default();
-    let home = std::env::var("HOME").map(PathBuf::from).unwrap_or_default();
-    let extra = [
-        home.join(".local/bin"),
-        home.join(".claude/local"),
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/usr/local/bin"),
-    ];
-    let current = std::env::var("PATH").unwrap_or_default();
-    let mut dirs: Vec<String> = Vec::new();
-    for d in from_shell.split(':').map(str::to_string).chain(extra.iter().map(|p| p.to_string_lossy().into_owned())).chain(current.split(':').map(str::to_string)) {
-        if !d.is_empty() && !dirs.contains(&d) {
-            dirs.push(d);
-        }
-    }
-    std::env::set_var("PATH", dirs.join(":"));
 }
 
 /// The built frontend: the repo's in debug builds (`cargo run` after
@@ -146,7 +94,8 @@ fn app_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> tauri::Result<Menu<
 }
 
 fn main() {
-    adopt_login_path();
+    // The login shell's PATH (an app opened from the Finder gets a bare one): see login_path.rs.
+    deck_edit::login_path::adopt_at_startup();
     tauri::Builder::default()
         .menu(app_menu)
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {

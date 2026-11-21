@@ -7,6 +7,8 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { ChatMarkdown } from './chatLinks'
+import { AgentSetupCard, useAgentBlock } from './AgentSetup'
+import { TabStrip } from '../components/TabStrip'
 import {
   AlertTriangle, BotMessageSquare, Check, ChevronDown, ChevronRight, CircleDot, FileEdit, History, Loader2, MessageSquare, SquarePlus, Trash2,
   Plus, RotateCcw, Send, Square, Terminal, Wrench, X, StickyNote, Pencil, Play, ImagePlus, Library, Snowflake, Scissors,
@@ -39,7 +41,8 @@ export function ChatPanel() {
   const active = activeId ? chats[activeId] : undefined
   return (
     <div className="flex h-full min-h-0 flex-col bg-panel">
-      <div className="flex h-9 shrink-0 items-end gap-0.5 overflow-x-auto border-b border-hair bg-paper px-1">
+      <div className="flex h-9 shrink-0 items-end gap-0.5 border-b border-hair bg-paper pr-1">
+        <TabStrip active={activeId} count={openIds.length}>
         {openIds.map((id) => {
           const c = chats[id]
           const running = summaries.find((s) => s.id === id)?.running || !!c?.turns.some((t) => t.status === 'running')
@@ -50,17 +53,21 @@ export function ChatPanel() {
                 'group flex h-8 max-w-[180px] cursor-pointer items-center gap-1.5 rounded-t-md border border-b-0 px-2.5 text-xs',
                 id === activeId ? 'border-hair bg-panel text-ink' : 'border-transparent text-ink-3 hover:bg-black/5',
               )}
+              data-active-tab={id === activeId || undefined}
+              title={c?.title}
               onClick={() => { setHistory(false); setLibrary(false); void openChat(id) }}
             >
               {running ? <Loader2 size={12} className="shrink-0 animate-spin text-violet-600" /> : <MessageSquare size={12} className="shrink-0" />}
               <span className="truncate">{c?.title ?? '…'}</span>
-              <button className="ml-0.5 hidden shrink-0 text-ink-3 hover:text-ink group-hover:block" onClick={(e) => { e.stopPropagation(); closeChat(id) }}><X size={12} /></button>
+              {/* Its space is kept while hidden: showing it on hover mustn't shift the tabs. */}
+              <button className={clsx('ml-0.5 shrink-0 text-ink-3 hover:text-ink group-hover:visible', id === activeId ? 'visible' : 'invisible')} title="Close" onClick={(e) => { e.stopPropagation(); closeChat(id) }}><X size={12} /></button>
             </div>
           )
         })}
-        <button className="icon-btn mb-1" title="New chat" onClick={() => { setHistory(false); void newChat() }}><Plus size={15} /></button>
+        <button className="icon-btn mb-1 shrink-0" title="New chat" onClick={() => { setHistory(false); void newChat() }}><Plus size={15} /></button>
+        </TabStrip>
         <button
-          className={clsx('icon-btn mb-1 ml-auto', library && 'bg-black/10 text-ink')}
+          className={clsx('icon-btn mb-1 shrink-0', library && 'bg-black/10 text-ink')}
           title={library ? 'Back to the conversation' : 'Claude conversations on this computer — search Cowork, Claude Code and desktop sessions'}
           aria-pressed={library}
           onClick={() => { setHistory(false); setLibrary(!library) }}
@@ -68,7 +75,7 @@ export function ChatPanel() {
           <Library size={15} />
         </button>
         <button
-          className={clsx('icon-btn mb-1', history && 'bg-black/10 text-ink')}
+          className={clsx('icon-btn mb-1 shrink-0', history && 'bg-black/10 text-ink')}
           title={history ? 'Back to the conversation' : 'Chat history — every chat in this project'}
           aria-pressed={history}
           onClick={() => {
@@ -193,6 +200,8 @@ function HistoryPanel({ onDone }: { onDone(): void }) {
 
 function ChatBody({ chat }: { chat: Chat }) {
   const drafts = useChat((s) => s.drafts)
+  // Claude Code missing or signed out: how to set it up, instead of a message box that would fail.
+  const block = useAgentBlock(chat)
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
   const last = chat.turns[chat.turns.length - 1]
@@ -218,7 +227,7 @@ function ChatBody({ chat }: { chat: Chat }) {
         <ChatNoteBadges chat={chat} scroller={scroller} />
       </div>
       <ChatQuoteNotes chat={chat} scroller={scroller} />
-      <Composer key={chat.id} chat={chat} />
+      {block ? <AgentSetupCard chat={chat} block={block} /> : <Composer key={chat.id} chat={chat} />}
     </>
   )
 }

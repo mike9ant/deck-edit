@@ -9,6 +9,7 @@ import { useAgent } from '../store/agentStore'
 import { useApp } from '../store/appStore'
 import { buildTurnContext } from './turnContext'
 import { chatPosture } from './posture'
+import { BLOCK_TOAST, agentBlockFor } from './AgentSetup'
 
 /** Is the active chat's agent working (a new message can't go into that chat yet)? Other chats may run alongside. */
 export const agentBusy = () => chatIsRunning(useChat.getState(), useChat.getState().activeId)
@@ -18,6 +19,11 @@ export async function sendToAgent(text: string): Promise<boolean> {
   if (!chats.pid) return false
   if (agentBusy()) {
     useApp.getState().toast('The agent in this chat is working — try again when its turn ends, or switch to another chat tab.')
+    return false
+  }
+  const block = agentBlockFor(chats.activeId ? chats.chats[chats.activeId] : null)
+  if (block) {
+    useApp.getState().toast(BLOCK_TOAST[block.kind])
     return false
   }
   const id = chats.activeId ?? (await chats.newChat())

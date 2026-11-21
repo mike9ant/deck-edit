@@ -43,6 +43,29 @@ describe('auto-linking plain mentions', () => {
     expect(autoLink('Deck slide 5', refs)).toBe('Deck slide 5')
   })
 
+  it('reads dashes, middle dots and parentheses between name and slide', () => {
+    expect(autoLink('report.pdf — page 3', refs)).toBe('[report.pdf — page 3](<report.pdf#page=3>)')
+    expect(autoLink('Q3 Plan.pptx · slide 2', refs)).toBe('[Q3 Plan.pptx · slide 2](<Q3 Plan.pptx#slide=2>)')
+    expect(autoLink('see Q3 Plan (slide 2) for it', refs)).toBe('see [Q3 Plan (slide 2)](<Q3 Plan.pptx#slide=2>) for it')
+  })
+
+  it('links "same deck" to the deck named last', () => {
+    const table = [
+      '| File | Source |',
+      '| a.png | docs/../Q3 Plan.pptx — slide 12 |',
+      '| b.png | same deck, slide 13 |',
+      '| c.png | Second Deck slide 10 |',
+      '| d.png | that deck — slide 4 |',
+    ].join('\n')
+    const out = autoLink(table, refs)
+    expect(out).toContain('[same deck, slide 13](<Q3 Plan.pptx#slide=13>)')
+    expect(out).toContain('[that deck — slide 4](<second-deck.pptx#slide=4>)')
+    // After a link the agent wrote itself.
+    expect(autoLink('[Q3 Plan slide 2](<Q3 Plan.pptx#slide=2>), and the same deck’s slide 5', refs)).toBe('[Q3 Plan slide 2](<Q3 Plan.pptx#slide=2>), and the same deck’s slide 5')
+    expect(autoLink('[Q3 Plan slide 2](<Q3 Plan.pptx#slide=2>); the same deck, slide 5', refs)).toBe('[Q3 Plan slide 2](<Q3 Plan.pptx#slide=2>); [the same deck, slide 5](<Q3 Plan.pptx#slide=5>)')
+    expect(autoLink('the same deck, slide 5', refs)).toBe('the same deck, slide 5') // no deck named before
+  })
+
   it('leaves bare locations, links, code and URLs alone', () => {
     expect(autoLink('I changed slide 5 and slide 6.', refs)).toBe('I changed slide 5 and slide 6.')
     const linked = '[Q3 Plan slide 2](<Q3 Plan.pptx#slide=2>)'

@@ -8,7 +8,6 @@
 import { useMemo } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { FileText } from 'lucide-react'
 import { useApp } from '../store/appStore'
 import { filePaths, locationLabel, parseLocation, useReveal } from '../store/revealStore'
 import { autoLink, fileRefs } from './autoLink'
@@ -22,7 +21,7 @@ function ChatLink({ href, children }: { href?: string; children?: React.ReactNod
   return (
     <a
       href={href}
-      className="inline-flex items-baseline gap-0.5 rounded-sm font-medium text-accent no-underline hover:underline"
+      className="font-medium text-accent underline decoration-accent/50 underline-offset-2 hover:decoration-accent"
       title={`Open ${locationLabel(loc)}`}
       data-location={href}
       onClick={(e) => {
@@ -30,7 +29,6 @@ function ChatLink({ href, children }: { href?: string; children?: React.ReactNod
         useReveal.getState().goTo(loc)
       }}
     >
-      <FileText size={11} className="relative top-[1px] shrink-0 self-center" />
       {children}
     </a>
   )
