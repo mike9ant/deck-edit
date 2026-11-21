@@ -49,7 +49,7 @@ export const api = {
   projects: () => json<Project[]>('GET', '/projects'),
   createProject: (folder: string, name?: string, createFolder = false) =>
     json<Project>('POST', '/projects', { folder, name, createFolder }),
-  updateProject: (id: string, body: { name?: string; touch?: boolean }) => json<Project>('PATCH', `/projects/${id}`, body),
+  updateProject: (id: string, body: { name?: string; touch?: boolean; editing?: 'on' | 'off' }) => json<Project>('PATCH', `/projects/${id}`, body),
   deleteProject: (id: string) => json('DELETE', `/projects/${id}`),
   pickFolder: () => json<{ path: string | null }>('POST', '/pick-folder'),
   /** The system clipboard's formatted text (HTML; RTF converted) and plain text — for ⌥⇧⌘V. */

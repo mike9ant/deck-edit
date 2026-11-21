@@ -5,7 +5,7 @@
  * After a turn, the files it changed are listed with a one-click Revert.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { ChatMarkdown } from './chatLinks'
 import { AgentSetupCard, useAgentBlock } from './AgentSetup'
 import { TabStrip } from '../components/TabStrip'
@@ -334,6 +334,11 @@ function ChatNoteBadges({ chat, scroller }: { chat: Chat; scroller: RefObject<HT
   useEffect(() => {
     const el = scroller.current
     if (!el) return
+    // No notes on this chat: nothing to place — and no watching every streamed token and scroll.
+    if (!notesRef.current.length) {
+      setBadges([])
+      return
+    }
     let frame = 0
     let last = ''
     const place = () => {
@@ -429,7 +434,13 @@ function contextSummary(t: Turn) {
   return bits.join(' · ')
 }
 
-function TurnView({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; draft?: string; isLast: boolean }) {
+/**
+ * One turn. Memoized: while the agent streams, only the turn being written re-renders (not every
+ * earlier message's Markdown on every token). The chat object counts only through its turns.
+ */
+const TurnView = memo(TurnViewInner, (a, b) => a.turn === b.turn && a.draft === b.draft && a.isLast === b.isLast && a.chat.id === b.chat.id && a.chat.turns === b.chat.turns)
+
+function TurnViewInner({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; draft?: string; isLast: boolean }) {
   const status = useChat((s) => s.statuses[turn.id])
   const [showSummary, setShowSummary] = useState(false)
   const { revert, unrevert, answer } = useChat()
@@ -448,8 +459,10 @@ function TurnView({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; draft
   // A finished plan-mode turn offers to carry the plan out (the plan is the final message).
   const canImplement = isLast && turn.mode === 'plan' && turn.status === 'done' && !chat.turns.some((t) => t.status === 'running')
   const implement = async () => {
-    const lastActing = [...chat.turns].reverse().find((t) => t.mode && t.mode !== 'plan')?.mode
-    const p: Posture = { ...chatPosture(chat, { auth: settingsAuth }), mode: lastActing ?? 'acceptEdits' }
+    // The chat as it is now (this view is memoized: its `chat` may predate a model / effort change).
+    const now = useChat.getState().chats[chat.id] ?? chat
+    const lastActing = [...now.turns].reverse().find((t) => t.mode && t.mode !== 'plan')?.mode
+    const p: Posture = { ...chatPosture(now, { auth: settingsAuth }), mode: lastActing ?? 'acceptEdits' }
     await useChat.getState().send(chat.id, 'Implement the plan above.', await buildTurnContext(true), p)
   }
 
@@ -612,6 +625,31 @@ const fmtTokens = (n: number) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)
 
 /** Tokens for every turn; dollars only when the turn was billed to the API key —
  *  on a Claude subscription the CLI's dollar figure is notional, so it's not shown. */
+/** "99% cached" — never 100% unless all of it was, never 0% if any was. */
+function cachedShare(cached: number, input: number): string {
+  if (!input) return ''
+  const pct = Math.round((cached / input) * 100)
+  const shown = pct === 100 && cached < input ? 99 : pct === 0 && cached > 0 ? '<1' : pct
+  return `${shown}% cached`
+}
+
+/**
+ * The usage line, short: the conversation's size, how much of the input came from the prompt cache
+ * (what drives cost and speed), and the output. The input total is shown only when it differs from
+ * the size — several model calls, each re-sending the conversation. Exact counts are in the tooltip.
+ */
+function usageSummary(u: NonNullable<Turn['usage']>, split: boolean): string {
+  const cached = split ? u.cacheRead! : u.cached
+  const many = !!u.calls && u.calls > 1
+  const parts = [
+    u.context ? `${fmtTokens(u.context)} context` : '',
+    !u.context || many ? `${fmtTokens(u.input)} in${many ? ` over ${u.calls} calls` : ''}` : '',
+    cachedShare(cached, u.input),
+    `${fmtTokens(u.output)} out`,
+  ]
+  return parts.filter(Boolean).join(' · ')
+}
+
 function UsageLine({ turn }: { turn: Turn }) {
   const u = turn.usage
   const billed = turn.auth === 'key' && turn.costUsd != null && turn.costUsd > 0
@@ -639,9 +677,7 @@ function UsageLine({ turn }: { turn: Turn }) {
   return (
     <div className="mt-1 text-right text-[10px] text-ink-3" title={title}>
       {startedCold && <span className="mr-1 inline-flex items-center gap-0.5 text-sky-700"><Snowflake size={10} /> cold start ·</span>}
-      {u && (split
-        ? `${u.context ? `${fmtTokens(u.context)} context · ` : ''}${fmtTokens(u.input)} in${u.calls && u.calls > 1 ? ` over ${u.calls} calls` : ''} (${fmtTokens(u.cacheRead!)} cache read${u.cacheWrite ? ` · ${fmtTokens(u.cacheWrite)} written` : ''}) · ${fmtTokens(u.output)} out`
-        : `${fmtTokens(u.input)} in${u.cached ? ` (${fmtTokens(u.cached)} cached)` : ''} · ${fmtTokens(u.output)} out`)}
+      {u && usageSummary(u, split)}
       {billed && <span className="ml-1 font-medium text-ink-2">· ${turn.costUsd!.toFixed(3)}</span>}
     </div>
   )
@@ -790,7 +826,10 @@ function EventView({ e, resolved, onAnswer, onOpen }: { e: TurnEvent; resolved: 
 const composerDrafts = new Map<string, { text: string; images: PendingImage[] }>()
 const draftKey = (chatId: string) => `deckedit-draft-${chatId}`
 
-function Composer({ chat }: { chat: Chat }) {
+/** The message box (memoized: streamed text re-renders the conversation, not this). */
+const Composer = memo(ComposerInner)
+
+function ComposerInner({ chat }: { chat: Chat }) {
   const { send, stop, update, setMode } = useChat()
   const runningModes = useChat((s) => s.runningModes)
   const { settings, models, update: updateDefaults } = useAgent()

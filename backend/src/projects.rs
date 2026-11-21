@@ -21,6 +21,10 @@ pub struct Project {
     pub created_at: String,
     #[serde(default)]
     pub last_opened_at: Option<String>,
+    /// Editing files in the app: "on" (the user said OK to the auto-save notice), "off" (they
+    /// chose read-only — notes for the agent still work), or not asked yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editing: Option<String>,
 }
 
 /// The project list. Another Deck Edit may share the data folder (the desktop app and the browser
@@ -82,6 +86,7 @@ impl ProjectStore {
             folder,
             created_at: chrono::Utc::now().to_rfc3339(),
             last_opened_at: None,
+            editing: None,
         };
         let mut all = self.fresh();
         all.push(project.clone());
@@ -184,6 +189,8 @@ struct UpdateBody {
     name: Option<String>,
     #[serde(default)]
     touch: bool,
+    /// "on" / "off" (see `Project::editing`).
+    editing: Option<String>,
 }
 
 async fn update(
@@ -197,6 +204,9 @@ async fn update(
         }
         if body.touch {
             p.last_opened_at = Some(chrono::Utc::now().to_rfc3339());
+        }
+        if let Some(e) = body.editing.as_deref().filter(|e| *e == "on" || *e == "off") {
+            p.editing = Some(e.to_string());
         }
     })?;
     Ok(Json(p))

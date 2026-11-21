@@ -11,6 +11,7 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import { PDFDocument } from 'pdf-lib'
 import { api, ApiError, CLIENT_ID } from '../api/client'
 import { useApp } from '../store/appStore'
+import { requestEdit } from '../store/editGuard'
 import { isProjectBusy } from '../deck/deckStore'
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
@@ -123,7 +124,7 @@ export const usePdfs = create<PdfStore>((set, get) => {
 
     async edit(key, description, fn) {
       const s = get().sessions[key]
-      if (!s?.bytes) return
+      if (!s?.bytes || !requestEdit()) return
       if (isProjectBusy(s.pid)) return useApp.getState().toast('The agent is working on this project — editing resumes when its turn ends.')
       try {
         const doc = await PDFDocument.load(s.bytes, { updateMetadata: false })
@@ -137,7 +138,7 @@ export const usePdfs = create<PdfStore>((set, get) => {
 
     async undo(key) {
       const s = get().sessions[key]
-      if (!s?.bytes || !s.undo.length || isProjectBusy(s.pid)) return
+      if (!s?.bytes || !s.undo.length || isProjectBusy(s.pid) || !requestEdit()) return
       const last = s.undo[s.undo.length - 1]
       await commit(key, last.bytes, s.undo.slice(0, -1), [...s.redo, { bytes: s.bytes, description: last.description }])
       patch(key, { turnBaseline: Math.min(s.turnBaseline, s.undo.length - 1) })
@@ -145,7 +146,7 @@ export const usePdfs = create<PdfStore>((set, get) => {
 
     async redo(key) {
       const s = get().sessions[key]
-      if (!s?.bytes || !s.redo.length || isProjectBusy(s.pid)) return
+      if (!s?.bytes || !s.redo.length || isProjectBusy(s.pid) || !requestEdit()) return
       const last = s.redo[s.redo.length - 1]
       await commit(key, last.bytes, [...s.undo, { bytes: s.bytes, description: last.description }], s.redo.slice(0, -1))
     },

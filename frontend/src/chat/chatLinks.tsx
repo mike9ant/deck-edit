@@ -5,7 +5,7 @@
  * (autoLink.ts).
  */
 
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useApp } from '../store/appStore'
@@ -36,10 +36,10 @@ function ChatLink({ href, children }: { href?: string; children?: React.ReactNod
 
 export const chatMarkdownComponents: Components = { a: ChatLink }
 
-/** A chat message's Markdown, with project locations as links. */
-export function ChatMarkdown({ text }: { text: string }) {
+/** A chat message's Markdown, with project locations as links (memoized by its text). */
+export const ChatMarkdown = memo(function ChatMarkdown({ text }: { text: string }) {
   const tree = useApp((s) => s.tree)
   const refs = useMemo(() => fileRefs([...filePaths(tree)]), [tree])
   const linked = useMemo(() => autoLink(text, refs), [text, refs])
   return <ReactMarkdown remarkPlugins={[remarkGfm]} components={chatMarkdownComponents}>{linked}</ReactMarkdown>
-}
+})

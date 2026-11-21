@@ -20,6 +20,8 @@ import { Splitter } from '../components/Splitter'
 import { useInnerWidth } from '../components/useInnerWidth'
 import { useApp } from '../store/appStore'
 import { useReveal } from '../store/revealStore'
+import { useEditMode } from '../store/editGuard'
+import { EditDisabledChip } from '../components/EditNotice'
 import { useChat } from '../store/chatStore'
 import { api } from '../api/client'
 
@@ -42,6 +44,7 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   const [dismissedAt, setDismissedAt] = useState(0)
   const actions = useRef<SlideActions>({ addTextBox() {}, align() {}, arrange() {}, setFont() {}, setSize() {}, stepSize() {}, setColor() {}, holdSelection() {} })
   const [fmt, setFmt] = useState<FormatState | null>(null)
+  const editOff = useEditMode() === 'off'
 
   useEffect(() => {
     void open(pid, path)
@@ -97,14 +100,24 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col" onKeyDown={onKeyDown}>
       <div className="toolbar-fit flex h-10 shrink-0 items-center gap-1 border-b border-hair bg-panel px-2">
-        <button className="icon-btn" title="Undo (⌘Z)" disabled={!session.undo.length} onClick={() => undo(key)}><Undo2 size={16} /></button>
-        <button className="icon-btn" title="Redo (⇧⌘Z)" disabled={!session.redo.length} onClick={() => void redo(key)}><Redo2 size={16} /></button>
-        <div className="mx-1 h-5 w-px bg-hair" />
-        <SelectToolButton active={!noteMode} onSelect={() => setNoteMode(false)} />
-        <button className="tool-btn" onClick={() => { setNoteMode(false); actions.current.addTextBox() }} title="Add a text box"><Type size={15} /> <span className="tb-label">Text</span></button>
-        {fmt && !noteMode && <FormatTools fmt={fmt} pres={pres} version={session.version} actions={actions} />}
-        {session.selection.length >= 1 && <ArrangeTools onArrange={(o) => actions.current.arrange(o)} />}
-        {session.selection.length >= 2 && <AlignTools count={session.selection.length} onAlign={(k) => actions.current.align(k)} />}
+        {editOff ? (
+          <>
+            <SelectToolButton active={!noteMode} onSelect={() => setNoteMode(false)} />
+            <div className="mx-1 h-5 w-px bg-hair" />
+            <EditDisabledChip />
+          </>
+        ) : (
+          <>
+            <button className="icon-btn" title="Undo (⌘Z)" disabled={!session.undo.length} onClick={() => undo(key)}><Undo2 size={16} /></button>
+            <button className="icon-btn" title="Redo (⇧⌘Z)" disabled={!session.redo.length} onClick={() => void redo(key)}><Redo2 size={16} /></button>
+            <div className="mx-1 h-5 w-px bg-hair" />
+            <SelectToolButton active={!noteMode} onSelect={() => setNoteMode(false)} />
+            <button className="tool-btn" onClick={() => { setNoteMode(false); actions.current.addTextBox() }} title="Add a text box"><Type size={15} /> <span className="tb-label">Text</span></button>
+            {fmt && !noteMode && <FormatTools fmt={fmt} pres={pres} version={session.version} actions={actions} />}
+            {session.selection.length >= 1 && <ArrangeTools onArrange={(o) => actions.current.arrange(o)} />}
+            {session.selection.length >= 2 && <AlignTools count={session.selection.length} onAlign={(k) => actions.current.align(k)} />}
+          </>
+        )}
         <div className="ml-2 min-w-0 truncate whitespace-nowrap text-xs text-ink-3">
           Slide {session.slideIndex + 1} / {pres.slides.length}
           {session.selection.length > 0 && ` · ${session.selection.length} selected`}
@@ -141,17 +154,39 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
         <SlideRail session={session} width={railShown} />
         <Splitter width={railShown} min={120} max={420} onChange={(w) => setWidth('rail', w)} />
         <div className="flex min-w-0 flex-1 flex-col">
-          <SlideEditor
-            session={session}
-            noteMode={noteMode}
-            setNoteMode={setNoteMode}
-            showResolved={showResolved}
-            registerActions={(a) => (actions.current = a)}
-            onFormat={setFmt}
-          />
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <SlideEditor
+              session={session}
+              noteMode={noteMode}
+              setNoteMode={setNoteMode}
+              showResolved={showResolved}
+              registerActions={(a) => (actions.current = a)}
+              onFormat={setFmt}
+            />
+            <ReloadingBadge active={session.reloading} />
+          </div>
           <NotesPane session={session} />
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Over the slide while the deck reloads after a save from outside (the agent) — only when that
+ * takes more than a moment, so a quick reload doesn't flash it.
+ */
+function ReloadingBadge({ active }: { active: boolean }) {
+  const [shown, setShown] = useState(false)
+  useEffect(() => {
+    if (!active) return setShown(false)
+    const t = setTimeout(() => setShown(true), 100)
+    return () => clearTimeout(t)
+  }, [active])
+  if (!shown) return null
+  return (
+    <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-ink/80 px-3 py-1 text-xs text-white shadow-lg" data-deck-reloading="">
+      <Loader2 size={12} className="animate-spin" /> Updating the deck with the latest save…
     </div>
   )
 }

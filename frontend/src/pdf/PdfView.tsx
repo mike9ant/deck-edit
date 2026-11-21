@@ -20,6 +20,8 @@ import { DrawLayer, NoteToolButton, SelectToolButton, pinFor, useEscapeEndsNoteM
 import { notesForSlide, useNotes } from '../store/notesStore'
 import { useApp } from '../store/appStore'
 import { useReveal } from '../store/revealStore'
+import { useEditMode } from '../store/editGuard'
+import { EditDisabledChip } from '../components/EditNotice'
 import { useChat } from '../store/chatStore'
 import { api } from '../api/client'
 import { prepareImage } from '../deck/images'
@@ -170,6 +172,7 @@ const PageText = memo(function PageText({ doc, index, width, version, onReady }:
 })
 
 export function PdfView({ pid, path }: { pid: string; path: string }) {
+  const editOff = useEditMode() === 'off'
   const key = pdfKey(pid, path)
   const session = usePdfs((s) => s.sessions[key])
   const { open, undo, redo } = usePdfs()
@@ -213,11 +216,16 @@ export function PdfView({ pid, path }: { pid: string; path: string }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col" onKeyDown={onKeyDown}>
       <div className="flex h-10 shrink-0 items-center gap-1 border-b border-hair bg-panel px-2">
-        <button className="icon-btn" title="Undo (⌘Z)" disabled={!session.undo.length || busy} onClick={() => void undo(key)}><Undo2 size={16} /></button>
-        <button className="icon-btn" title="Redo (⇧⌘Z)" disabled={!session.redo.length || busy} onClick={() => void redo(key)}><Redo2 size={16} /></button>
-        <div className="mx-1 h-5 w-px bg-hair" />
+        {!editOff && (
+          <>
+            <button className="icon-btn" title="Undo (⌘Z)" disabled={!session.undo.length || busy} onClick={() => void undo(key)}><Undo2 size={16} /></button>
+            <button className="icon-btn" title="Redo (⇧⌘Z)" disabled={!session.redo.length || busy} onClick={() => void redo(key)}><Redo2 size={16} /></button>
+            <div className="mx-1 h-5 w-px bg-hair" />
+          </>
+        )}
         <SelectToolButton active={!noteMode} onSelect={() => setNoteMode(false)} />
-        <div className="ml-2 text-xs text-ink-3">Page {session.pageIndex + 1} / {session.doc!.numPages} · drop an image on the page to place it</div>
+        {editOff && <><div className="mx-1 h-5 w-px bg-hair" /><EditDisabledChip /></>}
+        <div className="ml-2 text-xs text-ink-3">Page {session.pageIndex + 1} / {session.doc!.numPages}{editOff ? '' : ' · drop an image on the page to place it'}</div>
         <div className="ml-auto flex items-center gap-2 text-xs text-ink-3">
           <NoteToolButton active={noteMode} onToggle={() => setNoteMode(!noteMode)} />
           <button className="icon-btn" onClick={() => setShowResolved(!showResolved)} title={showResolved ? 'Hide resolved notes' : 'Show resolved notes'}>{showResolved ? <Eye size={15} /> : <EyeOff size={15} />}</button>
@@ -237,6 +245,7 @@ export function PdfView({ pid, path }: { pid: string; path: string }) {
 }
 
 function PageRail({ session, width, busy }: { session: PdfSession; width: number; busy: boolean }) {
+  const editOff = useEditMode() === 'off'
   const { setPage, edit } = usePdfs()
   const [dragFrom, setDragFrom] = useState<number | null>(null)
   const [dragOver, setDragOver] = useState<number | null>(null)
@@ -264,7 +273,7 @@ function PageRail({ session, width, busy }: { session: PdfSession; width: number
               <div className={clsx('mx-1 h-1 rounded', dragOver === i && 'bg-accent')} />
               <div
                 className="flex cursor-pointer items-start gap-1.5 py-0.5"
-                draggable={!busy}
+                draggable={!busy && !editOff}
                 onDragStart={() => setDragFrom(i)}
                 onDragOver={(e) => { if (dragFrom === null) return; e.preventDefault(); const r = e.currentTarget.getBoundingClientRect(); setDragOver(e.clientY < r.top + r.height / 2 ? i : i + 1) }}
                 onDrop={(e) => { e.preventDefault(); if (dragFrom !== null && dragOver !== null) void move(dragFrom, dragOver); setDragFrom(null); setDragOver(null) }}
@@ -281,7 +290,7 @@ function PageRail({ session, width, busy }: { session: PdfSession; width: number
           )
         })}
       </div>
-      <div className="flex justify-center gap-1 border-t border-hair py-1">
+      {!editOff && <div className="flex justify-center gap-1 border-t border-hair py-1">
         <button className="icon-btn" disabled={busy} title="Duplicate page" onClick={() => {
           const i = session.pageIndex
           void edit(session.key, `Duplicated page ${i + 1}`, async (doc) => { const [p] = await doc.copyPages(doc, [i]); doc.insertPage(i + 1, p) })
@@ -290,7 +299,7 @@ function PageRail({ session, width, busy }: { session: PdfSession; width: number
           const i = session.pageIndex
           void edit(session.key, `Deleted page ${i + 1}`, (doc) => doc.removePage(i))
         }}><Trash2 size={15} /></button>
-      </div>
+      </div>}
     </div>
   )
 }

@@ -17,6 +17,7 @@ import { buildParagraphs, notesText, parseParagraphs, renderNotes, styleRange, t
 import { domPointAt, paragraphsText, readParagraphs, readParagraphsAt, watchBullets } from './textEdit'
 import { short } from './deckModel'
 import { useNotes } from '../store/notesStore'
+import { requestEdit, useEditMode } from '../store/editGuard'
 import { NotesList, QuoteNoteBox } from '../notes/TextNotes'
 import { actNowPrompt } from '../notes/NotePins'
 import { setQuoteHighlight } from '../notes/quoteHighlight'
@@ -30,6 +31,7 @@ const STYLE_KEYS: Record<string, StyleProp> = { b: 'b', i: 'i', u: 'u' }
 export function NotesPane({ session }: { session: DeckSession }) {
   const pres = session.pres!
   const slide: SlideData | undefined = pres.slides[session.slideIndex]
+  const editOff = useEditMode() === 'off'
   const [open, setOpen] = useState(() => localStorage.getItem(LS_OPEN) !== '0')
   const [height, setHeight] = useState(() => Number(localStorage.getItem(LS_HEIGHT)) || 130)
   const [text, setText] = useState('')
@@ -150,6 +152,12 @@ export function NotesPane({ session }: { session: DeckSession }) {
     // Edit menu → Undo / Redo arrives as a native history input: same as the shortcuts.
     const el = editor.current
     const onHistory = (e: InputEvent) => {
+      // Any change (typing, deleting, pasting): the first one in a project asks first, and nothing
+      // changes until editing is on.
+      if (!requestEdit()) {
+        e.preventDefault()
+        return
+      }
       if (e.inputType !== 'historyUndo' && e.inputType !== 'historyRedo') return
       e.preventDefault()
       void undoRedoRef.current(e.inputType === 'historyRedo')
@@ -260,6 +268,7 @@ export function NotesPane({ session }: { session: DeckSession }) {
   const onPaste = (e: React.ClipboardEvent) => {
     // Plain text only: pasted HTML would bring styles the notes page can't hold.
     e.preventDefault()
+    if (!requestEdit()) return
     document.execCommand('insertText', false, e.clipboardData.getData('text/plain'))
   }
 
@@ -340,7 +349,7 @@ export function NotesPane({ session }: { session: DeckSession }) {
             ref={editor}
             data-notes-editor=""
             className="h-full overflow-auto whitespace-pre-wrap break-words px-4 py-2 text-[13px] leading-relaxed text-ink outline-none"
-            contentEditable={!!slide}
+            contentEditable={!!slide && !editOff}
             suppressContentEditableWarning
             spellCheck={false}
             title="Speaker notes — ⌘B / ⌘I / ⌘U for bold, italic, underline"

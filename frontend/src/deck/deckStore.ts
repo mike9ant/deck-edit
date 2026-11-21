@@ -29,6 +29,7 @@ import {
 import { loadEmbeddedFonts } from '@diceui/pptx-core/fonts'
 import { api, ApiError, CLIENT_ID } from '../api/client'
 import { useApp } from '../store/appStore'
+import { requestEdit } from '../store/editGuard'
 import { repairPackage, uniqueShapeIds } from './packageHygiene'
 import { readSlideParts, slideIdsFromXml, slideTitle, slideXmlFromParts } from './deckModel'
 
@@ -79,6 +80,8 @@ export interface DeckSession {
   /** Stable ids of slides changed by the last external (agent/PowerPoint) save. */
   externallyChanged: string[]
   externalAt: number
+  /** Reloading after a save from outside (the agent): shown over the deck when it takes a moment. */
+  reloading: boolean
   lastSlideXml: Map<string, string>
   /** Undo index where edits made during the running agent turn begin (held, not saved); null when none. */
   heldFrom: number | null
@@ -159,6 +162,26 @@ interface ReadMemo {
 }
 const readMemos = new Map<string, ReadMemo>()
 
+/**
+ * Let the browser handle what's waiting — scrolling, resizing, painting — between the steps of a
+ * reload, so a big deck reloading doesn't freeze the rest of the app for the whole of it. When
+ * nothing waits it continues at once: `scheduler.yield()` where there is one (Chrome — made for
+ * this, and the reload resumes ahead of other background work), else a MessageChannel message (the
+ * desktop app's WebKit) — not `setTimeout`, which is clamped to 4 ms when nested and slowed to
+ * once a second while the window is hidden.
+ */
+const yieldChannel = new MessageChannel()
+const yieldWaiters: (() => void)[] = []
+yieldChannel.port1.onmessage = () => yieldWaiters.shift()?.()
+const breathe = (): Promise<void> => {
+  const scheduler = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler
+  if (scheduler?.yield) return scheduler.yield()
+  return new Promise<void>((resolve) => {
+    yieldWaiters.push(resolve)
+    yieldChannel.port2.postMessage(null)
+  })
+}
+
 /** Layouts, masters, themes, charts and diagrams: a change to any of them can change every slide. */
 function sharedParts(files: Awaited<ReturnType<typeof readPptx>>): string {
   const maps = [files.slideLayouts, files.slideLayoutRels, files.slideMasters, files.slideMasterRels, files.themes, files.themeOverrides, files.charts, files.chartRels, files.chartStyles, files.chartColors, files.diagramDrawings]
@@ -182,6 +205,7 @@ interface Parsed {
 async function parse(bytes: ArrayBuffer, key: string): Promise<Parsed> {
   const prev = readMemos.get(key)
   const files = await readPptx(bytes, { keepSourcePackage: true, reuse: prev })
+  await breathe()
   const sldIds = slideIdsFromXml(files.presentation, files.presentationRels)
   const slideXml = slideXmlFromParts(sldIds, files.slides)
   const shared = sharedParts(files)
@@ -310,13 +334,23 @@ export const useDecks = create<DeckStore>((set, get) => {
   const reloadOnce = async (key: string, external: boolean): Promise<void> => {
     const s0 = get().sessions[key]
     if (!s0) return
-    patch(key, { loading: !s0.pres })
+    patch(key, { loading: !s0.pres, reloading: !!s0.pres })
+    try {
+      await reloadAttempts(key, s0, external)
+    } finally {
+      if (get().sessions[key]?.reloading) patch(key, { reloading: false })
+    }
+  }
+
+  const reloadAttempts = async (key: string, s0: DeckSession, external: boolean): Promise<void> => {
     // A save from python-pptx/PowerPoint can be observed mid-write; retry briefly.
     let lastErr: unknown
     for (let attempt = 0; attempt < 6; attempt++) {
       try {
         const { bytes, etag } = await api.readFile(s0.pid, s0.path)
+        await breathe()
         const { pres, sldIds, slideXml, changedSlides } = await parse(bytes, key)
+        await breathe()
         if (!fontHandles.has(key)) fontHandles.set(key, loadEmbeddedFonts(pres))
         await fontHandles.get(key)!.ready
         const s = get().sessions[key]
@@ -407,7 +441,7 @@ export const useDecks = create<DeckStore>((set, get) => {
       const s: DeckSession = {
         key, pid, path, pres: null, etag: '', loading: true, error: null, version: 0, slideVersions: {},
         slideIndex: 0, selection: [], undo: [], redo: [], turnBaseline: 0, dirty: false, saving: false,
-        sldIds: new Map(), externallyChanged: [], externalAt: 0, lastSlideXml: new Map(),
+        sldIds: new Map(), externallyChanged: [], externalAt: 0, lastSlideXml: new Map(), reloading: false,
         heldFrom: null, agentChangedWhileHeld: [], savedAt: 0,
       }
       set({ sessions: { ...get().sessions, [key]: s } })
@@ -439,7 +473,7 @@ export const useDecks = create<DeckStore>((set, get) => {
 
     async apply(key, op, description, coalesceKey) {
       const s = get().sessions[key]
-      if (!s?.pres) return
+      if (!s?.pres || !requestEdit()) return
       try {
         const res = await applyEdit(s.pres, op)
         const cur = get().sessions[key]!
@@ -458,7 +492,7 @@ export const useDecks = create<DeckStore>((set, get) => {
 
     undo(key) {
       const s = get().sessions[key]
-      if (!s?.pres || !s.undo.length) return
+      if (!s?.pres || !s.undo.length || !requestEdit()) return
       const entry = s.undo[s.undo.length - 1]
       try {
         entry.undo()
@@ -482,7 +516,7 @@ export const useDecks = create<DeckStore>((set, get) => {
 
     async redo(key) {
       const s = get().sessions[key]
-      if (!s?.pres || !s.redo.length) return
+      if (!s?.pres || !s.redo.length || !requestEdit()) return
       const entry = s.redo[s.redo.length - 1]
       const redoRest = s.redo.slice(0, -1)
       await entry.redo()
@@ -491,7 +525,7 @@ export const useDecks = create<DeckStore>((set, get) => {
 
     async applyCustom(key, description, runEdit, coalesceKey, slideIds = []) {
       const s = get().sessions[key]
-      if (!s?.pres) return false
+      if (!s?.pres || !requestEdit()) return false
       try {
         const undo = await runEdit(s.pres, slideIds)
         const cur = get().sessions[key]!
@@ -506,7 +540,7 @@ export const useDecks = create<DeckStore>((set, get) => {
 
     async transaction(key, description, fn, slideIds = []) {
       const s = get().sessions[key]
-      if (!s?.pres) return
+      if (!s?.pres || !requestEdit()) return
       const pres = s.pres
       const undos: (() => void)[] = []
       const run = async (op: EditOperation) => {

@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { FolderPlus, PanelLeftOpen, Pin, Presentation, X } from 'lucide-react'
 import { TabStrip } from './components/TabStrip'
+import { EditNotice } from './components/EditNotice'
 import clsx from 'clsx'
 import { TopBar, NewProjectDialog } from './components/TopBar'
 import { FileTree } from './components/FileTree'
@@ -129,6 +130,7 @@ export default function App() {
         <Welcome hasProjects={projects.length > 0} />
       ) : null}
       <Toasts />
+      <EditNotice />
     </div>
   )
 }

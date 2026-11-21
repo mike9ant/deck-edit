@@ -23,6 +23,8 @@ import { sendToAgent } from '../chat/sendToAgent'
 import { MarkdownEditable } from './MarkdownEditable'
 import { docHistory } from './docHistory'
 import { useReveal } from '../store/revealStore'
+import { requestEdit, useEditIntercept, useEditMode } from '../store/editGuard'
+import { EditDisabledChip } from '../components/EditNotice'
 
 type MdMode = 'preview' | 'edit'
 const MD_MODE_KEY = 'deckedit-md-mode'
@@ -62,6 +64,11 @@ export function TextView({ pid, path }: { pid: string; path: string }) {
 
 function TextDoc({ pid, path, mode, tools }: { pid: string; path: string; mode: MdMode; tools?: React.ReactNode }) {
   const { doc, status, error, change, flush, current } = useTextDoc(pid, path)
+  /** Editing turned off for the project: read-only (notes on the text still work). Not asked yet:
+   *  the first attempt to change the text asks first (and doesn't land). */
+  const editMode = useEditMode()
+  const editOff = editMode === 'off'
+  const editorArea = useRef<HTMLDivElement>(null)
   const busy = useChat((s) => !!s.busyProjects[pid])
   const changed = useApp((s) => s.changed.includes(path))
   const [selection, setSelection] = useState<TextSelection | null>(null)
@@ -72,6 +79,8 @@ function TextDoc({ pid, path, mode, tools }: { pid: string; path: string; mode: 
   const revealRef = useRef<((quote: string, line?: number) => void) | null>(null)
   // One undo history and cursor for the file, shared by its views and kept while the app runs.
   const loaded = !!doc
+  // (The editor area exists once the file is loaded.)
+  useEditIntercept(editorArea, editMode !== 'on' && loaded)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const history = useMemo(() => (loaded ? docHistory(`${pid}:${path}`, current()) : undefined), [pid, path, loaded])
   // A chat link to a line of this file: select the line(s) in the shared cursor and re-open the
@@ -88,6 +97,12 @@ function TextDoc({ pid, path, mode, tools }: { pid: string; path: string; mode: 
     history.setCursor(from, to)
     setViewSeq((n) => n + 1)
   }, [pendingReveal, history, path])
+  // A change that got past the intercept (a formatting button, say) while editing isn't on: not
+  // saved — ask, and show the file as it is again.
+  const guardedChange = (text: string) => {
+    if (requestEdit()) return change(text)
+    setViewSeq((n) => n + 1)
+  }
   const reveal = (quote: string, line?: number) => {
     if (mode === 'edit') return revealRef.current?.(quote, line)
     // Formatted view: scroll the highlighted text into view.
@@ -102,6 +117,7 @@ function TextDoc({ pid, path, mode, tools }: { pid: string; path: string; mode: 
     <div className="flex min-h-0 flex-1 flex-col bg-white">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-hair bg-panel px-3">
         {tools}
+        {editOff && <EditDisabledChip />}
         <span className="truncate text-xs text-ink-3">{path}</span>
         <div className="ml-auto flex items-center gap-2 text-xs text-ink-3">
           <TextNoteTools path={path} selection={selection} onReveal={reveal} />
@@ -114,13 +130,15 @@ function TextDoc({ pid, path, mode, tools }: { pid: string; path: string; mode: 
           The agent is working — its changes appear here as it saves. You can keep editing: your typing is merged with its changes.
         </div>
       )}
-      {mode === 'edit' ? (
-        <CodeEditor key={viewSeq} path={path} doc={doc} initialText={current()} readOnly={false} onSelection={setSelection} marks={marks} revealRef={revealRef} onChange={change} onSave={() => void flush()} history={history} />
-      ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <MarkdownEditable key={viewSeq} text={current()} editable onChange={change} onSelection={setSelection} marks={marks} history={history} />
-        </div>
-      )}
+      <div ref={editorArea} className="flex min-h-0 flex-1 flex-col">
+        {mode === 'edit' ? (
+          <CodeEditor key={`${viewSeq}:${editOff}`} path={path} doc={doc} initialText={current()} readOnly={editOff} onSelection={setSelection} marks={marks} revealRef={revealRef} onChange={guardedChange} onSave={() => void flush()} history={history} />
+        ) : (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <MarkdownEditable key={`${viewSeq}:${editOff}`} text={current()} editable={!editOff} onChange={guardedChange} onSelection={setSelection} marks={marks} history={history} />
+          </div>
+        )}
+      </div>
     </div>
   )
 }

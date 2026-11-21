@@ -15,6 +15,7 @@ import { getClipboard, setClipboard, type PortableSlide } from './clipboard'
 import { slideTitle } from './deckModel'
 import { useNotes } from '../store/notesStore'
 import { useApp } from '../store/appStore'
+import { requestEdit, useEditMode } from '../store/editGuard'
 import { useInnerWidth } from '../components/useInnerWidth'
 
 const Thumb = memo(function Thumb(p: { deckKey: string; pres: PresentationData; slide: SlideData; version: number; width: number }) {
@@ -23,6 +24,7 @@ const Thumb = memo(function Thumb(p: { deckKey: string; pres: PresentationData; 
 
 export function SlideRail({ session, width }: { session: DeckSession; width: number }) {
   const { apply, setSlide } = useDecks()
+  const editOff = useEditMode() === 'off'
   const pres = session.pres!
   const key = session.key
   const [picked, setPicked] = useState<string[]>([])
@@ -193,6 +195,11 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
       if (!d) return
       if (!d.active) {
         if (Math.hypot(ev.clientX - d.x, ev.clientY - d.y) < 5) return
+        // Reordering changes the file: only with editing on (else the press stays a click).
+        if (!requestEdit()) {
+          drag.current = null
+          return
+        }
         d.active = true
         dragIds.current = d.ids
         document.body.style.cursor = 'grabbing'
@@ -301,10 +308,16 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
         </div>
       )}
       <div className="flex items-center justify-center gap-0.5 border-t border-hair px-1 py-1">
-        <button className="icon-btn" title="Duplicate (⌘D)" onClick={() => void duplicate()}><CopyPlus size={15} /></button>
-        <button className="icon-btn" title="Copy slides (⌘C) — paste into this deck or another one" onClick={() => void copy()}><Copy size={15} /></button>
-        <button className="icon-btn" title="Paste slides after the current one (⌘V) — also from another deck" disabled={getClipboard()?.kind !== 'slides'} onClick={() => void paste()}><ClipboardPaste size={15} /></button>
-        <button className="icon-btn" title="Delete (⌫)" onClick={() => void remove()}><Trash2 size={15} /></button>
+        {editOff ? (
+          <button className="icon-btn" title="Copy slides (⌘C) — paste into another deck" onClick={() => void copy()}><Copy size={15} /></button>
+        ) : (
+          <>
+            <button className="icon-btn" title="Duplicate (⌘D)" onClick={() => void duplicate()}><CopyPlus size={15} /></button>
+            <button className="icon-btn" title="Copy slides (⌘C) — paste into this deck or another one" onClick={() => void copy()}><Copy size={15} /></button>
+            <button className="icon-btn" title="Paste slides after the current one (⌘V) — also from another deck" disabled={getClipboard()?.kind !== 'slides'} onClick={() => void paste()}><ClipboardPaste size={15} /></button>
+            <button className="icon-btn" title="Delete (⌫)" onClick={() => void remove()}><Trash2 size={15} /></button>
+          </>
+        )}
         {picked.length > 1 && <span className="ml-1 text-[11px] text-ink-3">{picked.length} selected</span>}
       </div>
     </div>

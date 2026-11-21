@@ -32,6 +32,7 @@ import { insertionStart, insertPlainText, normalizePasted, parseClipboardHtml, s
 import type { Stroke } from '../api/types'
 import { notesForSlide, useNotes } from '../store/notesStore'
 import { useApp } from '../store/appStore'
+import { requestEdit, useEditMode } from '../store/editGuard'
 import { api } from '../api/client'
 
 type Rect = { x: number; y: number; w: number; h: number }
@@ -104,6 +105,8 @@ const label = (n: SlideNode) => n.name || `${n.nodeType} ${n.id}`
 
 export function SlideEditor({ session, noteMode, setNoteMode, showResolved, registerActions, onFormat }: Props) {
   const { apply, setSelection, saveNow } = useDecks()
+  /** Editing turned off for the project: shapes can be selected (and noted), not changed. */
+  const editOff = useEditMode() === 'off'
   const pres = session.pres!
   const slide: SlideData = pres.slides[session.slideIndex]
   const key = session.key
@@ -117,6 +120,8 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
   const [preview, setPreview] = useState<{ rects: Record<string, Rect>; guides: { x?: number; y?: number }[] } | null>(null)
   const [marquee, setMarquee] = useState<Rect | null>(null)
   const [editing, setEditing] = useState<{ nodeId: string; container: HTMLElement; before: string } | null>(null)
+  /** Editing off: a text box opened for selecting and copying its text (not for changing it). */
+  const [reading, setReading] = useState<{ container: HTMLElement; restore: string } | null>(null)
   const [draft, setDraft] = useState<NoteDraft | null>(null)
   const [dropHint, setDropHint] = useState(false)
 
@@ -168,11 +173,13 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     setDraft(null)
   }, [noteMode, noteTool])
 
-  // Leave text editing / drafts when the slide changes underneath.
+  // Leave text editing / reading / drafts when the slide changes underneath.
   useEffect(() => {
     setEditing(null)
     setDraft(null)
-  }, [slide.id, session.version])
+    stopReading()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slide.id, session.version, editOff])
 
   /**
    * The shape a click at client (x, y) means (see hitTest.ts): the topmost shape that draws
@@ -207,6 +214,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
 
   // ── text editing ────────────────────────────────────────────────────────
   const startEditing = (nodeId: string, at?: { x: number; y: number }) => {
+    if (!requestEdit()) return
     const n = nodeById(nodeId)
     const el = nodeEl(nodeId)
     if (!n || !el || n.nodeType !== 'shape') return
@@ -215,6 +223,47 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     setSelection(key, [nodeId])
     beginEditing(container, at)
     setEditing({ nodeId, container, before: nodeText(n) })
+  }
+
+  // ── reading text (editing off): select and copy, nothing more ──────────
+  const startReading = (nodeId: string, at?: { x: number; y: number }) => {
+    const el = nodeEl(nodeId)
+    const container = el && textContainer(el)
+    if (!container || !container.textContent?.trim()) return
+    if (reading?.container !== container) {
+      stopReading()
+      const restore = container.getAttribute('style') ?? ''
+      // The stage itself can't be selected (user-select: none): this box's text can, for now.
+      container.style.userSelect = 'text'
+      container.style.setProperty('-webkit-user-select', 'text')
+      container.style.cursor = 'text'
+      container.style.pointerEvents = 'auto'
+      setReading({ container, restore })
+    }
+    setSelection(key, [nodeId])
+    // Select the word under the double-click (or all of a box opened with Enter).
+    const sel = window.getSelection()
+    if (!sel) return
+    const range = at ? document.caretRangeFromPoint?.(at.x, at.y) : null
+    sel.removeAllRanges()
+    if (range && container.contains(range.startContainer)) {
+      sel.addRange(range)
+      sel.modify?.('move', 'backward', 'word')
+      sel.modify?.('extend', 'forward', 'word')
+    } else {
+      const all = document.createRange()
+      all.selectNodeContents(container)
+      sel.addRange(all)
+    }
+  }
+  function stopReading() {
+    setReading((r) => {
+      if (r) {
+        r.container.setAttribute('style', r.restore)
+        if (window.getSelection()?.containsNode(r.container, true)) window.getSelection()?.removeAllRanges()
+      }
+      return null
+    })
   }
 
   // ── bold / italic / underline while editing text ────────────────────────
@@ -566,6 +615,12 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     const onMove = (ev: PointerEvent) => {
       const rx = (ev.clientX - start.x) / scale, ry = (ev.clientY - start.y) / scale
       if (!moved && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 3) return
+      // A press that starts to drag changes the file: only with editing on (else it stays a click).
+      if (!moved && !requestEdit()) {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        return
+      }
       moved = true
       dx = rx; dy = ry
       const guides: { x?: number; y?: number }[] = []
@@ -604,6 +659,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     const n = nodeById(selection[0])
     if (!n) return
     e.stopPropagation()
+    if (!requestEdit()) return
     const start = { x: e.clientX, y: e.clientY }
     const r0 = rectOf(n)
     const theta = n.rotation || 0
@@ -676,6 +732,9 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     stageRef.current?.focus({ preventScroll: true })
     if (editing && editing.container.contains(e.target as Node)) return
     if (editing) void commitEditing()
+    // Selecting text in the box opened for reading: the browser's own selection.
+    if (reading && reading.container.contains(e.target as Node)) return
+    if (reading) stopReading()
     if (noteMode) {
       e.preventDefault() // no default mousedown focus: it would pull focus back from the note box that opens
       const p = toSlide(e.clientX, e.clientY)
@@ -702,7 +761,10 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
   const onDoubleClick = (e: React.MouseEvent) => {
     if (noteMode || editing) return
     const id = pickAt(e.clientX, e.clientY, { keepSelected: true })
-    if (id) startEditing(id, { x: e.clientX, y: e.clientY })
+    if (!id) return
+    // Editing off: open the text for selecting and copying instead.
+    if (editOff) startReading(id, { x: e.clientX, y: e.clientY })
+    else startEditing(id, { x: e.clientX, y: e.clientY })
   }
 
   // ── clipboard / keyboard ────────────────────────────────────────────────
@@ -769,6 +831,20 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
       return
     }
     const mod = e.metaKey || e.ctrlKey
+    if (reading) {
+      const k = e.key.toLowerCase()
+      if (e.key === 'Escape') { e.preventDefault(); stopReading(); return }
+      // ⌘C copies the selected text (the browser's own copy); ⌘A selects all of the box's text.
+      if (mod && k === 'c' && !window.getSelection()?.isCollapsed) return
+      if (mod && k === 'a') {
+        e.preventDefault()
+        const all = document.createRange()
+        all.selectNodeContents(reading.container)
+        window.getSelection()?.removeAllRanges()
+        window.getSelection()?.addRange(all)
+        return
+      }
+    }
     if (e.key === 'Escape') { setSelection(key, []); setNoteMode(false); setDraft(null); return }
     if ((e.key === 'Delete' || e.key === 'Backspace') && selection.length) { e.preventDefault(); void deleteSelection(); return }
     if (mod && e.key === 'c' && selection.length) { e.preventDefault(); void copySelection(); return }
@@ -781,7 +857,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
       return
     }
     if (mod && e.key === 'a') { e.preventDefault(); setSelection(key, slide.nodes.map((n) => n.id)); return }
-    if (e.key === 'Enter' && selection.length === 1) { e.preventDefault(); startEditing(selection[0]); return }
+    if (e.key === 'Enter' && selection.length === 1) { e.preventDefault(); if (editOff) startReading(selection[0]); else startEditing(selection[0]); return }
     // ⌘↑ / ⌘↓: one step up / down the stack; with ⇧: to the front / back (as in Google Slides).
     if (mod && selection.length && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
       e.preventDefault()
@@ -983,7 +1059,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
               className={`absolute border ${editing?.nodeId === id ? 'border-dashed border-accent/70' : 'border-accent'}`}
               style={{ left: r.x * scale, top: r.y * scale, width: r.w * scale, height: r.h * scale, rotate: `${rotation}deg` }}
             >
-              {selection.length === 1 && !editing &&
+              {selection.length === 1 && !editing && !editOff &&
                 HANDLES.map((h) => (
                   <div
                     key={h}

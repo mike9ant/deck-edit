@@ -4,6 +4,8 @@ export interface Project {
   folder: string
   createdAt: string
   lastOpenedAt?: string | null
+  /** Editing files in the app: 'on', 'off' (read-only), or not asked yet. */
+  editing?: 'on' | 'off'
 }
 
 export interface TreeNode {
