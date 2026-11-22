@@ -21,6 +21,18 @@ for the AI is pinned on slide 7.* Open `sample-project/` as a project to try it 
 └──────────────┴─────────────┴────────────────────────────────────────┴───────────┘
 ```
 
+## Download
+
+**Deck Edit 0.2.1 for macOS** (universal — Apple Silicon and Intel — signed and notarized):
+[Deck-Edit-0.2.1.dmg](https://github.com/mike9ant/deck-edit/releases/download/v0.2.1/Deck-Edit-0.2.1.dmg)
+· [all releases](https://github.com/mike9ant/deck-edit/releases). Open it and drag Deck Edit to
+Applications. The agent runs on [Claude Code](https://claude.com/claude-code); the app shows how to
+set it up if it isn't installed yet.
+
+To build it yourself or run it in a browser, see [Running](#running). There's no prebuilt app for
+Windows or Linux yet — clone the repo and ask Claude (Claude Code, in the repo folder) to build it for
+your platform.
+
 ## What you can do
 
 - **Projects** — a project is a folder + its agent chats. Pick one in the top bar.
@@ -47,60 +59,6 @@ for the AI is pinned on slide 7.* Open `sample-project/` as a project to try it 
   - **copy/paste slides between decks**: ⌘C in one deck's slide list, ⌘V in another's — each slide is
     re-created on the target's matching layout with its shapes and images ("use destination theme")
   - undo/redo (⌘Z / ⇧⌘Z) for all of it
-- **PDF** — page rail, reorder/duplicate/delete pages, drop an image onto a page, undo/redo. The page's
-  text is selectable: the bar over a selection copies it or puts a **note for the agent** on it (the
-  agent gets the page and the quoted text, which stays highlighted).
-- **Text and Markdown** — editable (CodeMirror, with syntax highlighting for Markdown, JSON,
-  Python, JS/TS, HTML, CSS, XML, YAML). Edits autosave shortly after you stop typing (⌘S saves
-  now), etag-guarded like decks; you can keep typing while the agent works (your typing is merged
-  with its changes), and your saved edits are reported to the agent with your next message.
-  - Markdown has a **Formatted / Markdown** switch; the last choice is remembered for the next file.
-    In **Formatted**, click any paragraph, heading, list item or table cell and type (Enter or
-    clicking away commits, Esc cancels, ↑/↓ at a block's first/last line moves to the previous/next
-    block — in a table the cell above/below — and ←/→ at a cell's start/end to the previous/next
-    cell, ⌘Z/⇧⌘Z undo/redo). In a list, Enter at the end of an item adds one below (same level,
-    next number / empty task box) and Backspace in an empty item removes it; in a table, Enter at
-    the end of a row's last cell adds a blank row below and Backspace in the empty first cell of
-    an empty row removes it. Each writes just that line of the file. Blocks turn editable only when clicked, so dragging across
-    paragraphs still selects normally — the bar over such a selection has **Copy** (text) and
-    **Copy Markdown** (the source of the blocks it touches). **Bold / italic** toggle with ⌘B / ⌘I
-    or the small bar over a selection (`**`/`*` added around it; with the caret in bold/italic text,
-    its markers are removed); other formatting is changed in the Markdown tab. Each change is
-    written back into exactly the characters it came from, so the rest of the file is never
-    reformatted, and a toggle that Markdown wouldn't read as formatting is refused rather than
-    leaving stray `*` (`viewers/mdSourceEdit.ts`). Inline
-    code and code blocks are editable in place too; images are read-only there; ⌘-click opens a link.
-  - A document's toolbar shows "Saved" only once the file was changed this session (by you or
-    the agent); Saving… / Unsaved… show whenever they apply.
-- **Spreadsheets** (.xlsx / .xlsm) — read-only preview: sheet tabs, formatted values (number
-  formats, dates, percentages, currency), column widths, merged cells and basic styling; click a
-  cell to see its address and formula/value (the agent is told which sheet/cell you're on). Formulas
-  show their last computed result; files saved by scripts (openpyxl) have none until Excel
-  recalculates, so those cells show the formula. Charts, images and pivot tables aren't shown.
-  The agent edits spreadsheets with openpyxl (installed by `./run.sh setup`).
-- **Claude conversations on this computer** (library icon in the chat tabs): every Cowork session,
-  Claude desktop Code session and Claude Code CLI session, newest first — search titles, folders
-  and full transcripts, read a transcript, copy files a Cowork session produced into the project,
-  and **Attach to chat** to hand one to the agent. The agent has the same reach through its
-  `search_conversations` / `read_conversation` tools (read-only; the apps' private stores are
-  parsed defensively, see `backend/src/conversations.rs`). Found on macOS, Windows (incl. Microsoft
-  Store installs) and Linux; Claude Code's `CLAUDE_CONFIG_DIR` is honored, and
-  `DECKEDIT_CLAUDE_DESKTOP_DIR` adds another desktop-app folder. Agent settings shows what was found.
-- **Notes for the agent** — "Note for AI" (or "Draw for AI") at the right of the toolbar (apart from the edit tools); **Select**
-  (or Esc) goes back to selecting shapes. Its ▾ menu picks how to place one:
-  *Pin at a point* (click), or *Draw on the slide* — circle, underline or arrow at an area
-  freehand (several strokes per note; a single click still pins). A drawn note reaches the agent
-  as the area it covers (% of the slide, circled vs. marked) plus the shapes under it, and
-  `screenshot_slide` with `show_notes` shows the agent the marks themselves.
-  **Pin note** (⌘Enter) is the main action; **Act now** (on the left of the note box, ⌘⇧Enter) pins the note and immediately asks the agent, in the open
-  chat, to handle it — no need to type the request.
-  Notes work on slides, PDF pages (a pin, a drawn mark, or selected text) and **images** (pin or
-  draw). They also work on **spreadsheets** (pin or draw on the grid — anchored to cells, so they stay
-  with the content; the agent gets the cell(s) and what they contain) and on **selected text** in
-  text/code/Markdown files (select, then **Note for AI** in the header — the agent gets the lines and the
-  quoted text, which stays highlighted while the note is open; the header lists the file's notes).
-  Open notes are sent with every message; the agent resolves them (you see them flip to
-  resolved with its one-line summary) and can pin its own notes for you.
 - **Agent chats** — tabs of Claude Code conversations. Each message automatically tells
   the agent which deck/slide you're on, what's selected, which other files are open in tabs, and the edits you made since its
   last turn (already saved). The deck reloads as the agent saves; slides it changed get a
@@ -139,6 +97,61 @@ for the AI is pinned on slide 7.* Open `sample-project/` as a project to try it 
     the turn with **Revert** (and **Undo revert**).
   - The agent can screenshot a slide exactly as the app renders it (`screenshot_slide`)
     to check its own layout work.
+- **Notes for the agent** — "Note for AI" (or "Draw for AI") at the right of the toolbar (apart from the edit tools); **Select**
+  (or Esc) goes back to selecting shapes. Its ▾ menu picks how to place one:
+  *Pin at a point* (click), or *Draw on the slide* — circle, underline or arrow at an area
+  freehand (several strokes per note; a single click still pins). A drawn note reaches the agent
+  as the area it covers (% of the slide, circled vs. marked) plus the shapes under it, and
+  `screenshot_slide` with `show_notes` shows the agent the marks themselves.
+  **Pin note** (⌘Enter) is the main action; **Act now** (on the left of the note box, ⌘⇧Enter) pins the note and immediately asks the agent, in the open
+  chat, to handle it — no need to type the request.
+  Notes work on slides, PDF pages (a pin, a drawn mark, or selected text) and **images** (pin or
+  draw). They also work on **spreadsheets** (pin or draw on the grid — anchored to cells, so they stay
+  with the content; the agent gets the cell(s) and what they contain) and on **selected text** in
+  text/code/Markdown files (select, then **Note for AI** in the header — the agent gets the lines and the
+  quoted text, which stays highlighted while the note is open; the header lists the file's notes).
+  Open notes are sent with every message; the agent resolves them (you see them flip to
+  resolved with its one-line summary) and can pin its own notes for you.
+- **Claude conversations on this computer** (library icon in the chat tabs): every Cowork session,
+  Claude desktop Code session and Claude Code CLI session, newest first — search titles, folders
+  and full transcripts, read a transcript, copy files a Cowork session produced into the project,
+  and **Attach to chat** to hand one to the agent. The agent has the same reach through its
+  `search_conversations` / `read_conversation` tools (read-only; the apps' private stores are
+  parsed defensively, see `backend/src/conversations.rs`). Found on macOS, Windows (incl. Microsoft
+  Store installs) and Linux; Claude Code's `CLAUDE_CONFIG_DIR` is honored, and
+  `DECKEDIT_CLAUDE_DESKTOP_DIR` adds another desktop-app folder. Agent settings shows what was found.
+- **Other files**
+  - **PDF** — page rail, reorder/duplicate/delete pages, drop an image onto a page, undo/redo. The page's
+    text is selectable: the bar over a selection copies it or puts a **note for the agent** on it (the
+    agent gets the page and the quoted text, which stays highlighted).
+  - **Spreadsheets** (.xlsx / .xlsm) — read-only preview: sheet tabs, formatted values (number
+    formats, dates, percentages, currency), column widths, merged cells and basic styling; click a
+    cell to see its address and formula/value (the agent is told which sheet/cell you're on). Formulas
+    show their last computed result; files saved by scripts (openpyxl) have none until Excel
+    recalculates, so those cells show the formula. Charts, images and pivot tables aren't shown.
+    The agent edits spreadsheets with openpyxl (installed by `./run.sh setup`).
+  - **Text and Markdown** — editable (CodeMirror, with syntax highlighting for Markdown, JSON,
+    Python, JS/TS, HTML, CSS, XML, YAML). Edits autosave shortly after you stop typing (⌘S saves
+    now), etag-guarded like decks; you can keep typing while the agent works (your typing is merged
+    with its changes), and your saved edits are reported to the agent with your next message.
+    - Markdown has a **Formatted / Markdown** switch; the last choice is remembered for the next file.
+      In **Formatted**, click any paragraph, heading, list item or table cell and type (Enter or
+      clicking away commits, Esc cancels, ↑/↓ at a block's first/last line moves to the previous/next
+      block — in a table the cell above/below — and ←/→ at a cell's start/end to the previous/next
+      cell, ⌘Z/⇧⌘Z undo/redo). In a list, Enter at the end of an item adds one below (same level,
+      next number / empty task box) and Backspace in an empty item removes it; in a table, Enter at
+      the end of a row's last cell adds a blank row below and Backspace in the empty first cell of
+      an empty row removes it. Each writes just that line of the file. Blocks turn editable only when clicked, so dragging across
+      paragraphs still selects normally — the bar over such a selection has **Copy** (text) and
+      **Copy Markdown** (the source of the blocks it touches). **Bold / italic** toggle with ⌘B / ⌘I
+      or the small bar over a selection (`**`/`*` added around it; with the caret in bold/italic text,
+      its markers are removed); other formatting is changed in the Markdown tab. Each change is
+      written back into exactly the characters it came from, so the rest of the file is never
+      reformatted, and a toggle that Markdown wouldn't read as formatting is refused rather than
+      leaving stray `*` (`viewers/mdSourceEdit.ts`). Inline
+      code and code blocks are editable in place too; images are read-only there; ⌘-click opens a link.
+    - A document's toolbar shows "Saved" only once the file was changed this session (by you or
+      the agent); Saving… / Unsaved… show whenever they apply.
 
 ## Running
 
