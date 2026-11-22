@@ -34,19 +34,30 @@ const isWebKit = /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|Ed
 
 /**
  * html-to-image draws the slide as an SVG (its HTML in a foreignObject) onto a canvas. WebKit only
- * decodes the pictures inside that SVG once it has been drawn, so the first capture comes out
- * without them — no pictures, no background picture. There, capture until two captures agree
- * (at most four); Chrome gets it right the first time.
+ * decodes the pictures inside that SVG once it has been drawn, so the first capture — sometimes the
+ * first two — comes out without them. There, capture at least three times (at most five, until two
+ * in a row agree) and keep the fullest: a capture missing pictures encodes to a smaller PNG.
+ * Chrome gets it right the first time.
  */
 async function capturePng(el: HTMLElement, options: Parameters<typeof toPng>[1]): Promise<string> {
-  let url = await toPng(el, options)
-  if (!isWebKit) return url
-  for (let i = 0; i < 3; i++) {
+  let best = await toPng(el, options)
+  if (!isWebKit) return best
+  let prev = best
+  for (let i = 1; i < 5; i++) {
     const next = await toPng(el, options)
-    if (next === url) break
-    url = next
+    if (next.length > best.length) best = next
+    if (i >= 2 && next === prev) break
+    prev = next
   }
-  return url
+  return best
+}
+
+/** One screenshot at a time: several at once (the agent asks in parallel) compete for decoding. */
+let queue: Promise<unknown> = Promise.resolve()
+function oneAtATime<T>(job: () => Promise<T>): Promise<T> {
+  const run = queue.then(job, job)
+  queue = run.catch(() => {})
+  return run
 }
 
 function embeddedFontCss(pres: PresentationData): string {
@@ -134,7 +145,11 @@ async function slidePng(pid: string, deck: string, slideNumber: number, showNote
       if (getComputedStyle(handle.element).position === 'static') handle.element.style.position = 'relative'
       handle.element.appendChild(overlay)
     }
-    return await capturePng(handle.element, { width: pres.width, height: pres.height, pixelRatio: 1.5, backgroundColor: '#ffffff', fontEmbedCSS: embeddedFontCss(pres) })
+    // html-to-image's backgroundColor also overrides the element's own: pass the slide's (a solid
+    // slide background is set there) and fall back to white only for a slide without one.
+    const own = getComputedStyle(handle.element).backgroundColor
+    const backgroundColor = own && own !== 'transparent' && !/rgba\(.*,\s*0\)$/.test(own) ? own : '#ffffff'
+    return await capturePng(handle.element, { width: pres.width, height: pres.height, pixelRatio: 1.5, backgroundColor, fontEmbedCSS: embeddedFontCss(pres) })
   } finally {
     handle.dispose()
     host.remove()
@@ -166,6 +181,10 @@ async function pagePng(pid: string, path: string, pageNumber: number, showNotes:
 
 export async function handleScreenshot(ev: Extract<ServerEvent, { type: 'screenshot' }>) {
   if (useApp.getState().projectId !== ev.projectId) return
+  return oneAtATime(() => screenshot(ev))
+}
+
+async function screenshot(ev: Extract<ServerEvent, { type: 'screenshot' }>) {
   try {
     const kind = docKind(ev.deck)
     const url =

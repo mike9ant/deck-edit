@@ -21,66 +21,6 @@ for the AI is pinned on slide 7.* Open `sample-project/` as a project to try it 
 └──────────────┴─────────────┴────────────────────────────────────────┴───────────┘
 ```
 
-## Running
-
-```bash
-./run.sh setup     # once: Python env for the agent (python-pptx, pymupdf, pypdf, openpyxl) + npm install
-./run.sh           # build and start → http://127.0.0.1:3101
-./run.sh dev       # hot-reload frontend on http://127.0.0.1:5180
-./run.sh test      # backend + frontend unit tests
-./run.sh desktop   # build the macOS app → /Applications/Deck Edit.app, and open it
-./run.sh release   # shareable build: universal, signed + notarized .dmg → release/
-./run.sh push      # push main; bumps the patch version once per new day of commits
-```
-
-Versioning: `./run.sh push` bumps the **patch** version (0.1.0 → 0.1.1) when the commits being
-pushed are from a different day than the last pushed commit, and commits "Version 0.1.1" before
-pushing. Bump the **minor** version by hand when you want one: `node scripts/version.mjs bump-minor`
-(0.1.4 → 0.2.0), then commit — the next push then adds no patch bump. The version lives in several
-files (`desktop/tauri.conf.json`, the `Cargo.toml`s, `frontend/package.json`, `frontend/src/version.ts`);
-`node scripts/version.mjs [bump-patch|bump-minor]` reads or bumps them together.
-A pre-push hook (`.githooks/`, enabled by `./run.sh setup`) stops a plain `git push` that skipped a due bump.
-
-Requirements: Rust, Node 20+, Python 3, and the [Claude Code CLI](https://claude.com/claude-code)
-logged in (`claude login`). The agent uses your Claude Code login (subscription) by default;
-switch to an Anthropic API key in Agent settings.
-
-App data (projects, chats, notes, per-turn backups) lives in `~/.deck-edit/`
-(`DECKEDIT_DATA_DIR` to change).
-
-### Desktop app (macOS)
-
-`./run.sh desktop` builds **Deck Edit.app** (Tauri), installs it in `/Applications` and opens
-it; after that, start it like any app (Launchpad, Spotlight, the Dock). It runs the same server
-inside the app on a private localhost port — nothing to start, no terminal — and shares
-`~/.deck-edit/` (projects, chats, settings) with `./run.sh`.
-
-- It takes your login shell's PATH, so it finds `claude` (and the tools the agent runs) as a
-  terminal would.
-- Without the repo's `.venv`, it sets up its own Python env on first launch
-  (`~/.deck-edit/venv`, about a minute; Settings shows the progress). Needs `python3`.
-- Links out of the app open in your browser. Logs: `~/.deck-edit/logs/desktop.log`.
-- The first build downloads and compiles Tauri (a few minutes); later builds are quick.
-  The app is built locally and unsigned, which is fine on the Mac that built it.
-
-### Sharing the app (signed, notarized .dmg)
-
-`./run.sh release` makes a build for other Macs: one app for Apple Silicon and Intel, signed
-with your Developer ID, notarized by Apple (ticket stapled), in a drag-to-Applications
-`release/Deck-Edit-<version>.dmg`. Recipients open it without Gatekeeper warnings. They need
-the Claude Code CLI signed in (or an Anthropic API key in Settings) and `python3`.
-
-One-time setup on the building Mac:
-1. A **Developer ID Application** certificate in the login keychain (developer.apple.com →
-   Certificates; request it from Keychain Access → Certificate Assistant).
-2. Notarization credentials, stored in the keychain (an app-specific password from
-   appleid.apple.com):
-   `xcrun notarytool store-credentials deck-edit --apple-id <email> --team-id <TEAMID>`
-
-Nothing secret is in the repo: the build finds the certificate and the `deck-edit` profile in the
-keychain (`DECKEDIT_SIGN_IDENTITY` / `DECKEDIT_NOTARY_PROFILE` to use others). The `.dmg` is named
-after the current version (bumped by `./run.sh push`).
-
 ## What you can do
 
 - **Projects** — a project is a folder + its agent chats. Pick one in the top bar.
@@ -199,6 +139,66 @@ after the current version (bumped by `./run.sh push`).
     the turn with **Revert** (and **Undo revert**).
   - The agent can screenshot a slide exactly as the app renders it (`screenshot_slide`)
     to check its own layout work.
+
+## Running
+
+```bash
+./run.sh setup     # once: Python env for the agent (python-pptx, pymupdf, pypdf, openpyxl) + npm install
+./run.sh           # build and start → http://127.0.0.1:3101
+./run.sh dev       # hot-reload frontend on http://127.0.0.1:5180
+./run.sh test      # backend + frontend unit tests
+./run.sh desktop   # build the macOS app → /Applications/Deck Edit.app, and open it
+./run.sh release   # shareable build: universal, signed + notarized .dmg → release/
+./run.sh push      # push main; bumps the patch version once per new day of commits
+```
+
+Versioning: `./run.sh push` bumps the **patch** version (0.1.0 → 0.1.1) when the commits being
+pushed are from a different day than the last pushed commit, and commits "Version 0.1.1" before
+pushing. Bump the **minor** version by hand when you want one: `node scripts/version.mjs bump-minor`
+(0.1.4 → 0.2.0), then commit — the next push then adds no patch bump. The version lives in several
+files (`desktop/tauri.conf.json`, the `Cargo.toml`s, `frontend/package.json`, `frontend/src/version.ts`);
+`node scripts/version.mjs [bump-patch|bump-minor]` reads or bumps them together.
+A pre-push hook (`.githooks/`, enabled by `./run.sh setup`) stops a plain `git push` that skipped a due bump.
+
+Requirements: Rust, Node 20+, Python 3, and the [Claude Code CLI](https://claude.com/claude-code)
+logged in (`claude login`). The agent uses your Claude Code login (subscription) by default;
+switch to an Anthropic API key in Agent settings.
+
+App data (projects, chats, notes, per-turn backups) lives in `~/.deck-edit/`
+(`DECKEDIT_DATA_DIR` to change).
+
+### Desktop app (macOS)
+
+`./run.sh desktop` builds **Deck Edit.app** (Tauri), installs it in `/Applications` and opens
+it; after that, start it like any app (Launchpad, Spotlight, the Dock). It runs the same server
+inside the app on a private localhost port — nothing to start, no terminal — and shares
+`~/.deck-edit/` (projects, chats, settings) with `./run.sh`.
+
+- It takes your login shell's PATH, so it finds `claude` (and the tools the agent runs) as a
+  terminal would.
+- Without the repo's `.venv`, it sets up its own Python env on first launch
+  (`~/.deck-edit/venv`, about a minute; Settings shows the progress). Needs `python3`.
+- Links out of the app open in your browser. Logs: `~/.deck-edit/logs/desktop.log`.
+- The first build downloads and compiles Tauri (a few minutes); later builds are quick.
+  The app is built locally and unsigned, which is fine on the Mac that built it.
+
+### Sharing the app (signed, notarized .dmg)
+
+`./run.sh release` makes a build for other Macs: one app for Apple Silicon and Intel, signed
+with your Developer ID, notarized by Apple (ticket stapled), in a drag-to-Applications
+`release/Deck-Edit-<version>.dmg`. Recipients open it without Gatekeeper warnings. They need
+the Claude Code CLI signed in (or an Anthropic API key in Settings) and `python3`.
+
+One-time setup on the building Mac:
+1. A **Developer ID Application** certificate in the login keychain (developer.apple.com →
+   Certificates; request it from Keychain Access → Certificate Assistant).
+2. Notarization credentials, stored in the keychain (an app-specific password from
+   appleid.apple.com):
+   `xcrun notarytool store-credentials deck-edit --apple-id <email> --team-id <TEAMID>`
+
+Nothing secret is in the repo: the build finds the certificate and the `deck-edit` profile in the
+keychain (`DECKEDIT_SIGN_IDENTITY` / `DECKEDIT_NOTARY_PROFILE` to use others). The `.dmg` is named
+after the current version (bumped by `./run.sh push`).
 
 ## How edits stay safe for PowerPoint
 
