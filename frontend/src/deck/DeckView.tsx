@@ -42,7 +42,7 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   const [showResolved, setShowResolved] = useState(false)
   useEscapeEndsNoteMode(noteMode, setNoteMode)
   const [dismissedAt, setDismissedAt] = useState(0)
-  const actions = useRef<SlideActions>({ addTextBox() {}, align() {}, arrange() {}, setFont() {}, setSize() {}, stepSize() {}, setColor() {}, holdSelection() {} })
+  const actions = useRef<SlideActions>({ addTextBox() {}, align() {}, arrange() {}, setFont() {}, setSize() {}, stepSize() {}, setColor() {}, holdSelection() {}, releaseSelection() {} })
   const [fmt, setFmt] = useState<FormatState | null>(null)
   const editOff = useEditMode() === 'off'
 

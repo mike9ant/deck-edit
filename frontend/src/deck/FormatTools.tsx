@@ -126,7 +126,8 @@ function SizeBox({ size, actions }: { size?: number; actions: React.MutableRefOb
           if (e.key === 'Escape') { setText(size != null ? String(size) : ''); (e.target as HTMLInputElement).blur() }
           e.stopPropagation()
         }}
-        onBlur={commit}
+        // Left the field: apply what was typed — and if that applied nothing, let the held text selection go.
+        onBlur={() => { commit(); actions.current.releaseSelection() }}
       />
       <div className="flex h-full flex-col border-l border-hair">
         <button className="flex flex-1 items-center px-0.5 text-ink-2 hover:bg-black/5" title="Bigger (⌘⇧>)" onMouseDown={keep} onClick={() => actions.current.stepSize(1)}><ChevronUp size={11} /></button>

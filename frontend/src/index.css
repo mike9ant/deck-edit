@@ -122,6 +122,11 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
   background-color: rgb(251 191 36 / 0.35);
 }
 
+/* A slide's text selection kept visible while a toolbar field (the font size) has the focus. */
+::highlight(held-selection) {
+  background-color: rgb(61 99 221 / 0.28);
+}
+
 /* pdf.js text layer: invisible, selectable text over a PDF page (pdf/PdfView.tsx). */
 .textLayer {
   position: absolute;

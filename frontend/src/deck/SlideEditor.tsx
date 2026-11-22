@@ -80,6 +80,8 @@ export interface SlideActions {
   setColor(target: ColorTarget, hex: string): void
   /** Remember the text selection before focus moves to a toolbar field (it ends text editing). */
   holdSelection(): void
+  /** The toolbar field was left without applying anything: forget the held selection. */
+  releaseSelection(): void
 }
 export type { NodeOrder }
 
@@ -354,6 +356,33 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
   }
   /** The text selection saved before focus went to a toolbar field (which ended the editing). */
   const heldSelection = useRef<{ nodeId: string; start: TextPoint; end: TextPoint } | null>(null)
+  const [heldTick, setHeldTick] = useState(0)
+  const setHeld = (h: typeof heldSelection.current) => {
+    heldSelection.current = h
+    setHeldTick((n) => n + 1)
+  }
+  // While a toolbar field has the focus, the held selection stays visible — the browser's own
+  // selection went to the field — so it's clear the size applies to that text, not the whole box.
+  useLayoutEffect(() => {
+    const registry = (globalThis.CSS as unknown as { highlights?: Map<string, unknown> } | undefined)?.highlights
+    const HighlightCtor = (globalThis as unknown as { Highlight?: new (...r: Range[]) => unknown }).Highlight
+    if (!registry || !HighlightCtor) return
+    const h = heldSelection.current
+    const el = h && nodeEl(h.nodeId)
+    const c = el && textContainer(el)
+    const a = c && domPointAt(c, h!.start, 'start')
+    const b = c && domPointAt(c, h!.end, 'end')
+    if (!a || !b) {
+      registry.delete('held-selection')
+      return
+    }
+    const r = document.createRange()
+    r.setStart(a[0], a[1])
+    r.setEnd(b[0], b[1])
+    registry.set('held-selection', new HighlightCtor(r))
+    return () => { registry.delete('held-selection') }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [heldTick, session.version, slide.id])
 
   const textRange = (start: TextPoint, end: TextPoint) => ({ start: { paragraphIndex: start.p, offset: start.o }, end: { paragraphIndex: end.p, offset: end.o } })
 
@@ -365,7 +394,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
   const applyText = async (what: string, plan: (nodeId: string, c: HTMLElement, start: TextPoint | null, end: TextPoint | null) => EditOperation[]) => {
     const t = editingTarget()
     const held = heldSelection.current
-    heldSelection.current = null
+    if (held) setHeld(null)
     if (t || (held && !editing)) {
       const nodeId = t?.nodeId ?? held!.nodeId
       const el = nodeEl(nodeId)
@@ -438,13 +467,19 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
   // (A later press that finds the editing already over — e.g. a double click in the field — keeps it.)
   const holdSelection = () => {
     const t = editingTarget()
-    if (t) heldSelection.current = { nodeId: t.nodeId, start: t.start, end: t.end }
+    if (t) setHeld({ nodeId: t.nodeId, start: t.start, end: t.end })
   }
-  // Another shape selected (or none): the saved text selection no longer applies.
+  const releaseSelection = () => {
+    if (heldSelection.current) setHeld(null)
+  }
+  // Another shape selected (or none), or text editing again: the saved text selection no longer applies.
   useEffect(() => {
     const h = heldSelection.current
-    if (h && (selection.length !== 1 || selection[0] !== h.nodeId)) heldSelection.current = null
+    if (h && (selection.length !== 1 || selection[0] !== h.nodeId)) setHeld(null)
   }, [selection])
+  useEffect(() => {
+    if (editing && heldSelection.current) setHeld(null)
+  }, [editing])
 
   // The toolbar's view of the selection: font, size and colors of the text at the caret (or of the
   // first selected shape's text), and its fill and line.
@@ -949,6 +984,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     stepSize: stepFontSize,
     setColor,
     holdSelection,
+    releaseSelection,
     addTextBox: async () => {
         const created = await run(
         { type: 'addTextBox', slideId: slide.id, text: 'New text', position: { x: pres.width * 0.3, y: pres.height * 0.42 }, size: { w: pres.width * 0.4, h: pres.height * 0.1 } },
@@ -1056,7 +1092,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
             <div
               key={id}
               data-selected-node={id}
-              className={`absolute border ${editing?.nodeId === id ? 'border-dashed border-accent/70' : 'border-accent'}`}
+              className={`absolute border ${editing?.nodeId === id || heldSelection.current?.nodeId === id ? 'border-dashed border-accent/70' : 'border-accent'}`}
               style={{ left: r.x * scale, top: r.y * scale, width: r.w * scale, height: r.h * scale, rotate: `${rotation}deg` }}
             >
               {selection.length === 1 && !editing && !editOff &&

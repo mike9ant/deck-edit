@@ -396,15 +396,17 @@ export const useDecks = create<DeckStore>((set, get) => {
         // Only slides that changed re-render: one the agent didn't touch keeps its version (by stable
         // id — python-pptx renumbers slide parts). Edits replayed onto the new file re-render all.
         // Not when the screen may show something the file doesn't: unsaved edits (dropped by this
-        // reload) or a slide that moved (its slide number field).
-        const prevAt = new Map<string, { version: number; index: number }>()
-        if (s1.pres) s1.pres.slides.forEach((sl, index) => prevAt.set(s1.sldIds.get(sl.id) ?? '', { version: s1.slideVersions[sl.id] ?? s1.version, index }))
+        // reload) or a slide that moved (its slide number field). Nor when the slide's part was
+        // renamed (python-pptx renumbers parts when it opens a deck): a rendered slide is tied to
+        // its part name and version, and that name, at that version, showed a different slide.
+        const prevAt = new Map<string, { version: number; index: number; part: string }>()
+        if (s1.pres) s1.pres.slides.forEach((sl, index) => prevAt.set(s1.sldIds.get(sl.id) ?? '', { version: s1.slideVersions[sl.id] ?? s1.version, index, part: sl.id }))
         const reuse = external && !holding && !s1.dirty && changedSlides !== 'all'
         const slideVersions: Record<string, number> = {}
         pres.slides.forEach((sl, index) => {
           const sid = sldIds.get(sl.id) ?? ''
           const before = prevAt.get(sid)
-          const same = reuse && sid && before && before.index === index && !changedSlides.has(sid) && s1.lastSlideXml.get(sid) === slideXml.get(sid)
+          const same = reuse && sid && before && before.index === index && before.part === sl.id && !changedSlides.has(sid) && s1.lastSlideXml.get(sid) === slideXml.get(sid)
           slideVersions[sl.id] = same ? before.version : version
         })
         const next: DeckSession = {
@@ -665,3 +667,4 @@ export async function flushHeldEdits(pid: string) {
     await useDecks.getState().saveNow(s.key)
   }
 }
+
