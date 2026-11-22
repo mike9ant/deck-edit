@@ -12,6 +12,15 @@ in the middle, a note for the AI pinned on the slide, and the agent's chat on th
 traction slide and rebuilt the slide from it, the changed slides are flagged at the top, and a note
 for the AI is pinned on slide 7.* Open `sample-project/` as a project to try it yourself.
 
+```
+┌ Project ▾ /path/to/folder ──────────────────────────────────────────────────────┐
+│ Files        │ Mini-slides │  Main slide (select · move · resize ·  │ Chat tabs │
+│ deck.pptx    │ ▢ 1         │  edit text · drop images · notes)      │ agent …   │
+│ notes.md     │ ▣ 2         │                                        │           │
+│ deck.pdf     │ ▢ 3         │                                        │ [composer]│
+└──────────────┴─────────────┴────────────────────────────────────────┴───────────┘
+```
+
 ## Running
 
 ```bash
@@ -75,38 +84,10 @@ after the current version (bumped by `./run.sh push`).
 ## What you can do
 
 - **Projects** — a project is a folder + its agent chats. Pick one in the top bar.
-- **Files** — the folder tree; open `.pptx`, `.pdf`, `.md`, text and image files in tabs.
-  Click selects (and previews a file), double-click opens it to stay; ⌘/⇧-click select several.
-  Rename in place by clicking the selected item again after a pause (or Enter / F2); drag items
-  onto a folder to move them; **New folder** and **Delete** (⌫, after a confirmation — files go to
-  the Trash, folders only when empty) are in the panel header, which also hides the panel. Open
-  tabs and notes follow renames and moves; long names are shortened in the middle.
-  Everything reloads when the file changes on disk.
-  - A newly opened file is a *preview* tab (italic title): opening another file replaces it. It
-    stays open once you change the file (any edit, typing, a pinned note), the agent or another
-    app changes it, or you double-click the tab; kept tabs stay until you close them.
-  - A document's toolbar shows "Saved" only once the file was changed this session (by you or
-    the agent); Saving… / Unsaved… show whenever they apply.
-  - **Text and Markdown are editable** (CodeMirror, with syntax highlighting for Markdown, JSON,
-    Python, JS/TS, HTML, CSS, XML, YAML). Edits autosave shortly after you stop typing (⌘S saves
-    now), etag-guarded like decks; the editor is read-only while the agent works, and your saved
-    edits are reported to the agent with your next message.
-  - Markdown has a **Formatted / Markdown** switch; the last choice is remembered for the next file.
-    In **Formatted**, click any paragraph, heading, list item or table cell and type (Enter or
-    clicking away commits, Esc cancels, ↑/↓ at a block's first/last line moves to the previous/next
-    block — in a table the cell above/below — and ←/→ at a cell's start/end to the previous/next
-    cell, ⌘Z/⇧⌘Z undo/redo). In a list, Enter at the end of an item adds one below (same level,
-    next number / empty task box) and Backspace in an empty item removes it; in a table, Enter at
-    the end of a row's last cell adds a blank row below and Backspace in the empty first cell of
-    an empty row removes it. Each writes just that line of the file. Blocks turn editable only when clicked, so dragging across
-    paragraphs still selects normally — the bar over such a selection has **Copy** (text) and
-    **Copy Markdown** (the source of the blocks it touches). **Bold / italic** toggle with ⌘B / ⌘I
-    or the small bar over a selection (`**`/`*` added around it; with the caret in bold/italic text,
-    its markers are removed); other formatting is changed in the Markdown tab. Each change is
-    written back into exactly the characters it came from, so the rest of the file is never
-    reformatted, and a toggle that Markdown wouldn't read as formatting is refused rather than
-    leaving stray `*` (`viewers/mdSourceEdit.ts`). Inline
-    code, code blocks and images are read-only there; ⌘-click opens a link.
+- **Files** — the folder tree: open `.pptx`, `.pdf`, `.md`, text, spreadsheet and image files in
+  tabs; rename (click the selected item again, or F2), drag onto a folder to move, **New folder** and
+  **Delete** (to the Trash) in the panel header. Everything reloads when a file changes on disk. A newly
+  opened file is a *preview* tab (italic) that the next one replaces, until you edit it or double-click it.
 - **Slides** (PPTX)
   - mini-slides rail: click, shift/⌘-click to multi-select, drag to reorder,
     duplicate (⌘D), delete (⌫), copy/paste slides (⌘C / ⌘V)
@@ -129,6 +110,28 @@ after the current version (bumped by `./run.sh push`).
 - **PDF** — page rail, reorder/duplicate/delete pages, drop an image onto a page, undo/redo. The page's
   text is selectable: the bar over a selection copies it or puts a **note for the agent** on it (the
   agent gets the page and the quoted text, which stays highlighted).
+- **Text and Markdown** — editable (CodeMirror, with syntax highlighting for Markdown, JSON,
+  Python, JS/TS, HTML, CSS, XML, YAML). Edits autosave shortly after you stop typing (⌘S saves
+  now), etag-guarded like decks; you can keep typing while the agent works (your typing is merged
+  with its changes), and your saved edits are reported to the agent with your next message.
+  - Markdown has a **Formatted / Markdown** switch; the last choice is remembered for the next file.
+    In **Formatted**, click any paragraph, heading, list item or table cell and type (Enter or
+    clicking away commits, Esc cancels, ↑/↓ at a block's first/last line moves to the previous/next
+    block — in a table the cell above/below — and ←/→ at a cell's start/end to the previous/next
+    cell, ⌘Z/⇧⌘Z undo/redo). In a list, Enter at the end of an item adds one below (same level,
+    next number / empty task box) and Backspace in an empty item removes it; in a table, Enter at
+    the end of a row's last cell adds a blank row below and Backspace in the empty first cell of
+    an empty row removes it. Each writes just that line of the file. Blocks turn editable only when clicked, so dragging across
+    paragraphs still selects normally — the bar over such a selection has **Copy** (text) and
+    **Copy Markdown** (the source of the blocks it touches). **Bold / italic** toggle with ⌘B / ⌘I
+    or the small bar over a selection (`**`/`*` added around it; with the caret in bold/italic text,
+    its markers are removed); other formatting is changed in the Markdown tab. Each change is
+    written back into exactly the characters it came from, so the rest of the file is never
+    reformatted, and a toggle that Markdown wouldn't read as formatting is refused rather than
+    leaving stray `*` (`viewers/mdSourceEdit.ts`). Inline
+    code and code blocks are editable in place too; images are read-only there; ⌘-click opens a link.
+  - A document's toolbar shows "Saved" only once the file was changed this session (by you or
+    the agent); Saving… / Unsaved… show whenever they apply.
 - **Spreadsheets** (.xlsx / .xlsm) — read-only preview: sheet tabs, formatted values (number
   formats, dates, percentages, currency), column widths, merged cells and basic styling; click a
   cell to see its address and formula/value (the agent is told which sheet/cell you're on). Formulas
