@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320" width="320" height="320">
+  <!-- Earth, for the roadmap. -->
+  <defs>
+    <radialGradient id="air" cx="50%" cy="50%" r="50%"><stop offset="0.8" stop-color="#7FD3F7" stop-opacity="0.5"/><stop offset="1" stop-color="#7FD3F7" stop-opacity="0"/></radialGradient>
+    <radialGradient id="sea" cx="38%" cy="32%" r="75%"><stop offset="0" stop-color="#5BB8F0"/><stop offset="1" stop-color="#1F5FA8"/></radialGradient>
+    <radialGradient id="shade" cx="30%" cy="28%" r="85%"><stop offset="0.55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#0B0A2A" stop-opacity="0.55"/></radialGradient>
+    <clipPath id="ball"><circle cx="160" cy="160" r="128"/></clipPath>
+  </defs>
+  <circle cx="160" cy="160" r="152" fill="url(#air)"/>
+  <circle cx="160" cy="160" r="128" fill="url(#sea)"/>
+  <g clip-path="url(#ball)" fill="#4CB86A">
+    <path d="M70 90 C 100 60, 150 70, 160 100 C 170 130, 130 140, 120 170 C 110 200, 80 190, 66 160 C 52 130, 50 110, 70 90 Z"/>
+    <path d="M180 60 C 220 50, 270 80, 262 120 C 256 150, 220 140, 200 130 C 180 120, 160 80, 180 60 Z"/>
+    <path d="M190 190 C 220 180, 250 200, 246 236 C 242 270, 210 280, 196 256 C 182 232, 166 200, 190 190 Z"/>
+  </g>
+  <g clip-path="url(#ball)" fill="#FFFFFF" opacity="0.8">
+    <path d="M40 130 C 80 120, 120 126, 150 120 C 120 134, 80 138, 40 140 Z"/>
+    <path d="M150 210 C 190 200, 240 206, 290 196 C 250 214, 190 220, 150 218 Z"/>
+  </g>
+  <circle cx="160" cy="160" r="128" fill="url(#shade)"/>
+</svg>

@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zero-G Brewing — Technical Design</title>
+<link rel="stylesheet" href="doc.css">
+<script src="charts.js"></script>
+</head>
+<body>
+
+<div class="banner">
+  <img src="../art/drink-me-pod.svg" alt="">
+  <div>
+    <div class="kicker">Rabbit Hole Roasters · Technical design</div>
+    <h1>Zero-G Brewing: the Drink Me Pod</h1>
+    <div class="sub">How to brew coffee, and keep it in the cup, without gravity</div>
+  </div>
+</div>
+<div class="meta"><b>Document</b> RHR-TD-001 · <b>Revision</b> C · <b>Date</b> 14 March 2027 ·
+  <b>Authors</b> Alice (CEO), the Mad Hatter (Head of Blends) · <b>Reviewed by</b> the Caterpillar ·
+  <b>Status</b> approved, pending the Queen</div>
+
+<div class="abstract">
+  <p><b>Abstract.</b> In orbit, gravity no longer holds a liquid at the bottom of a cup, and it no longer
+  pulls hot water down through coffee grounds. Surface tension takes over. The Drink Me Pod uses that
+  instead of fighting it: a <i>centrifugal brewer</i> spins the grounds to give them one <i>g</i> of
+  artificial gravity, and a <i>capillary cup</i> with a sharp interior corner carries the coffee to the
+  drinker's lips by wicking. This document describes the physics, the design values and the safety
+  case. Figures S1–S4 in the companion <i>Supplementary Figures</i> show the underlying curves.</p>
+</div>
+
+<h2>1. Why a normal cup fails in orbit</h2>
+<p>Whether gravity or surface tension controls a liquid's shape is measured by the Bond number, the ratio
+of the two forces over a length scale <i>L</i>:</p>
+<div class="eq">Bo = ρ g L² / σ <span class="n">(1)</span></div>
+<p>For coffee (density ρ ≈ 1000 kg/m³, surface tension σ ≈ 0.065 N/m when hot) in a cup-sized container
+(<i>L</i> = 4 cm), Bo is in the hundreds on Earth: gravity flattens the surface and holds the coffee down.
+On a space station the residual acceleration is around a millionth of <i>g</i>, and Bo falls below one in
+ten thousand. Surface tension then decides everything: coffee clings to whatever it wets, and a gentle
+nudge sends it out of an open cup as a wobbling sphere.</p>
+
+<table>
+  <tr><th>Where</th><th class="num">g (m/s²)</th><th class="num">Bo (L = 4 cm)</th><th>What the coffee does</th></tr>
+  <tr><td>Earth</td><td class="num">9.81</td><td class="num">241</td><td>Sits in the cup</td></tr>
+  <tr><td>Mars</td><td class="num">3.71</td><td class="num">91</td><td>Sits in the cup, sloshes more</td></tr>
+  <tr><td>Moon</td><td class="num">1.62</td><td class="num">40</td><td>Sits, crema behaves oddly</td></tr>
+  <tr><td>Low Earth orbit</td><td class="num">≈ 10⁻⁵</td><td class="num">≈ 0.0002</td><td>Goes where the cup's shape sends it</td></tr>
+</table>
+
+<figure>
+  <div class="chart" id="fig-bond"></div>
+  <figcaption><b>Figure 1.</b> Bond number of coffee against container size. Above the dashed line gravity
+  shapes the liquid; below it, surface tension does. In orbit (teal) any practical cup is far below the
+  line — the design must work with surface tension. (Full version: Figure S1.)</figcaption>
+</figure>
+
+<h2>2. Holding the coffee: the capillary cup</h2>
+<p>If surface tension is in charge, the cup's geometry can steer the liquid. A liquid that wets a wall
+creeps along an interior corner when the corner is sharp enough. Concus and Finn showed that for a
+wedge of half-angle α and a liquid with contact angle θ, the liquid rises along the corner without
+limit when</p>
+<div class="eq">α + θ &lt; 90° <span class="n">(2)</span></div>
+<p>The Drink Me Pod cup has a teardrop cross-section whose point is an interior corner of 2α = 30°
+(α = 15°). Its inner wall carries a food-safe hydrophilic coating on which hot coffee shows θ ≈ 30°, so
+α + θ = 45°, comfortably inside the wicking region. The coffee gathers in the corner and climbs it to
+the rim, where the drinker's lips meet it — exactly like sipping from a normal cup.</p>
+
+<figure>
+  <img src="../art/diagram-capillary-cup.svg" alt="">
+  <figcaption><b>Figure 2.</b> The capillary cup. Left: side view — the coffee pools at the base and climbs
+  the corner (dashed) to the rim. Right: cross-section — the 30° corner and the Concus–Finn condition.
+  A round cup has no corner, and the coffee stays wherever it was last pushed.</figcaption>
+</figure>
+
+<p>The speed of the climb matters for the drinking experience. For capillary flow along a corner the
+wetted length grows roughly with the square root of time, as in Washburn's classic analysis of flow in
+a capillary. Bench tests in our drop tower suggest the coffee reaches the rim of a 9 cm cup in well
+under two seconds after docking; the design target is 1.5 s. As the drinker sips, the corner keeps
+refilling from the pool at the base until the cup is empty.</p>
+
+<div class="callout">Design rule: never round the corner. A corner radius above 0.4 mm slows the climb
+noticeably, and above roughly 1 mm the cup stops working as intended. The Mad Hatter has been asked,
+repeatedly, to stop sanding it.</div>
+
+<h2 class="page-break">3. Brewing without gravity: the centrifugal brewer</h2>
+<p>A drip or espresso machine relies on gravity — or on pressure plus gravity to keep the water in
+contact with the grounds and let air escape upward. In orbit there is no "up": the water forms bubbles
+and channels, extraction is uneven, and the grounds float. The Pod spins its brew chamber instead.
+Rotation at angular speed ω gives an apparent acceleration at radius <i>r</i> of</p>
+<div class="eq">a = ω² r <span class="n">(3)</span></div>
+<p>The grounds are pressed outward against a mesh at the chamber wall; hot water is injected at the
+center and flows radially outward through them, exactly as it would flow down through a filter on Earth.
+For one <i>g</i> at a chamber radius of 5 cm:</p>
+<div class="eq">ω = √(g / r) = √(9.81 / 0.05) = 14.0 rad/s ≈ 134 rpm <span class="n">(4)</span></div>
+
+<figure>
+  <img src="../art/diagram-brew-chamber.svg" alt="" style="width: 86%">
+  <figcaption><b>Figure 3.</b> The brew chamber (seen along the spin axis). Water enters at the center,
+  is flung outward through the ring of grounds at the wall, and leaves at the rim for the cup.</figcaption>
+</figure>
+
+<table>
+  <tr><th>Parameter</th><th class="num">Value</th><th>Note</th></tr>
+  <tr><td>Chamber radius</td><td class="num">5 cm</td><td>Fits a standard station galley slot</td></tr>
+  <tr><td>Spin rate</td><td class="num">134 rpm</td><td>1 g at the wall (eq. 4)</td></tr>
+  <tr><td>Water temperature</td><td class="num">93 °C</td><td>Boiling point is set by cabin pressure</td></tr>
+  <tr><td>Dose / yield</td><td class="num">15 g / 250 ml</td><td>The Hatter's ratio, 1 : 16.7</td></tr>
+  <tr><td>Grounds bed thickness</td><td class="num">6 mm</td><td>Even radial flow</td></tr>
+  <tr><td>Brew time</td><td class="num">25–30 s</td><td>Then 3 s at 300 rpm to dry the puck</td></tr>
+  <tr><td>Spin-up / spin-down</td><td class="num">2 s each</td><td>Reaction wheel cancels the torque</td></tr>
+</table>
+
+<p>Spinning a mass inside a station would twist the station the other way. A counter-rotating flywheel
+in the base cancels the angular momentum, so the crew does not feel each espresso. Figure S3 shows the
+spin rate needed for other radii and gravity targets — the same brewer works on the Moon and Mars at a
+lower spin rate.</p>
+
+<h2>4. Keeping it hot</h2>
+<p>On Earth a cup cools mainly by natural convection: warm air rises off it and is replaced by cool air.
+In microgravity warm air does not rise, so the cup loses heat by conduction and radiation, and much more
+slowly unless the cabin ventilation blows across it. A simple lumped model gives exponential cooling
+toward cabin temperature with time constant</p>
+<div class="eq">τ = m c / (h A) <span class="n">(5)</span></div>
+<p>With 250 ml of coffee (<i>m</i> = 0.25 kg, <i>c</i> = 4186 J/kg·K) and an exposed area of about
+0.02 m², a heat-transfer coefficient of 25 W/m²K (convection on Earth) gives τ ≈ 35 minutes; 6 W/m²K
+(still air in orbit) gives τ ≈ 2.4 hours. Figure S4 shows both curves. In practice the coffee stays in
+the pleasant drinking range four times longer in orbit — a feature, and also a safety consideration:
+the cup's outer wall is double-walled so that it is safe to hold at any time.</p>
+
+<h2>5. Safety and compliance</h2>
+<ul>
+  <li><b>Sealed until docked.</b> The brewer releases coffee only when a cup is locked onto its port; the
+  cup's lid opens only while the cup is held.</li>
+  <li><b>Spill containment.</b> A loose sphere of coffee is a hazard to eyes and electronics. The capillary
+  cup pins the liquid in its corner, and the galley's air filter captures stray droplets.</li>
+  <li><b>Thermal.</b> Outer wall below 45 °C at all times (double wall, vacuum gap).</li>
+  <li><b>Regulatory.</b> The Orbital Beverage Authority (chair: the Queen of Hearts) has one rule, applied
+  to all filings. We submit early, in person, with a Red Velvet.</li>
+</ul>
+
+<h2>6. Open questions</h2>
+<p>Milk foam behaves strangely without buoyancy: bubbles do not rise, so a flat white in orbit is
+uniformly foamy throughout. The Hatter considers this an improvement; the Caterpillar has asked "Who are
+<i>you</i> to decide?" A dedicated foam study is planned for Revision D.</p>
+
+<h2>References</h2>
+<ol class="refs">
+  <li>Concus, P., &amp; Finn, R. (1969). On the behavior of a capillary surface in a wedge.
+  <i>Proceedings of the National Academy of Sciences</i>, 63(2), 292–299.</li>
+  <li>Washburn, E. W. (1921). The dynamics of capillary flow. <i>Physical Review</i>, 17(3), 273–283.</li>
+  <li>NASA. Capillary Flow Experiments and the capillary beverage cup, International Space Station
+  research — the real-world inspiration for the cup described here.</li>
+  <li>Carroll, L. (1865). <i>Alice's Adventures in Wonderland</i>. Macmillan.</li>
+</ol>
+
+<p class="note">Rabbit Hole Roasters is a fictional company made up for Deck Edit's sample project. The
+physics in sections 1–4 is real; the products, measurements and the Queen are not.</p>
+
+<script>
+  // Figure 1: Bond number of coffee vs container size, Earth / Mars / Moon / orbit.
+  const rho = 1000, sigma = 0.065
+  const L = range(0.001, 0.2, 140, true)
+  const bo = (g) => L.map((l) => [l * 100, (rho * g * l * l) / sigma])
+  chart(document.getElementById('fig-bond'), {
+    width: 640, height: 300, legend: 'br',
+    x: { min: 0.1, max: 20, log: true, label: 'Container size L (cm)', ticks: [0.1, 0.3, 1, 3, 10, 20], format: (v) => `${v}` },
+    y: { min: 1e-8, max: 1e4, log: true, label: 'Bond number (log scale)', ticks: [1e-8, 1e-6, 1e-4, 1e-2, 1, 1e2, 1e4] },
+    lines: [{ y: 1, label: 'Bo = 1: gravity and surface tension balance', color: BRAND.heart }],
+    series: [
+      { name: 'Earth (9.81 m/s²)', color: BRAND.espresso, points: bo(9.81) },
+      { name: 'Moon (1.62 m/s²)', color: BRAND.soft, points: bo(1.62), dash: '7 5' },
+      { name: 'Orbit (≈ 10⁻⁵ m/s²)', color: BRAND.teal, points: bo(1e-5) },
+    ],
+    marks: [{ x: 4, y: (rho * 9.81 * 0.04 * 0.04) / sigma, label: 'a cup on Earth', dy: -12 }, { x: 4, y: (rho * 1e-5 * 0.04 * 0.04) / sigma, label: 'a cup in orbit', color: BRAND.teal, dy: -12, dx: -14, anchor: 'end' }],
+  })
+</script>
+</body>
+</html>

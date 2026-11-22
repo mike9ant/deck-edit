@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <!-- Alice, CEO: blonde hair, black headband, blue dress, white pinafore, holding a tiny cup. -->
+  <defs>
+    <clipPath id="c"><circle cx="200" cy="200" r="194"/></clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#CDEBFA"/><stop offset="1" stop-color="#7DB6E2"/></linearGradient>
+    <linearGradient id="hair" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FAD86A"/><stop offset="1" stop-color="#E8B83A"/></linearGradient>
+    <path id="spark" d="M0 -16 L4 -4 L16 0 L4 4 L0 16 L-4 4 L-16 0 L-4 -4 Z"/>
+  </defs>
+  <g clip-path="url(#c)">
+    <rect width="400" height="400" fill="url(#bg)"/>
+    <g fill="#FFFFFF" opacity="0.85"><use href="#spark" transform="translate(70 90) scale(0.8)"/><use href="#spark" transform="translate(335 120) scale(0.6)"/><use href="#spark" transform="translate(320 300) scale(0.5)"/></g>
+    <!-- hair, back -->
+    <path d="M112 196 C 96 96, 304 96, 288 196 C 300 262, 322 322, 304 372 L 96 372 C 78 322, 100 262, 112 196 Z" fill="url(#hair)"/>
+    <!-- dress and pinafore -->
+    <path d="M78 410 C 88 330, 140 306, 200 306 C 260 306, 312 330, 322 410 Z" fill="#4A90D9"/>
+    <path d="M146 410 C 150 346, 172 322, 200 322 C 228 322, 250 346, 254 410 Z" fill="#FFFFFF"/>
+    <path d="M168 330 C 180 340, 220 340, 232 330" fill="none" stroke="#DDE8F3" stroke-width="5"/>
+    <!-- neck -->
+    <rect x="184" y="272" width="32" height="42" rx="10" fill="#F4CDB0"/>
+    <!-- face -->
+    <ellipse cx="200" cy="206" rx="72" ry="80" fill="#FADFC8"/>
+    <!-- bangs -->
+    <path d="M126 196 C 124 128, 276 120, 276 196 C 254 166, 226 152, 204 170 C 184 150, 152 162, 126 196 Z" fill="url(#hair)"/>
+    <!-- headband with a bow -->
+    <path d="M124 170 C 148 110, 252 110, 278 170" stroke="#1E1E2E" stroke-width="13" fill="none" stroke-linecap="round"/>
+    <path d="M250 124 L 276 104 L 280 132 Z" fill="#1E1E2E"/><path d="M250 124 L 284 128 L 266 148 Z" fill="#1E1E2E"/>
+    <!-- eyes -->
+    <ellipse cx="174" cy="214" rx="9.5" ry="13" fill="#2B2B45"/><ellipse cx="226" cy="214" rx="9.5" ry="13" fill="#2B2B45"/>
+    <circle cx="177" cy="209" r="3.5" fill="#FFFFFF"/><circle cx="229" cy="209" r="3.5" fill="#FFFFFF"/>
+    <path d="M160 194 Q 174 186 186 192" fill="none" stroke="#C99A3A" stroke-width="4" stroke-linecap="round"/>
+    <path d="M214 192 Q 226 186 240 194" fill="none" stroke="#C99A3A" stroke-width="4" stroke-linecap="round"/>
+    <!-- cheeks and smile -->
+    <ellipse cx="156" cy="240" rx="13" ry="8" fill="#F7A8B8" opacity="0.6"/><ellipse cx="244" cy="240" rx="13" ry="8" fill="#F7A8B8" opacity="0.6"/>
+    <path d="M182 246 Q 200 264 218 246" stroke="#C0504D" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <!-- a tiny cup of coffee -->
+    <g transform="translate(250 330)">
+      <path d="M0 0 H 46 L 40 36 A 8 8 0 0 1 32 42 H 14 A 8 8 0 0 1 6 36 Z" fill="#FFFFFF" stroke="#C9B48F" stroke-width="3"/>
+      <path d="M46 8 C 62 8, 62 26, 44 26" fill="none" stroke="#FFFFFF" stroke-width="6"/>
+      <ellipse cx="23" cy="2" rx="21" ry="5" fill="#6B4226"/>
+      <path d="M16 -8 C 10 -20, 22 -24, 16 -36 M 30 -8 C 24 -20, 36 -24, 30 -36" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.85"/>
+    </g>
+  </g>
+  <circle cx="200" cy="200" r="194" fill="none" stroke="#FFFFFF" stroke-width="10"/>
+</svg>

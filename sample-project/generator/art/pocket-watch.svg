@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 720" width="600" height="720">
+  <!-- The White Rabbit's pocket watch: two minutes to launch, and two days slow. -->
+  <defs>
+    <radialGradient id="gold" cx="38%" cy="32%" r="75%"><stop offset="0" stop-color="#FFF0BF"/><stop offset="0.55" stop-color="#F2B33D"/><stop offset="1" stop-color="#A86A10"/></radialGradient>
+    <radialGradient id="face" cx="45%" cy="40%" r="70%"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F3E7D3"/></radialGradient>
+    <path id="spark" d="M0 -16 L4 -4 L16 0 L4 4 L0 16 L-4 4 L-16 0 L-4 -4 Z"/>
+  </defs>
+  <!-- chain -->
+  <g fill="none" stroke="#D99A22" stroke-width="9">
+    <ellipse cx="300" cy="40" rx="16" ry="11"/><ellipse cx="300" cy="66" rx="11" ry="16"/><ellipse cx="300" cy="92" rx="16" ry="11"/><ellipse cx="300" cy="118" rx="11" ry="16"/>
+  </g>
+  <!-- bow and crown -->
+  <path d="M260 160 C 260 120, 340 120, 340 160" fill="none" stroke="url(#gold)" stroke-width="16"/>
+  <rect x="276" y="150" width="48" height="38" rx="8" fill="url(#gold)" stroke="#9A6A12" stroke-width="4"/>
+  <!-- case -->
+  <circle cx="300" cy="430" r="250" fill="url(#gold)" stroke="#9A6A12" stroke-width="6"/>
+  <circle cx="300" cy="430" r="214" fill="none" stroke="#FFF0BF" stroke-width="6" opacity="0.7"/>
+  <circle cx="300" cy="430" r="200" fill="url(#face)" stroke="#C98A1E" stroke-width="4"/>
+  <!-- minute ticks -->
+  <g stroke="#3B2A6B" stroke-width="3" stroke-linecap="round">
+    <path d="M300 246 V 262" transform="rotate(30 300 430)"/><path d="M300 246 V 262" transform="rotate(60 300 430)"/>
+    <path d="M300 246 V 262" transform="rotate(120 300 430)"/><path d="M300 246 V 262" transform="rotate(150 300 430)"/>
+    <path d="M300 246 V 262" transform="rotate(210 300 430)"/><path d="M300 246 V 262" transform="rotate(240 300 430)"/>
+    <path d="M300 246 V 262" transform="rotate(300 300 430)"/><path d="M300 246 V 262" transform="rotate(330 300 430)"/>
+  </g>
+  <g font-family="Georgia, serif" font-size="40" font-weight="bold" fill="#3B2A6B" text-anchor="middle">
+    <text x="300" y="296">XII</text><text x="456" y="444">III</text><text x="300" y="598">VI</text><text x="146" y="444">IX</text>
+  </g>
+  <text x="300" y="512" font-family="Georgia, serif" font-size="20" font-style="italic" fill="#6B4226" text-anchor="middle">launch</text>
+  <!-- hands: two minutes to twelve -->
+  <path d="M300 430 L 300 286" stroke="#14123A" stroke-width="7" stroke-linecap="round" transform="rotate(-12 300 430)"/>
+  <path d="M300 430 L 300 330" stroke="#14123A" stroke-width="11" stroke-linecap="round" transform="rotate(-6 300 430)"/>
+  <path d="M300 450 L 300 300" stroke="#D7263D" stroke-width="3" stroke-linecap="round" transform="rotate(140 300 430)"/>
+  <circle cx="300" cy="430" r="14" fill="#14123A"/><circle cx="300" cy="430" r="5" fill="#F2B33D"/>
+  <!-- hurry lines and sparkles -->
+  <g stroke="#FFFFFF" stroke-width="9" stroke-linecap="round" opacity="0.85">
+    <path d="M30 360 L 70 370"/><path d="M20 430 L 64 430"/><path d="M30 500 L 70 490"/>
+    <path d="M570 360 L 530 370"/><path d="M580 430 L 536 430"/><path d="M570 500 L 530 490"/>
+  </g>
+  <g fill="#FFF3C4"><use href="#spark" transform="translate(110 210) scale(1.2)"/><use href="#spark" transform="translate(500 230) scale(0.9)"/></g>
+</svg>

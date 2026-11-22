@@ -1,0 +1,9 @@
+{
+  "name": "deck-edit-sample-project",
+  "private": true,
+  "description": "Generates the sample project's deck, PDFs and images (build.mjs, make_deck.py); run by hand, see ../README.md",
+  "type": "module",
+  "dependencies": {
+    "puppeteer-core": "23.11.1"
+  }
+}

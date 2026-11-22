@@ -87,8 +87,13 @@ fn time(s: &str) -> Option<DateTime<Utc>> {
 }
 
 /// The last finished turn with token counts (the one the next request continues from).
+/// The turn the next one continues from: the latest that ended — even one that reported no usage
+/// (stopped or killed before the CLI's summary): its settings and end time are what the cache was
+/// left with. Skipping it would reach past it to an older turn — across a conversation split, the
+/// old session's size and settings. Without usage the size is 0 here; `predict_cache` then reads
+/// the session's own transcript.
 fn previous(chat: &Chat) -> Option<&Turn> {
-    chat.turns.iter().rev().find(|t| t.ended_at.is_some() && t.usage.is_some() && t.status != "running")
+    chat.turns.iter().rev().find(|t| t.ended_at.is_some() && t.status != "running")
 }
 
 /// Before a turn with `next` settings, at `now`: will it miss the cache? `ttl`: (seconds, learned).
@@ -203,6 +208,23 @@ mod tests {
     const T1: &str = "2026-11-19T10:01:00Z";
     fn at(s: &str) -> DateTime<Utc> {
         time(s).unwrap()
+    }
+
+    #[test]
+    fn a_stopped_turn_after_a_split_is_the_one_continued_not_the_old_session() {
+        // A big turn (normal speed), then a split turn in fast mode that was killed before reporting usage.
+        let old = turn(T0, T1, usage(10, 500_000, 574_000));
+        let mut split: Turn = serde_json::from_value(serde_json::json!({
+            "id": "s", "prompt": "p", "startedAt": "2026-11-19T10:02:00Z", "endedAt": "2026-11-19T10:03:00Z", "status": "stopped", "fast": true
+        }))
+        .unwrap();
+        split.usage = None;
+        let c = chat(vec![old, split]);
+        let next = CacheKey { fast: true, ..Default::default() };
+        let p = predict(&c, &next, at("2026-11-19T10:04:00Z"), (LONG_TTL, true));
+        assert!(!p.cold, "same settings as the split turn, a minute later: warm (was {:?})", p.reason);
+        assert_eq!(p.context_tokens, 0, "the old session's size doesn't apply (the transcript fills it in)");
+        assert!(!p.offer_split);
     }
 
     #[test]

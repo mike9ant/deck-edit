@@ -2,7 +2,8 @@
  * Answers the agent's `screenshot_slide` tool: renders the requested slide
  * (or PDF page) exactly as the app shows it and posts a PNG back.
  *
- * Slides are rasterized with html-to-image. Fonts registered through the
+ * Slides are rasterized with html-to-image (captured until stable in WebKit, see
+ * capturePng). Fonts registered through the
  * FontFace API (the deck's embedded fonts) aren't visible to it, so we decode
  * the embedded font parts ourselves and hand it matching @font-face CSS.
  *
@@ -27,6 +28,26 @@ import { scalingForChart } from './deck/SlideRender'
 import { pdfKey, usePdfs } from './pdf/pdfStore'
 
 const fontCss = new WeakMap<PresentationData, string>()
+
+/** Safari's engine (the desktop app's web view), not Chrome's. */
+const isWebKit = /AppleWebKit/.test(navigator.userAgent) && !/Chrome|Chromium|Edg\//.test(navigator.userAgent)
+
+/**
+ * html-to-image draws the slide as an SVG (its HTML in a foreignObject) onto a canvas. WebKit only
+ * decodes the pictures inside that SVG once it has been drawn, so the first capture comes out
+ * without them — no pictures, no background picture. There, capture until two captures agree
+ * (at most four); Chrome gets it right the first time.
+ */
+async function capturePng(el: HTMLElement, options: Parameters<typeof toPng>[1]): Promise<string> {
+  let url = await toPng(el, options)
+  if (!isWebKit) return url
+  for (let i = 0; i < 3; i++) {
+    const next = await toPng(el, options)
+    if (next === url) break
+    url = next
+  }
+  return url
+}
 
 function embeddedFontCss(pres: PresentationData): string {
   const cached = fontCss.get(pres)
@@ -113,7 +134,7 @@ async function slidePng(pid: string, deck: string, slideNumber: number, showNote
       if (getComputedStyle(handle.element).position === 'static') handle.element.style.position = 'relative'
       handle.element.appendChild(overlay)
     }
-    return await toPng(handle.element, { width: pres.width, height: pres.height, pixelRatio: 1.5, backgroundColor: '#ffffff', fontEmbedCSS: embeddedFontCss(pres) })
+    return await capturePng(handle.element, { width: pres.width, height: pres.height, pixelRatio: 1.5, backgroundColor: '#ffffff', fontEmbedCSS: embeddedFontCss(pres) })
   } finally {
     handle.dispose()
     host.remove()

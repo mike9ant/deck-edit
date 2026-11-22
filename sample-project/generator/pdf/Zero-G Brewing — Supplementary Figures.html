@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zero-G Brewing — Supplementary Figures</title>
+<link rel="stylesheet" href="doc.css">
+<script src="charts.js"></script>
+<style>
+  figure { margin: 4pt 0 10pt; }
+  .chart svg { max-height: 2.75in; }
+</style>
+</head>
+<body>
+<div class="banner" style="padding: 10pt 16pt">
+  <img src="../art/diagram-capillary-cup.svg" alt="" style="height: 56pt; background: #fff; border-radius: 6pt; padding: 3pt">
+  <div>
+    <div class="kicker">Supplement to RHR-TD-001 · Revision C</div>
+    <h1 style="font-size: 20pt">Zero-G Brewing — Supplementary Figures</h1>
+    <div class="sub">The curves behind the Drink Me Pod's design values</div>
+  </div>
+</div>
+<p class="meta">Every curve here is computed from the formulas in the technical design (equations 1–5);
+the design points are the values used in the Pod. Fictional company, real physics.</p>
+
+<figure>
+  <div class="chart" id="s1"></div>
+  <figcaption><b>Figure S1. Gravity vs. surface tension.</b> Bond number Bo = ρgL²/σ of hot coffee
+  (ρ = 1000 kg/m³, σ = 0.065 N/m) against container size, for Earth, Mars, the Moon and low Earth orbit.
+  Below Bo = 1 surface tension shapes the liquid. A 4 cm cup is at Bo ≈ 240 on Earth and ≈ 0.0002 in orbit.</figcaption>
+</figure>
+
+<figure>
+  <div class="chart" id="s2"></div>
+  <figcaption><b>Figure S2. When a corner wicks.</b> The Concus–Finn condition α + θ &lt; 90° (shaded) for
+  corner half-angle α and contact angle θ. The Pod cup (α = 15°, θ ≈ 30°) sits well inside the wicking
+  region; an uncoated cup (θ ≈ 70°) would need a corner sharper than 2α = 40°, and a round cup (no corner)
+  never wicks.</figcaption>
+</figure>
+
+<figure>
+  <div class="chart" id="s3"></div>
+  <figcaption><b>Figure S3. Spin rate for artificial brewing gravity.</b> Required spin rate
+  (rpm = 60/2π · √(a/r)) against brew-chamber radius, for 0.5 g, 1 g and 2 g at the wall. The Pod's 5 cm
+  chamber needs 134 rpm for 1 g. On the Moon or Mars the same chamber can spin slower, since part of the
+  brewing gravity is supplied for free.</figcaption>
+</figure>
+
+<figure>
+  <div class="chart" id="s4"></div>
+  <figcaption><b>Figure S4. Cooling with and without convection.</b> Coffee temperature over time from 85 °C
+  in a 22 °C cabin, lumped model T(t) = T<sub>a</sub> + (T<sub>0</sub> − T<sub>a</sub>)·e<sup>−t/τ</sup> with
+  τ = mc/(hA), m = 0.25 kg, A = 0.02 m². On Earth natural convection gives h ≈ 25 W/m²K (τ ≈ 35 min);
+  in orbit's still air h ≈ 6 W/m²K (τ ≈ 2.4 h). The band is the pleasant drinking range, 55–70 °C: the coffee
+  spends about 13 minutes in it on Earth (minutes 10–23) and nearly an hour in orbit (minutes 40–94).</figcaption>
+</figure>
+
+<p class="note">Rabbit Hole Roasters is fictional (Deck Edit sample project). Equations: see the technical
+design, sections 1–4. Model limitations: the cooling model ignores evaporation and the cup's own heat
+capacity; the wicking condition is for an ideal sharp corner.</p>
+
+<script>
+  const rho = 1000, sigma = 0.065
+  // S1
+  const L = range(0.001, 0.2, 140, true)
+  const bo = (g) => L.map((l) => [l * 100, (rho * g * l * l) / sigma])
+  chart(document.getElementById('s1'), {
+    width: 680, height: 300, legend: 'br',
+    x: { min: 0.1, max: 20, log: true, label: 'Container size L (cm)', ticks: [0.1, 0.3, 1, 3, 10, 20], format: (v) => `${v}` },
+    y: { min: 1e-8, max: 1e4, log: true, label: 'Bond number', ticks: [1e-8, 1e-6, 1e-4, 1e-2, 1, 1e2, 1e4] },
+    lines: [{ y: 1, label: 'Bo = 1', color: BRAND.heart }],
+    series: [
+      { name: 'Earth', color: BRAND.espresso, points: bo(9.81) },
+      { name: 'Mars', color: BRAND.heart, points: bo(3.71), dash: '3 4' },
+      { name: 'Moon', color: BRAND.soft, points: bo(1.62), dash: '7 5' },
+      { name: 'Low Earth orbit (≈ 10⁻⁶ g)', color: BRAND.teal, points: bo(1e-5) },
+    ],
+    marks: [{ x: 4, y: (rho * 1e-5 * 0.0016) / sigma, label: '4 cm cup in orbit', color: BRAND.teal, dy: -12, dx: -14, anchor: 'end' }],
+  })
+  // S2: wicking region α + θ < 90°
+  chart(document.getElementById('s2'), {
+    width: 680, height: 300, legend: 'tr',
+    x: { min: 0, max: 90, step: 15, label: 'Corner half-angle α (degrees)' },
+    y: { min: 0, max: 90, step: 15, label: 'Contact angle θ (degrees)' },
+    regions: [{ path: [[0, 0], [90, 0], [0, 90]], color: BRAND.teal, label: 'wicks (α + θ < 90°)', at: [26, 22] }],
+    series: [{ name: 'α + θ = 90°', color: BRAND.teal, points: [[0, 90], [90, 0]] }],
+    marks: [
+      { x: 15, y: 30, label: 'Drink Me Pod (15°, 30°)' },
+      { x: 20, y: 70, label: 'uncoated cup with a 40° corner', color: BRAND.heart, dy: -12 },
+    ],
+  })
+  // S3: rpm vs radius
+  const radii = range(0.02, 0.15, 100)
+  const rpm = (a) => radii.map((r) => [r * 100, (60 / (2 * Math.PI)) * Math.sqrt(a / r)])
+  chart(document.getElementById('s3'), {
+    width: 680, height: 300, legend: 'tr',
+    x: { min: 2, max: 15, ticks: [2, 4, 6, 8, 10, 12, 14], label: 'Brew-chamber radius r (cm)' },
+    y: { min: 0, max: 400, step: 50, label: 'Spin rate (rpm)' },
+    series: [
+      { name: '2 g at the wall', color: BRAND.nebula, points: rpm(2 * 9.81), dash: '7 5' },
+      { name: '1 g (design)', color: BRAND.espresso, points: rpm(9.81), width: 4 },
+      { name: '0.5 g', color: BRAND.teal, points: rpm(0.5 * 9.81) },
+    ],
+    marks: [{ x: 5, y: (60 / (2 * Math.PI)) * Math.sqrt(9.81 / 0.05), label: 'Pod: 5 cm, 134 rpm', dy: 24, dx: 10 }],
+  })
+  // S4: cooling curves
+  const m = 0.25, c = 4186, A = 0.02, T0 = 85, Ta = 22
+  const minutes = range(0, 240, 200)
+  const cool = (h) => minutes.map((t) => [t, Ta + (T0 - Ta) * Math.exp(-(t * 60) / ((m * c) / (h * A)))])
+  chart(document.getElementById('s4'), {
+    width: 680, height: 300, legend: 'tr',
+    x: { min: 0, max: 240, step: 30, label: 'Time (minutes)' },
+    y: { min: 20, max: 90, step: 10, label: 'Coffee temperature (°C)' },
+    bands: [{ y0: 55, y1: 70, color: BRAND.gold, label: 'drinking range 55–70 °C' }],
+    series: [
+      { name: 'Earth: convection, h = 25 W/m²K (τ ≈ 35 min)', color: BRAND.espresso, points: cool(25) },
+      { name: 'Orbit: still air, h = 6 W/m²K (τ ≈ 2.4 h)', color: BRAND.teal, points: cool(6), width: 4 },
+    ],
+  })
+</script>
+</body>
+</html>

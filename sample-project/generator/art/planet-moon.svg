@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320" width="320" height="320">
+  <!-- The Moon (home of the Mock Turtle Station kiosk, 2028). -->
+  <defs>
+    <radialGradient id="rock" cx="38%" cy="32%" r="75%"><stop offset="0" stop-color="#F1EEE8"/><stop offset="1" stop-color="#A9A39A"/></radialGradient>
+    <radialGradient id="shade" cx="30%" cy="28%" r="85%"><stop offset="0.55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#0B0A2A" stop-opacity="0.5"/></radialGradient>
+    <radialGradient id="crater" cx="40%" cy="35%" r="65%"><stop offset="0" stop-color="#9B958C"/><stop offset="1" stop-color="#C9C3B9"/></radialGradient>
+  </defs>
+  <circle cx="160" cy="160" r="128" fill="url(#rock)"/>
+  <g fill="url(#crater)">
+    <circle cx="112" cy="120" r="26"/><circle cx="196" cy="98" r="14"/><circle cx="210" cy="190" r="32"/>
+    <circle cx="120" cy="214" r="16"/><circle cx="166" cy="160" r="9"/><circle cx="92" cy="170" r="8"/>
+  </g>
+  <!-- a tiny kiosk with a steaming cup -->
+  <g transform="translate(150 22)">
+    <rect x="0" y="16" width="36" height="22" rx="3" fill="#D7263D"/>
+    <path d="M-4 18 L 18 4 L 40 18 Z" fill="#F2B33D"/>
+    <path d="M12 -2 C 8 -10, 16 -12, 12 -20" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+  </g>
+  <circle cx="160" cy="160" r="128" fill="url(#shade)"/>
+</svg>

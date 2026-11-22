@@ -12,7 +12,7 @@
 #   ./run.sh push             Push main; bumps the patch version first when the commits are from a new day
 #
 # Env: DECKEDIT_PORT (default 3101), DECKEDIT_DATA_DIR (default ~/.deck-edit),
-#      DECKEDIT_TEST_DECK=<path.pptx> enables the real-deck round-trip test.
+#      DECKEDIT_TEST_DECK=<path.pptx> runs the round-trip test on that deck (default: the sample deck).
 #      release: DECKEDIT_SIGN_IDENTITY (default: the keychain's "Developer ID Application" certificate),
 #               DECKEDIT_NOTARY_PROFILE (default deck-edit — `xcrun notarytool store-credentials deck-edit …`).
 

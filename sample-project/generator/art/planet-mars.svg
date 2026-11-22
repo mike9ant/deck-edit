@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 320" width="320" height="320">
+  <!-- Mars (the drive-thru, 2029: delivery in seven months). -->
+  <defs>
+    <radialGradient id="rust" cx="38%" cy="32%" r="75%"><stop offset="0" stop-color="#F08A55"/><stop offset="1" stop-color="#9A3A1C"/></radialGradient>
+    <radialGradient id="shade" cx="30%" cy="28%" r="85%"><stop offset="0.55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#0B0A2A" stop-opacity="0.55"/></radialGradient>
+    <clipPath id="ball"><circle cx="160" cy="160" r="128"/></clipPath>
+  </defs>
+  <circle cx="160" cy="160" r="128" fill="url(#rust)"/>
+  <g clip-path="url(#ball)">
+    <path d="M30 150 C 90 136, 150 168, 210 150 C 250 138, 280 150, 300 160 L 300 182 C 260 172, 230 180, 200 186 C 140 198, 90 168, 30 176 Z" fill="#B54A26" opacity="0.7"/>
+    <ellipse cx="160" cy="44" rx="70" ry="22" fill="#FFFFFF" opacity="0.9"/>
+    <circle cx="110" cy="220" r="14" fill="#8C3218" opacity="0.6"/><circle cx="214" cy="110" r="10" fill="#8C3218" opacity="0.6"/>
+  </g>
+  <!-- the drive-thru sign -->
+  <g transform="translate(206 196)">
+    <rect x="-4" y="0" width="6" height="44" fill="#14123A"/>
+    <rect x="-46" y="-28" width="90" height="30" rx="5" fill="#F6EBD9" stroke="#14123A" stroke-width="3"/>
+    <text x="-1" y="-8" font-family="Arial, sans-serif" font-size="12" font-weight="bold" fill="#D7263D" text-anchor="middle">DRIVE-THRU</text>
+  </g>
+  <circle cx="160" cy="160" r="128" fill="url(#shade)"/>
+</svg>

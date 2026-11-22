@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 900" width="700" height="900">
+  <!-- The Drink Me Pod: a potion bottle that is also a little rocket, full of coffee. -->
+  <defs>
+    <radialGradient id="halo" cx="50%" cy="55%" r="50%">
+      <stop offset="0" stop-color="#2BB3A3" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#2BB3A3" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#DDF4F7" stop-opacity="0.45"/>
+      <stop offset="0.5" stop-color="#B9E4EC" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#8FCBD8" stop-opacity="0.4"/>
+    </linearGradient>
+    <linearGradient id="coffee" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9A6238"/>
+      <stop offset="1" stop-color="#3E220F"/>
+    </linearGradient>
+    <linearGradient id="cork" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#F0505F"/>
+      <stop offset="1" stop-color="#A81B2E"/>
+    </linearGradient>
+    <linearGradient id="flame" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFF3C4"/>
+      <stop offset="0.5" stop-color="#F2B33D"/>
+      <stop offset="1" stop-color="#E0602A" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="inside">
+      <path d="M312 220 H 388 V 300 C 388 330, 528 372, 528 520 C 528 640, 446 712, 350 712 C 254 712, 172 640, 172 520 C 172 372, 312 330, 312 300 Z"/>
+    </clipPath>
+    <path id="spark" d="M0 -16 L4 -4 L16 0 L4 4 L0 16 L-4 4 L-16 0 L-4 -4 Z"/>
+  </defs>
+
+  <circle cx="350" cy="500" r="330" fill="url(#halo)"/>
+
+  <!-- flame -->
+  <path d="M300 712 C 300 790, 350 860, 350 880 C 350 860, 400 790, 400 712 Z" fill="url(#flame)"/>
+  <path d="M325 712 C 325 760, 350 800, 350 812 C 350 800, 375 760, 375 712 Z" fill="#FFF3C4" opacity="0.9"/>
+
+  <!-- fins -->
+  <path d="M196 610 L 120 735 L 232 700 Z" fill="#F2B33D" stroke="#C98A1E" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M504 610 L 580 735 L 468 700 Z" fill="#F2B33D" stroke="#C98A1E" stroke-width="4" stroke-linejoin="round"/>
+
+  <!-- coffee inside -->
+  <g clip-path="url(#inside)">
+    <rect x="160" y="200" width="380" height="520" fill="#E9F7FA" opacity="0.35"/>
+    <path d="M160 440 C 220 420, 280 460, 350 440 C 420 420, 480 458, 540 438 V 720 H 160 Z" fill="url(#coffee)"/>
+    <path d="M160 440 C 220 420, 280 460, 350 440 C 420 420, 480 458, 540 438 V 462 C 480 482, 420 444, 350 464 C 280 484, 220 444, 160 464 Z" fill="#E7C08F"/>
+    <g fill="#FFFFFF" opacity="0.55">
+      <circle cx="260" cy="560" r="9"/><circle cx="300" cy="620" r="6"/><circle cx="420" cy="590" r="11"/>
+      <circle cx="390" cy="660" r="5"/><circle cx="455" cy="520" r="6"/>
+    </g>
+  </g>
+  <!-- glass -->
+  <path d="M312 220 H 388 V 300 C 388 330, 528 372, 528 520 C 528 640, 446 712, 350 712 C 254 712, 172 640, 172 520 C 172 372, 312 330, 312 300 Z" fill="url(#glass)" stroke="#FFFFFF" stroke-width="7" opacity="0.9"/>
+  <path d="M215 470 C 215 420, 250 385, 290 365" fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round" opacity="0.75"/>
+  <path d="M206 520 C 206 512, 207 505, 208 498" fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round" opacity="0.75"/>
+  <!-- center fin, in front -->
+  <path d="M350 650 L 330 740 L 370 740 Z" fill="#E0962A"/>
+
+  <!-- the cork, as a nose cone -->
+  <path d="M300 222 H 400 L 392 196 C 380 120, 360 80, 350 66 C 340 80, 320 120, 308 196 Z" fill="url(#cork)"/>
+  <path d="M330 190 C 335 140, 343 108, 350 92" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round" opacity="0.5"/>
+  <rect x="294" y="214" width="112" height="18" rx="6" fill="#F2B33D"/>
+
+  <!-- the tag -->
+  <path d="M396 262 C 440 262, 450 300, 470 318" fill="none" stroke="#6B4226" stroke-width="4"/>
+  <g transform="rotate(12 545 360) translate(-30 0) scale(0.92)">
+    <path d="M455 318 H 672 A 14 14 0 0 1 686 332 V 398 A 14 14 0 0 1 672 412 H 455 L 430 365 Z" fill="#FFF6E6" stroke="#6B4226" stroke-width="4"/>
+    <circle cx="456" cy="365" r="8" fill="none" stroke="#6B4226" stroke-width="4"/>
+    <text x="578" y="372" font-family="Georgia, serif" font-size="30" font-weight="bold" fill="#3B2A6B" text-anchor="middle">DRINK ME</text>
+    <text x="578" y="400" font-family="Georgia, serif" font-size="17" font-style="italic" fill="#6B4226" text-anchor="middle">(works in zero g)</text>
+  </g>
+
+  <g fill="#FFF3C4">
+    <use href="#spark" transform="translate(130 300) scale(1.1)"/>
+    <use href="#spark" transform="translate(600 560) scale(0.8)"/>
+    <use href="#spark" transform="translate(560 170) scale(0.6)"/>
+  </g>
+</svg>

@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" width="900" height="700">
+  <!-- A startled mug watching its latte float away (the problem slide). -->
+  <defs>
+    <linearGradient id="mug" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.6" stop-color="#F3E7D3"/>
+      <stop offset="1" stop-color="#D9C4A3"/>
+    </linearGradient>
+    <radialGradient id="blob" cx="35%" cy="30%" r="75%">
+      <stop offset="0" stop-color="#C9915E"/>
+      <stop offset="0.5" stop-color="#7A4B2A"/>
+      <stop offset="1" stop-color="#4A2A14"/>
+    </radialGradient>
+    <radialGradient id="foam" cx="40%" cy="35%" r="70%">
+      <stop offset="0" stop-color="#FFF6E6"/>
+      <stop offset="1" stop-color="#E7C79B"/>
+    </radialGradient>
+    <path id="spark" d="M0 -16 L4 -4 L16 0 L4 4 L0 16 L-4 4 L-16 0 L-4 -4 Z"/>
+  </defs>
+
+  <!-- motion lines -->
+  <g stroke="#B8A8E0" stroke-width="7" stroke-linecap="round" opacity="0.7">
+    <path d="M150 520 L 100 545"/><path d="M160 560 L 95 595"/><path d="M190 600 L 140 635"/>
+  </g>
+
+  <!-- the mug, tipping in surprise -->
+  <g transform="rotate(-24 330 460)">
+    <path d="M455 370 C 545 370, 545 500, 455 500" fill="none" stroke="#E6D6BC" stroke-width="30" stroke-linecap="round"/>
+    <path d="M455 372 C 532 374, 532 496, 455 498" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" opacity="0.7"/>
+    <path d="M205 330 H 455 V 530 A 64 64 0 0 1 391 594 H 269 A 64 64 0 0 1 205 530 Z" fill="url(#mug)" stroke="#CBB592" stroke-width="4"/>
+    <ellipse cx="330" cy="330" rx="125" ry="28" fill="#EFE2CD" stroke="#CBB592" stroke-width="4"/>
+    <ellipse cx="330" cy="333" rx="106" ry="19" fill="#5A341C"/>
+    <!-- face -->
+    <path d="M272 392 Q 292 378 310 390" fill="none" stroke="#3B2A6B" stroke-width="6" stroke-linecap="round"/>
+    <path d="M352 390 Q 370 378 390 392" fill="none" stroke="#3B2A6B" stroke-width="6" stroke-linecap="round"/>
+    <ellipse cx="292" cy="425" rx="15" ry="21" fill="#14123A"/>
+    <ellipse cx="370" cy="425" rx="15" ry="21" fill="#14123A"/>
+    <circle cx="297" cy="417" r="5" fill="#FFFFFF"/><circle cx="375" cy="417" r="5" fill="#FFFFFF"/>
+    <ellipse cx="331" cy="482" rx="18" ry="24" fill="#6B2A2A"/>
+    <ellipse cx="331" cy="490" rx="10" ry="10" fill="#E07A7A"/>
+    <ellipse cx="258" cy="462" rx="16" ry="9" fill="#F7A8C4" opacity="0.7"/>
+    <ellipse cx="404" cy="462" rx="16" ry="9" fill="#F7A8C4" opacity="0.7"/>
+  </g>
+
+  <!-- the latte, achieving escape velocity -->
+  <path d="M430 255 C 450 225, 495 222, 505 250 C 520 285, 470 305, 445 290 C 425 280, 418 268, 430 255 Z" fill="url(#blob)"/>
+  <ellipse cx="455" cy="248" rx="12" ry="7" fill="#FFFFFF" opacity="0.55" transform="rotate(-20 455 248)"/>
+  <path d="M545 150 C 580 110, 655 110, 668 150 C 685 200, 640 228, 600 222 C 560 216, 525 190, 545 150 Z" fill="url(#blob)"/>
+  <path d="M560 150 C 585 125, 640 128, 650 152 C 630 145, 585 142, 560 150 Z" fill="url(#foam)"/>
+  <ellipse cx="585" cy="140" rx="16" ry="8" fill="#FFFFFF" opacity="0.6" transform="rotate(-15 585 140)"/>
+  <circle cx="725" cy="95" r="26" fill="url(#blob)"/>
+  <circle cx="717" cy="86" r="7" fill="#FFFFFF" opacity="0.55"/>
+  <circle cx="790" cy="62" r="15" fill="url(#blob)"/>
+  <circle cx="835" cy="40" r="9" fill="url(#blob)"/>
+  <circle cx="520" cy="300" r="11" fill="url(#blob)"/>
+  <circle cx="610" cy="270" r="17" fill="url(#blob)"/>
+  <circle cx="688" cy="215" r="9" fill="url(#blob)"/>
+  <!-- a heart of foam escaping too -->
+  <path d="M760 190 C 742 178, 740 164, 752 163 C 757 163, 760 167, 761 171 C 762 167, 765 163, 770 163 C 782 164, 780 178, 760 190 Z" fill="#FFF6E6" transform="rotate(18 760 175)"/>
+
+  <g fill="#F2B33D">
+    <use href="#spark" transform="translate(410 160) scale(0.9)"/>
+    <use href="#spark" transform="translate(830 150) scale(0.7)"/>
+    <use href="#spark" transform="translate(660 320) scale(0.6)"/>
+  </g>
+</svg>

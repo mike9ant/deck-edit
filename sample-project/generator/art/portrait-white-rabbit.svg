@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <!-- The White Rabbit, COO: long ears, red waistcoat, and the pocket watch (two days slow). -->
+  <defs>
+    <clipPath id="c"><circle cx="200" cy="200" r="194"/></clipPath>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FDE3EC"/><stop offset="1" stop-color="#F3A8C0"/></linearGradient>
+    <radialGradient id="fur" cx="45%" cy="35%" r="70%"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#E4DFEE"/></radialGradient>
+    <radialGradient id="gold" cx="40%" cy="35%" r="70%"><stop offset="0" stop-color="#FFE7A0"/><stop offset="1" stop-color="#C98A1E"/></radialGradient>
+  </defs>
+  <g clip-path="url(#c)">
+    <rect width="400" height="400" fill="url(#bg)"/>
+    <!-- ears -->
+    <path d="M150 170 C 118 100, 118 20, 146 -10 C 178 30, 184 110, 178 170 Z" fill="url(#fur)" stroke="#D8D0E6" stroke-width="3"/>
+    <path d="M152 160 C 132 104, 134 44, 148 18 C 166 54, 170 110, 168 160 Z" fill="#F7A8C4"/>
+    <path d="M222 170 C 228 100, 252 26, 290 4 C 300 60, 270 130, 250 176 Z" fill="url(#fur)" stroke="#D8D0E6" stroke-width="3"/>
+    <path d="M230 160 C 238 106, 256 54, 280 30 C 284 76, 262 128, 246 164 Z" fill="#F7A8C4"/>
+    <!-- red jacket -->
+    <path d="M70 410 C 84 330, 140 300, 200 300 C 260 300, 316 330, 330 410 Z" fill="#D7263D"/>
+    <path d="M200 300 L 170 410 H 230 Z" fill="#F6EBD9"/>
+    <path d="M200 312 L 182 300 L 182 326 Z" fill="#14123A"/><path d="M200 312 L 218 300 L 218 326 Z" fill="#14123A"/>
+    <!-- head -->
+    <ellipse cx="200" cy="232" rx="82" ry="76" fill="url(#fur)" stroke="#D8D0E6" stroke-width="3"/>
+    <!-- eyes -->
+    <ellipse cx="170" cy="222" rx="11" ry="14" fill="#2B2B45"/><ellipse cx="230" cy="222" rx="11" ry="14" fill="#2B2B45"/>
+    <circle cx="174" cy="216" r="4" fill="#FFFFFF"/><circle cx="234" cy="216" r="4" fill="#FFFFFF"/>
+    <!-- a worried brow: he is late -->
+    <path d="M154 196 Q 166 204 182 200" fill="none" stroke="#B9AFCC" stroke-width="4" stroke-linecap="round"/>
+    <path d="M218 200 Q 234 204 246 196" fill="none" stroke="#B9AFCC" stroke-width="4" stroke-linecap="round"/>
+    <!-- nose, mouth, whiskers -->
+    <path d="M190 250 H 210 L 200 262 Z" fill="#F07A9E"/>
+    <path d="M200 262 V 272 M 200 272 Q 190 282 182 274 M 200 272 Q 210 282 218 274" fill="none" stroke="#8C7FA8" stroke-width="3" stroke-linecap="round"/>
+    <g stroke="#B9AFCC" stroke-width="2.5" stroke-linecap="round">
+      <path d="M168 258 L 118 248"/><path d="M168 266 L 116 270"/><path d="M232 258 L 282 248"/><path d="M232 266 L 284 270"/>
+    </g>
+    <!-- the pocket watch -->
+    <path d="M226 330 C 250 316, 270 318, 284 330" fill="none" stroke="#C98A1E" stroke-width="4" stroke-dasharray="6 5"/>
+    <circle cx="300" cy="352" r="44" fill="url(#gold)" stroke="#9A6A12" stroke-width="4"/>
+    <circle cx="300" cy="352" r="33" fill="#FFF6E6"/>
+    <g stroke="#3B2A6B" stroke-width="3" stroke-linecap="round"><path d="M300 352 L 300 328"/><path d="M300 352 L 318 344"/></g>
+    <circle cx="300" cy="352" r="4" fill="#3B2A6B"/>
+    <rect x="292" y="302" width="16" height="10" rx="3" fill="#C98A1E"/>
+  </g>
+  <circle cx="200" cy="200" r="194" fill="none" stroke="#FFFFFF" stroke-width="10"/>
+</svg>

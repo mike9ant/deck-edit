@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" width="1000" height="1000">
+  <!-- A coffee cup that is also a planet: saucer ring, crema with latte art, steam shaped like rabbit ears. -->
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#F2B33D" stop-opacity="0.3"/>
+      <stop offset="0.55" stop-color="#F2B33D" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#F2B33D" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="planet" cx="36%" cy="30%" r="78%">
+      <stop offset="0" stop-color="#D49A64"/>
+      <stop offset="0.42" stop-color="#8A5530"/>
+      <stop offset="1" stop-color="#2A160B"/>
+    </radialGradient>
+    <radialGradient id="crema" cx="42%" cy="38%" r="70%">
+      <stop offset="0" stop-color="#FBEBD0"/>
+      <stop offset="0.65" stop-color="#E0AE73"/>
+      <stop offset="1" stop-color="#A8693A"/>
+    </radialGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#E0962A"/>
+      <stop offset="0.5" stop-color="#FFE7AE"/>
+      <stop offset="1" stop-color="#E0962A"/>
+    </linearGradient>
+    <linearGradient id="steam" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.15"/>
+    </linearGradient>
+    <linearGradient id="earInner" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#F7A8C4" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#F7A8C4" stop-opacity="0.1"/>
+    </linearGradient>
+    <path id="spark" d="M0 -16 L4 -4 L16 0 L4 4 L0 16 L-4 4 L-16 0 L-4 -4 Z"/>
+  </defs>
+
+  <circle cx="500" cy="560" r="470" fill="url(#glow)"/>
+
+  <!-- sparkles -->
+  <g fill="#FFF3C4">
+    <use href="#spark" transform="translate(130 210) scale(1.4)"/>
+    <use href="#spark" transform="translate(860 170) scale(1.1)"/>
+    <use href="#spark" transform="translate(905 760) scale(0.8)"/>
+    <use href="#spark" transform="translate(95 820) scale(0.9)"/>
+    <use href="#spark" transform="translate(250 90) scale(0.6)"/>
+  </g>
+  <g fill="#FFFFFF" opacity="0.8">
+    <circle cx="200" cy="330" r="4"/><circle cx="790" cy="300" r="5"/><circle cx="830" cy="900" r="3"/>
+    <circle cx="60" cy="560" r="3"/><circle cx="950" cy="470" r="4"/><circle cx="340" cy="960" r="3"/>
+  </g>
+
+  <!-- the saucer ring, back half -->
+  <g transform="rotate(-14 500 560)">
+    <ellipse cx="500" cy="560" rx="440" ry="98" fill="none" stroke="url(#ring)" stroke-width="36"/>
+  </g>
+
+  <!-- handle -->
+  <path d="M735 470 C 880 450, 890 690, 735 670" fill="none" stroke="#4A2A14" stroke-width="44" stroke-linecap="round"/>
+  <path d="M740 480 C 860 465, 868 680, 740 662" fill="none" stroke="#9B6538" stroke-width="12" stroke-linecap="round" opacity="0.6"/>
+
+  <!-- the planet-cup -->
+  <circle cx="500" cy="560" r="272" fill="url(#planet)"/>
+  <!-- a few craters (coffee beans) -->
+  <g fill="#3A2010" opacity="0.55">
+    <ellipse cx="400" cy="640" rx="34" ry="22" transform="rotate(-25 400 640)"/>
+    <ellipse cx="590" cy="720" rx="26" ry="17" transform="rotate(20 590 720)"/>
+    <ellipse cx="640" cy="560" rx="20" ry="13" transform="rotate(-10 640 560)"/>
+  </g>
+  <g stroke="#1E0F06" stroke-width="5" fill="none" opacity="0.6" stroke-linecap="round">
+    <path d="M378 632 Q400 642 422 648"/><path d="M572 716 Q590 721 608 724"/><path d="M626 558 Q640 561 654 562"/>
+  </g>
+  <!-- shine -->
+  <path d="M300 520 C 310 440, 360 380, 430 352" fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round" opacity="0.16"/>
+
+  <!-- crema on top -->
+  <ellipse cx="500" cy="392" rx="212" ry="66" fill="#4A2A14"/>
+  <ellipse cx="500" cy="388" rx="196" ry="56" fill="url(#crema)"/>
+  <!-- latte art heart -->
+  <path d="M500 420 C 452 392, 448 362, 476 360 C 489 359, 497 368, 500 377 C 503 368, 511 359, 524 360 C 552 362, 548 392, 500 420 Z" fill="#FFF6E6"/>
+  <path d="M500 408 C 478 392, 478 374, 492 373" fill="none" stroke="#E7B985" stroke-width="3"/>
+
+  <!-- the saucer ring, front half -->
+  <g transform="rotate(-14 500 560)">
+    <path d="M60 560 A 440 98 0 0 0 940 560" fill="none" stroke="url(#ring)" stroke-width="36"/>
+    <path d="M90 590 A 420 80 0 0 0 910 590" fill="none" stroke="#FFFFFF" stroke-width="5" opacity="0.35"/>
+  </g>
+
+  <!-- steam rising as a pair of rabbit ears -->
+  <path d="M452 336 C 400 250, 392 120, 440 52 C 488 112, 488 250, 478 336 Z" fill="url(#steam)"/>
+  <path d="M452 318 C 420 250, 418 150, 442 98 C 462 150, 466 250, 466 318 Z" fill="url(#earInner)"/>
+  <path d="M528 336 C 548 250, 590 130, 650 82 C 672 160, 610 270, 556 340 Z" fill="url(#steam)"/>
+  <path d="M536 318 C 558 250, 590 170, 634 126 C 640 190, 600 262, 552 322 Z" fill="url(#earInner)"/>
+  <path d="M500 330 C 480 300, 520 280, 500 250 C 482 225, 515 205, 500 180" fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" opacity="0.55"/>
+
+  <!-- a small rocket on its way to the café -->
+  <g transform="translate(820 300) rotate(38)">
+    <path d="M0 -70 C 26 -40, 26 30, 18 50 L -18 50 C -26 30, -26 -40, 0 -70 Z" fill="#F6EBD9"/>
+    <circle cx="0" cy="-12" r="12" fill="#2BB3A3" stroke="#14123A" stroke-width="4"/>
+    <path d="M-18 22 L -38 58 L -16 50 Z" fill="#D7263D"/>
+    <path d="M18 22 L 38 58 L 16 50 Z" fill="#D7263D"/>
+    <path d="M-12 52 C -10 80, 0 96, 0 104 C 0 96, 10 80, 12 52 Z" fill="#F2B33D"/>
+    <path d="M-6 52 C -5 70, 0 80, 0 86 C 0 80, 5 70, 6 52 Z" fill="#FFF3C4"/>
+  </g>
+</svg>

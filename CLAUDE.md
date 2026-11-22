@@ -16,8 +16,14 @@
   - Saving: `writePptx` → `repairPackage` (packageHygiene.ts) → etag-guarded PUT.
     Never bypass `repairPackage`; never save without the etag.
   - `@diceui/pptx-core` is pinned to an exact version on purpose; after upgrading it, rerun
+    `./run.sh test frontend` (its round-trip test uses `sample-project/`'s deck) and
     `DECKEDIT_TEST_DECK=<real deck> ./run.sh test frontend` and check fidelity with
     `render-check.html?url=/api/projects/<id>/file?path=<deck>` (dev server).
 - Per-folder/per-deck state is keyed by `${projectId}:${path}`.
 - The agent's context block is composed in `backend/src/chat.rs::compose_prompt` and its
   standing instructions in `system_prompt`; its app tools are in `backend/src/mcp.rs`.
+- `sample-project/` is a fictional project (Rabbit Hole Roasters) for trying the app and for
+  consistent tests. Its deck, PDFs and images were first made by the scripts in
+  `sample-project/generator/`, but the files are the source of truth: edit them directly (in Deck Edit
+  or otherwise). Rerunning the generator rebuilds them from scratch and drops such edits — only do it
+  on purpose (see sample-project/README.md).

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="400" height="400">
+  <!-- The Cheshire Cat, Head of Remote Work: mostly not there — a grin, two eyes, a hint of stripes. -->
+  <defs>
+    <clipPath id="c"><circle cx="200" cy="200" r="194"/></clipPath>
+    <radialGradient id="bg" cx="50%" cy="45%" r="70%"><stop offset="0" stop-color="#4A3685"/><stop offset="1" stop-color="#14123A"/></radialGradient>
+    <radialGradient id="eye" cx="45%" cy="40%" r="60%"><stop offset="0" stop-color="#F6F78A"/><stop offset="1" stop-color="#9BCB3C"/></radialGradient>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#E26DB0" stop-opacity="0.32"/><stop offset="1" stop-color="#E26DB0" stop-opacity="0"/></linearGradient>
+    <path id="spark" d="M0 -16 L4 -4 L16 0 L4 4 L0 16 L-4 4 L-16 0 L-4 -4 Z"/>
+  </defs>
+  <g clip-path="url(#c)">
+    <rect width="400" height="400" fill="url(#bg)"/>
+    <g fill="#FFFFFF" opacity="0.8"><circle cx="70" cy="120" r="2.5"/><circle cx="330" cy="90" r="2"/><circle cx="300" cy="320" r="2.5"/><circle cx="100" cy="300" r="2"/></g>
+    <g fill="#FFF3C4" opacity="0.9"><use href="#spark" transform="translate(320 140) scale(0.6)"/><use href="#spark" transform="translate(80 210) scale(0.45)"/></g>
+    <!-- the ghost of a head: ears and stripes, fading out -->
+    <path d="M104 150 L 120 60 L 175 118 C 190 114, 210 114, 225 118 L 280 60 L 296 150 C 330 200, 316 300, 200 310 C 84 300, 70 200, 104 150 Z" fill="url(#fade)"/>
+    <g stroke="#E26DB0" stroke-width="10" stroke-linecap="round" opacity="0.22" fill="none">
+      <path d="M150 128 C 160 150, 162 160, 160 176"/><path d="M200 120 V 170"/><path d="M250 128 C 240 150, 238 160, 240 176"/>
+    </g>
+    <!-- eyes -->
+    <path d="M110 176 C 130 146, 176 146, 190 176 C 176 204, 130 204, 110 176 Z" fill="url(#eye)" stroke="#2A2050" stroke-width="4"/>
+    <path d="M210 176 C 224 146, 270 146, 290 176 C 270 204, 224 204, 210 176 Z" fill="url(#eye)" stroke="#2A2050" stroke-width="4"/>
+    <ellipse cx="150" cy="176" rx="6" ry="22" fill="#14123A"/><ellipse cx="250" cy="176" rx="6" ry="22" fill="#14123A"/>
+    <circle cx="140" cy="166" r="4" fill="#FFFFFF"/><circle cx="240" cy="166" r="4" fill="#FFFFFF"/>
+    <!-- the grin -->
+    <path d="M78 228 C 120 330, 280 330, 322 228 C 270 282, 130 282, 78 228 Z" fill="#FFFFFF" stroke="#E26DB0" stroke-width="5" stroke-linejoin="round"/>
+    <g stroke="#B9A6D9" stroke-width="2.5">
+      <path d="M118 262 L 124 284"/><path d="M146 274 L 150 298"/><path d="M174 280 L 176 306"/><path d="M200 282 V 309"/>
+      <path d="M226 280 L 224 306"/><path d="M254 274 L 250 298"/><path d="M282 262 L 276 284"/>
+    </g>
+    <path d="M78 228 C 130 282, 270 282, 322 228" fill="none" stroke="#E26DB0" stroke-width="5"/>
+  </g>
+  <circle cx="200" cy="200" r="194" fill="none" stroke="#FFFFFF" stroke-width="10"/>
+</svg>
