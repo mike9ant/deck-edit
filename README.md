@@ -5,14 +5,12 @@ the agent take turns on the same PowerPoint (.pptx) or PDF file: your edits are
 saved straight into the file, the agent's changes appear live, and every agent
 turn can be reverted with one click.
 
-```
-┌ Project ▾ /path/to/folder ───────────────────────────────────────────────────┐
-│ Files        │ Mini-slides │  Main slide (select · move · resize ·  │ Chat tabs │
-│ deck.pptx    │ ▢ 1         │  edit text · drop images · notes)      │ agent …   │
-│ notes.md     │ ▣ 2         │                                        │           │
-│ deck.pdf     │ ▢ 3         │                                        │ [composer]│
-└──────────────┴─────────────┴────────────────────────────────────────┴───────────┘
-```
+![Deck Edit with the sample project open: files on the left, the slide rail and the slide being edited
+in the middle, a note for the AI pinned on the slide, and the agent's chat on the right](docs/screenshot.png)
+
+*The [sample project](sample-project/) open in Deck Edit: the agent has built a spreadsheet from the
+traction slide and rebuilt the slide from it, the changed slides are flagged at the top, and a note
+for the AI is pinned on slide 7.* Open `sample-project/` as a project to try it yourself.
 
 ## Running
 
