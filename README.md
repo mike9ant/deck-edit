@@ -1,6 +1,6 @@
 # Deck Edit
 
-A local app for developing slide decks **together with an AI agent**. You and
+A local app for **developing slide decks together with a Claude Code AI agent**. You and
 the agent take turns on the same PowerPoint (.pptx) or PDF file: your edits are
 saved straight into the file, the agent's changes appear live, and every agent
 turn can be reverted with one click.
@@ -251,3 +251,7 @@ relationship dangles; the output (`/tmp/deckedit-roundtrip.pptx`) can be opened 
   pptx-core), `pdf/` (pdf.js + pdf-lib), `chat/`, `notes/`, `viewers/`.
 
 The agent engine and chat flow are adapted from ma-code-navigator's Atlas agent.
+
+---
+
+Developed by Michael Antonov.
