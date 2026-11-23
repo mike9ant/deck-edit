@@ -56,13 +56,14 @@ pub struct AgentSettings {
     #[serde(default)]
     pub user_mcp: bool,
     /// Web search / page fetch: "allow" (as any tool), "ask" (an approval card
-    /// each time, in every mode) or "off" (the agent has no web tools).
+    /// each time, in every mode — the default) or "off" (the agent has no web tools).
     #[serde(default = "default_web_access")]
     pub web_access: String,
 }
 
+/// Ask first: a web search or page fetch shows an approval card until the user allows web access.
 fn default_web_access() -> String {
-    "allow".into()
+    "ask".into()
 }
 
 impl Default for AgentSettings {

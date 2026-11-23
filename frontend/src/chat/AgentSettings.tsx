@@ -169,7 +169,7 @@ function AgentSettings() {
               ['ask', 'Ask first', 'an approval card each time, in every mode'],
               ['off', 'Off', 'the agent has no web tools'],
             ] as const).map(([id, title, sub]) => (
-              <Choice key={id} active={(settings.webAccess ?? 'allow') === id} onClick={() => void update({ webAccess: id })} title={title} sub={sub} />
+              <Choice key={id} active={(settings.webAccess ?? 'ask') === id} onClick={() => void update({ webAccess: id })} title={title} sub={sub} />
             ))}
           </div>
           <p className="mt-2 text-[11px] text-ink-3">Applies from the next message.</p>

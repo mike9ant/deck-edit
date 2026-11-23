@@ -90,8 +90,8 @@ your platform.
     tools. Their actions show an approval card ("Use a connector: Slack · …") in manual and
     accept-edits modes, run automatically in auto approve, and are read-only in plan mode; "Always
     allow" is per connector, per chat. claude.ai connectors need the Claude subscription login.
-  - **Web access** (Agent settings): *Allow* (default), *Ask first* (an approval card before each web
-    search or page fetch, in every mode) or *Off* (no web tools). The agent is told about both
+  - **Web access** (Agent settings): *Allow*, *Ask first* (the default: an approval card before each
+    web search or page fetch, in every mode) or *Off* (no web tools). The agent is told about both
     settings, so it can point you to them when a request needs Slack or the web.
   - Every turn starts with a backup of the folder. The files it changed are listed under
     the turn with **Revert** (and **Undo revert**).
