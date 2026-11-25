@@ -64,15 +64,16 @@ export function FormatTools({ fmt, pres, version, actions }: { fmt: FormatState;
       )}
       <button
         ref={colorBtn}
-        className="tool-btn flex-col gap-0 px-1.5"
+        className="tool-btn relative px-1.5"
         title="Color"
         onMouseDown={keep}
         onClick={() => setOpen(open === 'color' ? null : 'color')}
       >
-        <Palette size={15} />
+        {/* The icon centered like the other tools; the current color's bar just under it. */}
+        <Palette size={15} className="relative -top-px" />
         {(() => {
           const c = fmt.text ? fmt.textColor : fmt.shape ? fmt.fill : undefined
-          return <span className="mt-px h-[3px] w-4 rounded-sm" style={{ background: c && c !== 'none' ? `#${c}` : '#ffffff', boxShadow: '0 0 0 0.5px rgba(0,0,0,.25)' }} />
+          return <span className="absolute bottom-[3px] left-1/2 h-[3px] w-4 -translate-x-1/2 rounded-sm" style={{ background: c && c !== 'none' ? `#${c}` : '#ffffff', boxShadow: '0 0 0 0.5px rgba(0,0,0,.25)' }} />
         })()}
       </button>
       {open === 'font' && (
