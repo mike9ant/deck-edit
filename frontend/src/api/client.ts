@@ -114,9 +114,9 @@ export const api = {
   notes: (pid: string) => json<Note[]>('GET', `/projects/${pid}/notes`),
   addNote: (
     pid: string,
-    n: { deck: string; slideId: string; slideIndex: number; x: number; y: number; shapeName?: string; strokes?: Stroke[]; shapes?: string[]; quote?: string; lines?: string; target?: 'speakerNotes' | 'chat'; text: string },
+    n: { deck: string; slideId: string; slideIndex: number; x: number; y: number; shapeName?: string; strokes?: Stroke[]; shapes?: string[]; quote?: string; lines?: string; target?: 'speakerNotes' | 'chat'; text: string; chatId?: string },
   ) => json<Note>('POST', `/projects/${pid}/notes`, n),
-  updateNote: (pid: string, id: string, body: Partial<Pick<Note, 'text' | 'x' | 'y' | 'status' | 'slideIndex' | 'slideId'>>) =>
+  updateNote: (pid: string, id: string, body: Partial<Pick<Note, 'text' | 'x' | 'y' | 'status' | 'slideIndex' | 'slideId' | 'chats'>>) =>
     json<Note>('PATCH', `/projects/${pid}/notes/${id}`, body),
   deleteNote: (pid: string, id: string) => json('DELETE', `/projects/${pid}/notes/${id}`),
   putDeckMap: (pid: string, deck: string, slides: { slideId: string; index: number; title: string }[]) =>

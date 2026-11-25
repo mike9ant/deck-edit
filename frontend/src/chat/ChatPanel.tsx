@@ -10,7 +10,7 @@ import { ChatMarkdown } from './chatLinks'
 import { AgentSetupCard, useAgentBlock } from './AgentSetup'
 import { TabStrip } from '../components/TabStrip'
 import {
-  AlertTriangle, BotMessageSquare, Check, ChevronDown, ChevronRight, CircleDot, FileEdit, History, Loader2, MessageSquare, SquarePlus, Trash2,
+  AlertTriangle, ArrowDown, BotMessageSquare, Check, ChevronDown, ChevronRight, CircleDot, FileEdit, History, Loader2, MessageSquare, SquarePlus, Trash2,
   Plus, RotateCcw, Send, Square, Terminal, Wrench, X, StickyNote, Pencil, Play, ImagePlus, Library, Snowflake, Scissors,
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -21,11 +21,11 @@ import { setQuoteHighlight } from '../notes/quoteHighlight'
 import { domRangeOf } from '../viewers/textRanges'
 import { useChat } from '../store/chatStore'
 import { useApp } from '../store/appStore'
-import { notePlaceLabel, noteNumber, notesForChat, useNotes } from '../store/notesStore'
+import { notePlaceLabel, noteNumber, notesForChat, otherChatsNotes, useNotes } from '../store/notesStore'
 import { useAgent } from '../store/agentStore'
 import { useDecks } from '../deck/deckStore'
 import { usePdfs } from '../pdf/pdfStore'
-import type { CacheCheck, Chat, Posture, Turn, TurnEvent } from '../api/types'
+import type { CacheCheck, Chat, Note, Posture, Turn, TurnEvent } from '../api/types'
 import { buildTurnContext, pendingEditCount } from './turnContext'
 import { useTextEditTick } from '../viewers/textEdits'
 import { PosturePopover } from './PosturePopover'
@@ -35,7 +35,7 @@ import { api } from '../api/client'
 import { MAX_IMAGES, dragHasFiles, maxImageEdgeFor, prepareImage, splitImageFiles, type PendingImage } from './imageAttachments'
 
 export function ChatPanel() {
-  const { openIds, activeId, chats, summaries, newChat, openChat, closeChat } = useChat()
+  const { openIds, activeId, chats, summaries, numbers, newChat, openChat, closeChat } = useChat()
   const [history, setHistory] = useState(false)
   const [library, setLibrary] = useState(false)
   const active = activeId ? chats[activeId] : undefined
@@ -57,7 +57,8 @@ export function ChatPanel() {
               title={c?.title}
               onClick={() => { setHistory(false); setLibrary(false); void openChat(id) }}
             >
-              {running ? <Loader2 size={12} className="shrink-0 animate-spin text-violet-600" /> : <MessageSquare size={12} className="shrink-0" />}
+              {running && <Loader2 size={12} className="shrink-0 animate-spin text-violet-600" />}
+              <ChatNumber n={numbers[id]} active={id === activeId} />
               <span className="truncate">{c?.title ?? '…'}</span>
               {/* Its space is kept while hidden: showing it on hover mustn't shift the tabs. */}
               <button className={clsx('ml-0.5 shrink-0 text-ink-3 hover:text-ink group-hover:visible', id === activeId ? 'visible' : 'invisible')} title="Close" onClick={(e) => { e.stopPropagation(); closeChat(id) }}><X size={12} /></button>
@@ -97,6 +98,37 @@ export function ChatPanel() {
         <div className="flex flex-1 items-center justify-center text-sm text-ink-3">Start a chat with +</div>
       )}
     </div>
+  )
+}
+
+/** An open chat's tab number as a small badge: on its tab and on notes meant for it (a chat icon when it has none). */
+function ChatNumber({ n, active, faded, className }: { n?: number; active?: boolean; faded?: boolean; className?: string }) {
+  if (!n) return <MessageSquare size={12} className={clsx('shrink-0', className)} />
+  // A speech bubble (like the chat icon) with the number in it; wider for two digits.
+  const w = n > 9 ? 20 : 15
+  const r = w - 0.75
+  const bubble = `M3 0.75 H${r - 2.25} Q${r} 0.75 ${r} 3 V9 Q${r} 11.25 ${r - 2.25} 11.25 H6.5 L3 14.25 V11.25 Q0.75 11.25 0.75 9 V3 Q0.75 0.75 3 0.75 Z`
+  return (
+    <svg width={w} height={15} viewBox={`0 0 ${w} 15`} className={clsx('shrink-0', className)} aria-label={`chat ${n}`}>
+      <path
+        d={bubble}
+        strokeWidth={1.25}
+        strokeLinejoin="round"
+        strokeDasharray={faded ? '2 1.5' : undefined}
+        className={faded ? 'fill-none stroke-ink-3' : active ? 'fill-violet-600 stroke-violet-600' : 'fill-white stroke-ink-3'}
+      />
+      <text
+        x={w / 2}
+        y={6.3}
+        textAnchor="middle"
+        dominantBaseline="central"
+        fontSize={8.5}
+        fontWeight={700}
+        className={faded ? 'fill-ink-3' : active ? 'fill-white' : 'fill-ink-2'}
+      >
+        {n}
+      </text>
+    </svg>
   )
 }
 
@@ -204,27 +236,53 @@ function ChatBody({ chat }: { chat: Chat }) {
   const block = useAgentBlock(chat)
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
+  // Scrolled up from the latest: a small round ↓ in the bottom-right corner jumps back down.
+  const [away, setAway] = useState(false)
   const last = chat.turns[chat.turns.length - 1]
   const draft = last ? drafts[last.id] : ''
+  const measure = (el: HTMLElement) => {
+    const gap = el.scrollHeight - el.scrollTop - el.clientHeight
+    stick.current = gap < 60
+    setAway(gap > 160)
+  }
   useEffect(() => {
     const el = scroller.current
-    if (el && stick.current) el.scrollTop = el.scrollHeight
+    if (!el) return
+    if (stick.current) el.scrollTop = el.scrollHeight
+    measure(el)
   }, [chat.turns, draft])
+  const toLatest = () => {
+    const el = scroller.current
+    if (!el) return
+    stick.current = true
+    setAway(false)
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }
   return (
     <>
-      <div
-        ref={scroller}
-        className="relative min-h-0 flex-1 overflow-y-auto px-3 py-3"
-        onScroll={(e) => {
-          const el = e.currentTarget
-          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60
-        }}
-      >
-        {chat.turns.length === 0 && <EmptyChat />}
-        {chat.turns.map((t, i) => (
-          <TurnView key={t.id} chat={chat} turn={t} draft={drafts[t.id]} isLast={i === chat.turns.length - 1} />
-        ))}
-        <ChatNoteBadges chat={chat} scroller={scroller} />
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        <div
+          ref={scroller}
+          className="relative min-h-0 flex-1 overflow-y-auto px-3 py-3"
+          onScroll={(e) => measure(e.currentTarget)}
+        >
+          {chat.turns.length === 0 && <EmptyChat />}
+          {chat.turns.map((t, i) => (
+            <TurnView key={t.id} chat={chat} turn={t} draft={drafts[t.id]} isLast={i === chat.turns.length - 1} />
+          ))}
+          <ChatNoteBadges chat={chat} scroller={scroller} />
+        </div>
+        {away && (
+          <button
+            type="button"
+            className="absolute bottom-2 right-4 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-hair bg-white text-accent shadow-md hover:bg-accent-soft"
+            title="Jump to latest"
+            aria-label="Jump to latest"
+            onClick={toLatest}
+          >
+            <ArrowDown size={14} />
+          </button>
+        )}
       </div>
       <ChatQuoteNotes chat={chat} scroller={scroller} />
       {block ? <AgentSetupCard chat={chat} block={block} /> : <Composer key={chat.id} chat={chat} />}
@@ -835,12 +893,15 @@ function ComposerInner({ chat }: { chat: Chat }) {
   const { settings, models, update: updateDefaults } = useAgent()
   const pid = useApp((s) => s.projectId)
   const activePath = useApp((s) => s.activePath)
-  const notes = notesForChat(useNotes((s) => s.notes), chat.id)
+  const allNotes = useNotes((s) => s.notes)
+  const notes = notesForChat(allNotes, chat.id)
+  const otherNotes = otherChatsNotes(allNotes, chat.id).length
   // Re-render when edits are made so the "edits will be shared" hint stays current.
   useDecks((s) => s.sessions)
   usePdfs((s) => s.sessions)
   const [text, setText] = useState(() => composerDrafts.get(chat.id)?.text ?? localStorage.getItem(draftKey(chat.id)) ?? '')
-  const [showNotes, setShowNotes] = useState(false)
+  /** The notes list, opened at this chat's notes or at the other chats' ones. */
+  const [showNotes, setShowNotes] = useState<false | 'mine' | 'others'>(false)
   const [images, setImages] = useState<PendingImage[]>(() => composerDrafts.get(chat.id)?.images ?? [])
   useEffect(() => {
     if (text || images.length) composerDrafts.set(chat.id, { text, images })
@@ -975,7 +1036,7 @@ function ComposerInner({ chat }: { chat: Chat }) {
       {askSplit && cache && (
         <SplitBadge cache={cache} fast={!!posture.fast} onSplit={() => void submit('split')} onContinue={() => void submit('continue')} onCancel={() => setAskSplit(false)} />
       )}
-      {(openNotes.length > 0 || edits > 0 || (longChat && !askSplit)) && (
+      {(openNotes.length > 0 || otherNotes > 0 || edits > 0 || (longChat && !askSplit)) && (
         <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-3">
           {longChat && !askSplit && cache && (splitNext ? (
             <span className="flex items-center gap-1 rounded bg-violet-50 px-1.5 py-0.5 text-violet-900">
@@ -1002,13 +1063,22 @@ function ComposerInner({ chat }: { chat: Chat }) {
           ))}
           {edits > 0 && <span className="flex items-center gap-1 rounded bg-paper px-1.5 py-0.5"><Pencil size={11} /> {edits} edit{edits > 1 ? 's' : ''} since last turn will be shared</span>}
           {openNotes.length > 0 && (
-            <button className="flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-amber-900" onClick={() => setShowNotes(!showNotes)}>
+            <button className="flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-amber-900" onClick={() => setShowNotes(showNotes === 'mine' ? false : 'mine')}>
               <StickyNote size={11} /> {openNotes.length} open note{openNotes.length > 1 ? 's' : ''} shared with the agent
+            </button>
+          )}
+          {otherNotes > 0 && (
+            <button
+              className="flex items-center gap-1 rounded border border-amber-200/70 bg-amber-50/50 px-1.5 py-0.5 text-amber-900/60 hover:text-amber-900"
+              title="Notes taken in other chats — this chat's agent doesn't get them. Open the list to bring one to this chat."
+              onClick={() => setShowNotes(showNotes === 'others' ? false : 'others')}
+            >
+              <StickyNote size={11} /> {otherNotes} note{otherNotes > 1 ? 's' : ''} for other chats
             </button>
           )}
         </div>
       )}
-      {showNotes && <NotesList chatId={chat.id} onPick={() => setShowNotes(false)} />}
+      {showNotes && <NotesList chat={chat} atOthers={showNotes === 'others'} onPick={() => setShowNotes(false)} />}
       {images.length > 0 && (
         <div className="mb-1.5 flex flex-wrap gap-1.5">
           {images.map((img) => (
@@ -1088,21 +1158,37 @@ function ComposerInner({ chat }: { chat: Chat }) {
 }
 
 /**
- * The open notes shared with this chat's agent. Each shows its number (the same as on its pin or
- * badge), where it is, and — for a note on chat text — the start of the selection; click to go
- * there, or delete it.
+ * The open notes shared with this chat's agent, then — greyed — the ones taken in other chats.
+ * Each shows its number (the same as on its pin or badge) and where it is; click to go there, or
+ * delete it. A note from another chat carries that chat's number: click the number to bring the
+ * note to this chat too (and again to leave it to the other chat). While a turn runs, notes the
+ * agent wasn't given at its start say they're for the next message.
  */
-function NotesList({ chatId, onPick }: { chatId: string; onPick(): void }) {
+function NotesList({ chat, atOthers, onPick }: { chat: Chat; atOthers?: boolean; onPick(): void }) {
+  const othersHead = useRef<HTMLDivElement>(null)
+  // Opened from the "for other chats" notice: show that part of the list.
+  useEffect(() => {
+    const head = othersHead.current
+    const box = head?.parentElement
+    if (head && box) box.scrollTop = atOthers ? head.offsetTop - box.offsetTop - 4 : 0
+  }, [atOthers])
+  const chatId = chat.id
   const all = useNotes((s) => s.notes)
   const remove = useNotes((s) => s.remove)
-  const notes = notesForChat(all, chatId).filter((n) => n.status === 'open')
+  const update = useNotes((s) => s.update)
+  const numbers = useChat((s) => s.numbers)
+  const summaries = useChat((s) => s.summaries)
+  const mine = notesForChat(all, chatId).filter((n) => n.status === 'open')
+  const others = otherChatsNotes(all, chatId)
+  const runningTurn = chat.turns.find((t) => t.status === 'running')
   const openFile = useApp((s) => s.openFile)
   const pid = useApp((s) => s.projectId)
+  const titleOf = (id: string) => summaries.find((s) => s.id === id)?.title
   const words = (t: string, n = 6) => {
     const w = t.replace(/\s+/g, ' ').trim().split(' ')
     return w.length > n ? `${w.slice(0, n).join(' ')}…` : w.join(' ')
   }
-  const go = (n: (typeof notes)[number]) => {
+  const go = (n: Note) => {
     onPick()
     if (n.target === 'chat') return // on this chat's messages: its badge is in the conversation
     openFile(n.deck)
@@ -1116,32 +1202,61 @@ function NotesList({ chatId, onPick }: { chatId: string; onPick(): void }) {
       else usePdfs.getState().setPage(`${pid}:${n.deck}`, n.slideIndex - 1)
     }, 300)
   }
+  const row = (n: Note, other: boolean) => {
+    // The chat it was taken in, when that's not this one (a note brought here, or another chat's).
+    const home = n.chats?.[0] && n.chats[0] !== chatId ? n.chats[0] : undefined
+    const homeNo = home ? numbers[home] : undefined
+    const homeName = !home ? '' : homeNo ? `chat ${homeNo}` : titleOf(home) ? `“${titleOf(home)}” (not open)` : 'a deleted chat'
+    const later = !other && runningTurn && !runningTurn.notes?.includes(n.id)
+    return (
+      <div key={n.id} className={clsx('group flex items-start gap-1.5 rounded px-1.5 py-1 hover:bg-white', other && 'opacity-55 hover:opacity-100')}>
+        <button className="flex min-w-0 flex-1 items-start gap-1.5 text-left" onClick={() => go(n)} title={n.target === 'chat' ? 'A note on this chat' : 'Show it'}>
+          <span className={clsx('shrink-0 rounded px-1 font-medium', n.author === 'agent' ? 'bg-violet-100 text-violet-800' : 'bg-note text-amber-950')}>
+            {n.author === 'agent' ? 'AI' : noteNumber(n, all)}
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-ink-3">
+              {n.target === 'chat'
+                ? <>This chat · <span className="italic">“{words(n.quote ?? '')}”</span></>
+                : `${n.deck.split('/').pop()} · ${notePlaceLabel(n)}`}
+              {later && <span className="ml-1 text-violet-700" title="Pinned while the agent works — it gets this note with your next message"> · next message</span>}
+            </span>
+            <span className="text-ink">{n.text}</span>
+          </span>
+        </button>
+        {home && (
+          <button
+            className="mt-px shrink-0 rounded p-px hover:bg-black/5"
+            title={other
+              ? `Taken in ${homeName} — click to bring it to this chat too`
+              : `Brought here from ${homeName} — click to leave it to that chat only`}
+            aria-pressed={!other}
+            onClick={() => void update(n.id, { chats: other ? [...(n.chats ?? []), chatId] : (n.chats ?? []).filter((c) => c !== chatId) })}
+          >
+            <ChatNumber n={homeNo} faded={other} />
+          </button>
+        )}
+        <button
+          className="shrink-0 rounded p-0.5 text-ink-3 opacity-0 hover:bg-red-50 hover:text-red-600 group-hover:opacity-100"
+          title="Delete this note"
+          onClick={() => void remove(n.id)}
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
+    )
+  }
   return (
     <div className="mb-1.5 max-h-48 overflow-y-auto rounded border border-hair bg-paper p-1 text-xs">
-      {notes.map((n) => (
-        <div key={n.id} className="group flex items-start gap-1.5 rounded px-1.5 py-1 hover:bg-white">
-          <button className="flex min-w-0 flex-1 items-start gap-1.5 text-left" onClick={() => go(n)} title={n.target === 'chat' ? 'A note on this chat' : 'Show it'}>
-            <span className={clsx('shrink-0 rounded px-1 font-medium', n.author === 'agent' ? 'bg-violet-100 text-violet-800' : 'bg-note text-amber-950')}>
-              {n.author === 'agent' ? 'AI' : noteNumber(n, all)}
-            </span>
-            <span className="min-w-0">
-              <span className="block truncate text-ink-3">
-                {n.target === 'chat'
-                  ? <>This chat · <span className="italic">“{words(n.quote ?? '')}”</span></>
-                  : `${n.deck.split('/').pop()} · ${notePlaceLabel(n)}`}
-              </span>
-              <span className="text-ink">{n.text}</span>
-            </span>
-          </button>
-          <button
-            className="shrink-0 rounded p-0.5 text-ink-3 opacity-0 hover:bg-red-50 hover:text-red-600 group-hover:opacity-100"
-            title="Delete this note"
-            onClick={() => void remove(n.id)}
-          >
-            <Trash2 size={12} />
-          </button>
-        </div>
-      ))}
+      {mine.map((n) => row(n, false))}
+      {others.length > 0 && (
+        <>
+          <div ref={othersHead} className={clsx('px-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wide text-ink-3', mine.length > 0 && 'mt-1 border-t border-hair pt-1')}>
+            In other chats
+          </div>
+          {others.map((n) => row(n, true))}
+        </>
+      )}
     </div>
   )
 }

@@ -40,6 +40,8 @@ export interface Note {
   resolution?: string
   resolvedAt?: string
   resolvedBy?: string
+  /** The chats whose agent the note is for: the chat open when it was taken, then any it was brought to. None = every chat. */
+  chats?: string[]
 }
 
 export type Stroke = [number, number][]
@@ -105,6 +107,8 @@ export interface Turn {
   fast?: boolean
   auth?: 'subscription' | 'key'
   images?: ChatImage[]
+  /** The notes this turn works on: the chat's open notes when it started (notes pinned while it runs are for the next message). */
+  notes?: string[]
 }
 
 export interface ChatImage {

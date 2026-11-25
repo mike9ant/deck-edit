@@ -113,7 +113,7 @@ fn tool_defs() -> Value {
     json!([
         {
             "name": "list_notes",
-            "description": "List the notes pinned on slides/pages in this project. Each note has an id, deck path, current 1-based slide number, slideId, position (x/y as fractions of the slide), the shape it was pinned near, its text, author and status. A note the user drew freehand (circled or marked an area) also has `strokes` (polylines of [x, y] slide fractions), `region` (its bounding box as fractions, and whether it's a closed loop) and `shapes` (the shapes the mark covers); `where` describes it in words.",
+            "description": "List the notes the user pinned for this chat — on slides, pages, cells or text in this project (the open ones are this message's notes: the ones pinned while you work are for the next message). Each note has an id, deck path, current 1-based slide number, slideId, position (x/y as fractions of the slide), the shape it was pinned near, its text, author and status. A note the user drew freehand (circled or marked an area) also has `strokes` (polylines of [x, y] slide fractions), `region` (its bounding box as fractions, and whether it's a closed loop) and `shapes` (the shapes the mark covers); `where` describes it in words.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -209,9 +209,12 @@ async fn call_tool(state: &AppState, chat_id: &str, name: &str, args: &Value) ->
                 "" => "open".to_string(),
                 other => other.to_string(),
             };
+            // While a turn runs, its open notes are the ones it started with (Turn::notes).
+            let mine = state.chats.turn_notes(chat_id);
             let list: Vec<Value> = notes::with_current_index(state, &pid, state.notes.all(&pid))
                 .into_iter()
                 .filter(|n| n.visible_in_chat(chat_id))
+                .filter(|n| n.status != "open" || mine.as_ref().is_none_or(|m| m.contains(&n.id)))
                 .filter(|n| deck.is_empty() || n.deck == deck)
                 .filter(|n| status == "all" || n.status == status)
                 .map(|n| {
@@ -234,6 +237,12 @@ async fn call_tool(state: &AppState, chat_id: &str, name: &str, args: &Value) ->
         "resolve_note" => {
             let id = s("id");
             let resolution = s("resolution");
+            if state.chats.turn_notes(chat_id).is_some_and(|m| !m.contains(&id)) {
+                return text_result(
+                    format!("Note {id} isn't one of this message's notes (the user pinned it for another chat, or while you were working) — leave it open; it's for a later message."),
+                    true,
+                );
+            }
             match state.notes.update(&pid, &id, |n| {
                 n.status = "resolved".into();
                 n.resolution = Some(resolution.clone());
@@ -283,9 +292,11 @@ async fn call_tool(state: &AppState, chat_id: &str, name: &str, args: &Value) ->
                 resolution: None,
                 resolved_at: None,
                 resolved_by: None,
+                chats: vec![chat_id.to_string()],
             };
             match state.notes.add(&pid, note) {
                 Ok(n) => {
+                    state.chats.add_turn_note(chat_id, &n.id);
                     notes::notify_changed(state, &pid);
                     text_result(format!("Added note {}.", n.id), false)
                 }

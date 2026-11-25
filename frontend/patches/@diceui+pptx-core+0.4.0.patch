@@ -1,7 +1,18 @@
 diff --git a/node_modules/@diceui/pptx-core/dist/index.d.mts b/node_modules/@diceui/pptx-core/dist/index.d.mts
-index dd73442..9afc28d 100644
+index dd73442..5d591da 100644
 --- a/node_modules/@diceui/pptx-core/dist/index.d.mts
 +++ b/node_modules/@diceui/pptx-core/dist/index.d.mts
+@@ -415,8 +415,8 @@ interface SetSolidFillOperation {
+   type: "setSolidFill";
+   slideId: string;
+   nodeId: string;
+-  /** Hex color, with or without leading `#` (e.g. "FF0000"). */
+-  color: string;
++  /** Hex color, with or without leading `#` (e.g. "FF0000"). deck-edit patch: `null` removes the fill (a:noFill). */
++  color: string | null;
+ }
+ /** Remove a top-level node from a slide. */
+ interface DeleteNodeOperation {
 @@ -453,6 +453,8 @@ interface SetTextBodyParagraph {
    /** Index of the source paragraph whose `a:pPr` / `a:endParaRPr` to clone. -1 = bare paragraph. */
    sourceParagraphIndex: number;
@@ -12,7 +23,7 @@ index dd73442..9afc28d 100644
  interface SetTextBodyRun {
    text: string;
 diff --git a/node_modules/@diceui/pptx-core/dist/index.mjs b/node_modules/@diceui/pptx-core/dist/index.mjs
-index c6cc36a..d8c88bf 100644
+index c6cc36a..68e82d9 100644
 --- a/node_modules/@diceui/pptx-core/dist/index.mjs
 +++ b/node_modules/@diceui/pptx-core/dist/index.mjs
 @@ -2401,15 +2401,32 @@ function validateDecodedEntrySize(path, size, state) {
@@ -263,6 +274,33 @@ index c6cc36a..d8c88bf 100644
  		const runs = [];
  		function resolveDefaultRPr(srcParaIdx) {
  			if (srcParaIdx < 0 || srcParaIdx >= origParagraphs.length) return null;
+@@ -20949,7 +21063,8 @@ function applySetSolidFill(pres, op) {
+ 	const node = findNode(pres, slide, op.nodeId);
+ 	if (node.nodeType !== "shape") throw new Error(`applyEdit: setSolidFill only supports shape nodes, got "${node.nodeType}".`);
+ 	const shape = node;
+-	const color = parseHexColor(op.color);
++	// deck-edit patch: `color: null` removes the fill (a:noFill — transparent, as PowerPoint's "No Fill").
++	const color = op.color == null ? null : parseHexColor(op.color);
+ 	const spPrElement = requireElement(node.source.child("spPr"), `spPr of node "${node.id}"`);
+ 	const doc = spPrElement.ownerDocument;
+ 	let oldFillElement = null;
+@@ -20965,10 +21080,12 @@ function applySetSolidFill(pres, op) {
+ 		insertRef = child;
+ 		break;
+ 	}
+-	const solidFillElement = doc.createElementNS(A_NS, "a:solidFill");
+-	const srgbElement = doc.createElementNS(A_NS, "a:srgbClr");
+-	srgbElement.setAttribute("val", color);
+-	solidFillElement.appendChild(srgbElement);
++	const solidFillElement = doc.createElementNS(A_NS, color == null ? "a:noFill" : "a:solidFill");
++	if (color != null) {
++		const srgbElement = doc.createElementNS(A_NS, "a:srgbClr");
++		srgbElement.setAttribute("val", color);
++		solidFillElement.appendChild(srgbElement);
++	}
+ 	insertChild(spPrElement, solidFillElement, insertRef);
+ 	const prevFill = shape.fill;
+ 	shape.fill = new SafeXmlNode(solidFillElement);
 diff --git a/node_modules/@diceui/pptx-core/dist/presentation-1QlOFvWG.d.mts b/node_modules/@diceui/pptx-core/dist/presentation-1QlOFvWG.d.mts
 index bb546b4..f88f4a1 100644
 --- a/node_modules/@diceui/pptx-core/dist/presentation-1QlOFvWG.d.mts

@@ -68,6 +68,10 @@ pub struct Note {
     pub resolved_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_by: Option<String>,
+    /// The chats whose agent the note is for: the chat open when it was taken first, then any
+    /// the user brought it to. Empty = every chat (notes from before, or taken with no chat open).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chats: Vec<String>,
 }
 
 /// Bounding box of a drawn note, as slide fractions.
@@ -106,9 +110,11 @@ impl Note {
     }
 
     /// One line for the agent: where the note is and what it covers.
-    /// Whether the agent of chat `chat_id` should see this note (a note on a chat message is for that chat only).
+    /// Whether the note is for the agent of chat `chat_id`: the chats it was taken in or brought
+    /// to (all, if none), and a note on a chat message only ever for that chat.
     pub fn visible_in_chat(&self, chat_id: &str) -> bool {
-        self.target.as_deref() != Some("chat") || self.slide_id == chat_id
+        (self.target.as_deref() != Some("chat") || self.slide_id == chat_id)
+            && (self.chats.is_empty() || self.chats.iter().any(|c| c == chat_id))
     }
 
     pub fn describe_place(&self) -> String {
@@ -369,6 +375,9 @@ struct CreateBody {
     #[serde(default)]
     target: Option<String>,
     text: String,
+    /// The chat open when the note was taken: the note is for its agent.
+    #[serde(default)]
+    chat_id: Option<String>,
 }
 
 async fn create(
@@ -398,6 +407,7 @@ async fn create(
         resolution: None,
         resolved_at: None,
         resolved_by: None,
+        chats: b.chat_id.filter(|c| !c.is_empty()).into_iter().collect(),
     };
     let note = state.notes.add(&id, note)?;
     notify_changed(&state, &id);
@@ -413,6 +423,8 @@ struct UpdateBody {
     status: Option<String>,
     slide_index: Option<u32>,
     slide_id: Option<String>,
+    /// The chats the note is for (the user brought it to another chat, or took it back).
+    chats: Option<Vec<String>>,
 }
 
 async fn update(
@@ -435,6 +447,13 @@ async fn update(
         }
         if let Some(s) = b.slide_id {
             n.slide_id = s;
+        }
+        if let Some(mut c) = b.chats {
+            c.dedup();
+            // Never down to none: that would mean every chat.
+            if !c.is_empty() {
+                n.chats = c;
+            }
         }
         if let Some(s) = b.status {
             if s == "resolved" && n.status != "resolved" {
@@ -507,6 +526,7 @@ mod tests {
             resolution: None,
             resolved_at: None,
             resolved_by: None,
+            chats: vec![],
         }
     }
 
@@ -556,7 +576,7 @@ mod sheet_and_text_tests {
             id: "n".into(), deck: deck.into(), slide_id: "Summary".into(), slide_index: 1, x: 2.4, y: 7.5,
             shape_name: Some("B7 = \"$3,584,568\"".into()), strokes: vec![], shapes: vec![], quote: None, lines: None, target: None,
             text: "check".into(), author: "user".into(), created_at: String::new(), status: "open".into(),
-            resolution: None, resolved_at: None, resolved_by: None,
+            resolution: None, resolved_at: None, resolved_by: None, chats: vec![],
         }
     }
 
@@ -617,6 +637,12 @@ mod sheet_and_text_tests {
         // A note on a chat message is for that chat's agent only; other notes are for every chat.
         assert!(c.visible_in_chat("chat-1"));
         assert!(!c.visible_in_chat("chat-2"));
+        assert!(n.visible_in_chat("chat-2"));
+        // A note taken in a chat is for that chat, and for the chats the user brought it to.
+        n.chats = vec!["chat-1".into()];
+        assert!(n.visible_in_chat("chat-1"));
+        assert!(!n.visible_in_chat("chat-2"));
+        n.chats.push("chat-2".into());
         assert!(n.visible_in_chat("chat-2"));
     }
 }

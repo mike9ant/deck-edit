@@ -83,6 +83,11 @@ pub struct Turn {
     /// This turn started a fresh conversation from a summary of the earlier one (conversation_split.rs).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub split: Option<crate::conversation_split::SplitInfo>,
+    /// The notes this turn works on: the chat's open notes when it started (and any the agent
+    /// adds). Notes pinned while it runs wait for the next message; `list_notes` and
+    /// `resolve_note` see only these.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -270,6 +275,21 @@ impl ChatRegistry {
         drop(chats);
         self.persist(&out);
         Ok(out)
+    }
+
+    /// The notes the chat's running turn works on (None: no turn running).
+    pub fn turn_notes(&self, chat_id: &str) -> Option<Vec<String>> {
+        let chats = self.chats.lock().unwrap();
+        chats.get(chat_id)?.turns.iter().rev().find(|t| t.status == "running").map(|t| t.notes.clone())
+    }
+
+    /// A note the agent added: part of its running turn's notes.
+    pub fn add_turn_note(&self, chat_id: &str, note_id: &str) {
+        if let Some(chat) = self.chats.lock().unwrap().get_mut(chat_id) {
+            if let Some(t) = chat.turns.iter_mut().rev().find(|t| t.status == "running") {
+                t.notes.push(note_id.to_string());
+            }
+        }
     }
 
     /// Mutate a turn without persisting (hot path for streaming events).
@@ -653,6 +673,7 @@ async fn start_turn(
         overlapped: false,
         touched: Vec::new(),
         split: None,
+        notes: Vec::new(),
     };
     let first = chat.turns.is_empty();
     state.chats.update(&cid, |c| {
@@ -670,7 +691,9 @@ async fn start_turn(
     }
     state.publish(json!({ "type": "turn", "chatId": cid, "turnId": turn_id, "status": "running", "projectId": chat.project_id }));
 
-    let mut prompt = compose_prompt(&state, &chat.project_id, &chat.id, &root, &text, b.context.as_ref());
+    let (mut prompt, turn_notes) = compose_prompt(&state, &chat.project_id, &chat.id, &root, &text, b.context.as_ref());
+    // The notes this turn works on are fixed now: ones pinned while it runs wait for the next message.
+    state.chats.with_turn(&cid, &turn_id, |t| t.notes = turn_notes);
     if !images.is_empty() {
         prompt.push_str("Images attached to this message (also saved on disk — copy one into the project folder or onto a slide when asked to use it):\n");
         for (i, img) in images.iter().enumerate() {
@@ -723,7 +746,9 @@ const INTERRUPTED_BEFORE_START: &str = "The app closed before the agent started 
 /// the system prompt.
 const LINK_REMINDER: &str = "Links: write every slide, page, line or file of the project you mention as a markdown link, e.g. [Deck.pptx, slide 5](<Deck.pptx#slide=5>), [Report.pdf p. 3](<Report.pdf#page=3>), [notes.md line 12](<notes.md#line=12>), [Model.xlsx Sheet1!B4](<Model.xlsx#cell=Sheet1!B4>) — path relative to the project folder. The app makes them clickable links that open the file at that place; they work for these local files, so never say links aren't possible. In tables and lists too, and name the deck in each link (not \"same deck\").\n";
 
-fn compose_prompt(state: &AppState, project_id: &str, chat_id: &str, root: &Path, text: &str, ctx: Option<&Value>) -> String {
+/// The prompt for a turn (the user's text and the context block), and the ids of the notes it
+/// was given — the turn's notes (see `Turn::notes`).
+fn compose_prompt(state: &AppState, project_id: &str, chat_id: &str, root: &Path, text: &str, ctx: Option<&Value>) -> (String, Vec<String>) {
     let mut out = String::from(text.trim());
     out.push_str("\n\n---\n[Context from the Deck Edit app — generated automatically, not typed by the user]\n");
     out.push_str(&format!("Project folder: {}\n", root.display()));
@@ -796,7 +821,7 @@ fn compose_prompt(state: &AppState, project_id: &str, chat_id: &str, root: &Path
         .filter(|n| n.status == "open" && n.visible_in_chat(chat_id))
         .collect();
     if !notes.is_empty() {
-        out.push_str("Open notes the user pinned — on slides, PDF pages, spreadsheet cells, speaker notes, chat messages or selected text (address the ones relevant to this request; call resolve_note with a one-line summary for each note you handle):\n");
+        out.push_str("Open notes the user pinned for this chat — on slides, PDF pages, spreadsheet cells, speaker notes, chat messages or selected text (address the ones relevant to this request; call resolve_note with a one-line summary for each note you handle). These are this turn's notes; ones the user pins while you work are for their next message:\n");
         for n in notes.iter().take(30) {
             out.push_str(&format!("- [note {}] {} (by {}): \"{}\"\n", n.id, n.describe_place(), n.author, n.text));
         }
@@ -804,7 +829,8 @@ fn compose_prompt(state: &AppState, project_id: &str, chat_id: &str, root: &Path
             out.push_str("(Notes with an area were drawn freehand on the slide — the request applies to what's inside the mark. `screenshot_slide` with show_notes=true shows the marks.)\n");
         }
     }
-    out
+    let ids = notes.iter().map(|n| n.id.clone()).collect();
+    (out, ids)
 }
 
 pub fn system_prompt(state: &AppState) -> String {

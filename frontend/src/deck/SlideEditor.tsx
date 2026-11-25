@@ -60,6 +60,7 @@ export interface FormatState {
   textColor?: string
   /** A shape is selected (or being edited): fill and line apply. */
   shape: boolean
+  /** RRGGBB, or 'none' (no fill / no line). */
   fill?: string
   line?: string
   /** Nothing selected: the slide background. */
@@ -460,9 +461,12 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     if (!shapes.length) return
     if (editing) void commitEditing()
     const ops: EditOperation[] = shapes.map((n) =>
-      target === 'fill' ? { type: 'setSolidFill', slideId: slide.id, nodeId: n.id, color: hex } : { type: 'setOutline', slideId: slide.id, nodeId: n.id, color: hex })
+      // 'none': no fill (a:noFill) / no outline.
+      target === 'fill' ? { type: 'setSolidFill', slideId: slide.id, nodeId: n.id, color: hex === 'none' ? null : hex } : { type: 'setOutline', slideId: slide.id, nodeId: n.id, color: hex === 'none' ? null : hex })
     void run(ops.length === 1 ? ops[0] : { type: 'batch', operations: ops },
-      `Slide ${slideNo}: ${target === 'fill' ? 'filled' : 'outlined'} ${shapes.map((n) => `"${label(n)}"`).join(', ')} with #${hex}`)
+      hex === 'none'
+        ? `Slide ${slideNo}: removed the ${target === 'fill' ? 'fill' : 'outline'} of ${shapes.map((n) => `"${label(n)}"`).join(', ')}`
+        : `Slide ${slideNo}: ${target === 'fill' ? 'filled' : 'outlined'} ${shapes.map((n) => `"${label(n)}"`).join(', ')} with #${hex}`)
   }
   // (A later press that finds the editing already over — e.g. a double click in the field — keeps it.)
   const holdSelection = () => {
@@ -506,7 +510,12 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
       const g = el?.querySelector<SVGGeometryElement>('svg path, svg rect, svg ellipse, svg polygon')
       if (!g) return {}
       const cs = getComputedStyle(g)
-      return { fill: cssToHex(cs.fill) ?? undefined, line: cs.stroke !== 'none' ? cssToHex(cs.stroke) ?? undefined : undefined }
+      // No fill / no line renders as 'none' or a fully transparent color (not a gradient's url(…)).
+      const clear = (v: string) => v === 'none' || v === 'transparent' || /^rgba\(.*,\s*0\)$/.test(v)
+      return {
+        fill: clear(cs.fill) ? 'none' : cssToHex(cs.fill) ?? undefined,
+        line: clear(cs.stroke) ? 'none' : cssToHex(cs.stroke) ?? undefined,
+      }
     }
     if (editing) {
       const sel = window.getSelection()

@@ -3,6 +3,7 @@
 import { create } from 'zustand'
 import { api } from '../api/client'
 import type { Note } from '../api/types'
+import { useChat } from './chatStore'
 
 /** How a new note is placed: a pin at a point, or a freehand mark around an area. */
 export type NoteTool = 'pin' | 'draw'
@@ -14,6 +15,7 @@ interface NotesState {
   tool: NoteTool
   setTool(t: NoteTool): void
   load(pid: string): Promise<void>
+  /** Add a note — for the agent of the chat open now (`chatId`), unless given. */
   add(n: Parameters<typeof api.addNote>[1]): Promise<Note | undefined>
   update(id: string, body: Parameters<typeof api.updateNote>[2]): Promise<void>
   remove(id: string): Promise<void>
@@ -35,7 +37,7 @@ export const useNotes = create<NotesState>((set, get) => ({
   async add(n) {
     const pid = get().pid
     if (!pid) return
-    const note = await api.addNote(pid, n)
+    const note = await api.addNote(pid, { chatId: useChat.getState().activeId ?? undefined, ...n })
     set({ notes: [...get().notes, note] })
     return note
   },
@@ -85,8 +87,20 @@ export function notePlaceLabel(n: Note): string {
   return `slide ${n.slideIndex}`
 }
 
-/** Notes the agent of chat `chatId` sees: all but the notes made on another chat's messages. */
-export const notesForChat = (notes: Note[], chatId: string) => notes.filter((n) => n.target !== 'chat' || n.slideId === chatId)
+/**
+ * Whether a note is for the agent of chat `chatId`: taken in it or brought to it (a note with no
+ * chats is for every chat), and a note on a chat's message only ever for that chat. Mirrors
+ * backend `Note::visible_in_chat`.
+ */
+export const noteForChat = (n: Note, chatId: string) =>
+  (n.target !== 'chat' || n.slideId === chatId) && (!n.chats?.length || n.chats.includes(chatId))
+
+/** The notes for the agent of chat `chatId` (see noteForChat). */
+export const notesForChat = (notes: Note[], chatId: string) => notes.filter((n) => noteForChat(n, chatId))
+
+/** Open notes taken in other chats that the user could bring to chat `chatId` (not ones on another chat's messages). */
+export const otherChatsNotes = (notes: Note[], chatId: string) =>
+  notes.filter((n) => n.status === 'open' && n.target !== 'chat' && !noteForChat(n, chatId))
 
 export function notesForSlide(notes: Note[], deck: string, slideId: string, slideNumber: number): Note[] {
   // Notes in the speaker notes or a chat aren't on the slide/page itself (no pin there).

@@ -16,6 +16,10 @@ interface ChatState {
   summaries: ChatSummary[]
   openIds: string[]
   activeId: string | null
+  /** Open chat → its tab number (see tabNumbers): shown on the tab and on the notes meant for it. */
+  numbers: Record<string, number>
+  /** The number the next tab gets while still counting up from 1 to 9 (after that: the lowest free one). */
+  nextNumber: number
   chats: Record<string, Chat>
   /** turn id → streamed text not yet completed into a message */
   drafts: Record<string, string>
@@ -51,10 +55,41 @@ interface ChatState {
 
 const lsTabs = (pid: string) => `deckedit-chats-${pid}`
 
+/** Up to this number new tabs count up; after it they take the lowest free number. */
+const COUNT_UP_TO = 9
+
+/**
+ * Tab numbers for the open chats: a chat keeps its number while its tab is open, and a closed
+ * tab's number is free again. New tabs count up 1, 2, … 9 (so a just-closed number isn't handed
+ * straight to another chat); past 9 a new tab takes the lowest free number. With no tabs open the
+ * count starts over at 1.
+ */
+export function tabNumbers(openIds: string[], numbers: Record<string, number>, nextNumber: number): { numbers: Record<string, number>; nextNumber: number } {
+  const kept: Record<string, number> = {}
+  for (const id of openIds) if (numbers[id]) kept[id] = numbers[id]
+  let next = Object.keys(kept).length ? nextNumber : 1
+  const used = new Set(Object.values(kept))
+  for (const id of openIds) {
+    if (kept[id]) continue
+    let n: number
+    if (next <= COUNT_UP_TO && !used.has(next)) n = next++
+    else {
+      n = 1
+      while (used.has(n)) n++
+      next = COUNT_UP_TO + 1
+    }
+    kept[id] = n
+    used.add(n)
+  }
+  return { numbers: kept, nextNumber: next }
+}
+
 export const useChat = create<ChatState>((set, get) => {
-  const persistTabs = () => {
-    const { pid, openIds, activeId } = get()
-    if (pid) localStorage.setItem(lsTabs(pid), JSON.stringify({ openIds, activeId }))
+  /** Show these tabs (numbering new ones, freeing closed ones' numbers) and remember them. */
+  const setTabs = (openIds: string[], activeId: string | null, extra: Partial<ChatState> = {}) => {
+    set({ ...extra, openIds, activeId, ...tabNumbers(openIds, get().numbers, get().nextNumber) })
+    const { pid, numbers, nextNumber } = get()
+    if (pid) localStorage.setItem(lsTabs(pid), JSON.stringify({ openIds, activeId, numbers, nextNumber }))
   }
 
   return {
@@ -62,6 +97,8 @@ export const useChat = create<ChatState>((set, get) => {
     summaries: [],
     openIds: [],
     activeId: null,
+    numbers: {},
+    nextNumber: 1,
     chats: {},
     drafts: {},
     statuses: {},
@@ -76,22 +113,19 @@ export const useChat = create<ChatState>((set, get) => {
     },
 
     async load(pid) {
-      let saved: { openIds: string[]; activeId: string | null } = { openIds: [], activeId: null }
+      let saved: { openIds: string[]; activeId: string | null; numbers: Record<string, number>; nextNumber: number } = { openIds: [], activeId: null, numbers: {}, nextNumber: 1 }
       try {
         saved = { ...saved, ...JSON.parse(localStorage.getItem(lsTabs(pid)) ?? '{}') }
       } catch {
         /* */
       }
-      set({ pid, summaries: [], openIds: [], activeId: null })
+      set({ pid, summaries: [], openIds: [], activeId: null, numbers: saved.numbers, nextNumber: saved.nextNumber })
       const summaries = await api.chats(pid)
       const ids = new Set(summaries.map((s) => s.id))
       let openIds = saved.openIds.filter((id) => ids.has(id))
       if (!openIds.length && summaries.length) openIds = [summaries[0].id]
       const activeId = openIds.includes(saved.activeId ?? '') ? saved.activeId : (openIds[0] ?? null)
-      set({
-        summaries, openIds, activeId,
-        busyProjects: { ...get().busyProjects, [pid]: summaries.some((s) => s.running) },
-      })
+      setTabs(openIds, activeId, { summaries, busyProjects: { ...get().busyProjects, [pid]: summaries.some((s) => s.running) } })
       await Promise.all(openIds.map((id) => get().reloadChat(id)))
       if (!openIds.length) await get().newChat()
     },
@@ -109,20 +143,15 @@ export const useChat = create<ChatState>((set, get) => {
       const pid = get().pid
       if (!pid) return
       const chat = await api.createChat(pid)
-      set({
+      setTabs([...get().openIds, chat.id], chat.id, {
         chats: { ...get().chats, [chat.id]: chat },
-        openIds: [...get().openIds, chat.id],
-        activeId: chat.id,
         summaries: [{ id: chat.id, title: chat.title, updatedAt: chat.updatedAt, turnCount: 0, running: false }, ...get().summaries],
       })
-      persistTabs()
       return chat.id
     },
 
     async openChat(id) {
-      if (!get().openIds.includes(id)) set({ openIds: [...get().openIds, id] })
-      set({ activeId: id })
-      persistTabs()
+      setTabs(get().openIds.includes(id) ? get().openIds : [...get().openIds, id], id)
       if (!get().chats[id]) await get().reloadChat(id)
     },
 
@@ -131,8 +160,7 @@ export const useChat = create<ChatState>((set, get) => {
       if (openIds.includes(id)) return get().openChat(id)
       const i = activeId ? openIds.indexOf(activeId) : -1
       const next = i >= 0 ? openIds.map((x, k) => (k === i ? id : x)) : [...openIds, id]
-      set({ openIds: next, activeId: id })
-      persistTabs()
+      setTabs(next, id)
       if (!get().chats[id]) await get().reloadChat(id)
     },
 
@@ -140,8 +168,7 @@ export const useChat = create<ChatState>((set, get) => {
       const { openIds, activeId } = get()
       const i = openIds.indexOf(id)
       const next = openIds.filter((x) => x !== id)
-      set({ openIds: next, activeId: activeId === id ? (next[Math.min(i, next.length - 1)] ?? null) : activeId })
-      persistTabs()
+      setTabs(next, activeId === id ? (next[Math.min(i, next.length - 1)] ?? null) : activeId)
     },
 
     async reloadChat(id) {

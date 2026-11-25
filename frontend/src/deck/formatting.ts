@@ -98,6 +98,26 @@ export function sortByHue(colors: string[]): string[] {
   return [...hued, ...grays]
 }
 
+/**
+ * The deck's colors in rows by lightness — dark, medium, light (each around the color wheel), then
+ * grays from black to white — so a pale tint doesn't sit between two strong colors. Empty rows
+ * are left out; the popup wraps a long row.
+ */
+export function colorRows(colors: string[]): string[][] {
+  const grays: string[] = []
+  const tiers: string[][] = [[], [], []]
+  for (const c of colors) {
+    const [, sat, l] = hsl(c)
+    if (sat < 0.12) grays.push(c)
+    else tiers[l < 0.36 ? 0 : l < 0.7 ? 1 : 2].push(c)
+  }
+  // The wheel starts just before red: crimson (hue ~350°) belongs with red, not after violet.
+  const hue = (c: string) => { const h = hsl(c)[0]; return h >= 345 ? h - 360 : h }
+  const byHue = (a: string, b: string) => hue(a) - hue(b) || hsl(a)[2] - hsl(b)[2]
+  grays.sort((a, b) => hsl(a)[2] - hsl(b)[2])
+  return [...tiers.map((t) => t.sort(byHue)), grays].filter((row) => row.length)
+}
+
 /** A computed CSS color as RRGGBB (null for transparent / unknown). */
 export function cssToHex(css: string | null | undefined): string | null {
   const m = css?.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+))?/)

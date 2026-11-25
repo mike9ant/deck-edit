@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cssToHex, firstFamily, parseSize, sortByHue, stepSize } from '../formatting'
+import { colorRows, cssToHex, firstFamily, parseSize, sortByHue, stepSize } from '../formatting'
 
 describe('font sizes', () => {
   it('steps through PowerPoint’s preset list', () => {
@@ -26,6 +26,13 @@ describe('font sizes', () => {
 describe('colors', () => {
   it('orders colors around the wheel, grays last from black to white', () => {
     expect(sortByHue(['FFFFFF', '0070C0', 'FF0000', '808080', '00B050', '000000', 'C00000'])).toEqual(['C00000', 'FF0000', '00B050', '0070C0', '000000', '808080', 'FFFFFF'])
+  })
+
+  it('groups deck colors into dark / medium / light rows around the wheel, grays last', () => {
+    // navy, red, pale pink, mid green, light blue, gray, white, dark green
+    const rows = colorRows(['14123A', 'D7263D', 'F9E1E8', '2BB3A3', 'BFE3F5', '808080', 'FFFFFF', '1F5E40'])
+    expect(rows).toEqual([['1F5E40', '14123A'], ['D7263D', '2BB3A3'], ['BFE3F5', 'F9E1E8'], ['808080', 'FFFFFF']])
+    expect(colorRows(['D7263D', '2BB3A3'])).toEqual([['D7263D', '2BB3A3']]) // empty rows are left out
   })
 
   it('reads computed CSS colors and font families', () => {

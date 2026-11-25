@@ -14,7 +14,7 @@ import { Check, ChevronDown, ChevronUp, Palette } from 'lucide-react'
 import clsx from 'clsx'
 import type { PresentationData } from '@diceui/pptx-core'
 import type { ColorTarget, FormatState, SlideActions } from './SlideEditor'
-import { STANDARD_COLORS, deckColors, deckFonts, parseSize } from './formatting'
+import { STANDARD_COLORS, colorRows, deckColors, deckFonts, parseSize } from './formatting'
 
 const keep = (e: React.MouseEvent) => e.preventDefault() // a click must not end the text editing
 
@@ -70,7 +70,10 @@ export function FormatTools({ fmt, pres, version, actions }: { fmt: FormatState;
         onClick={() => setOpen(open === 'color' ? null : 'color')}
       >
         <Palette size={15} />
-        <span className="mt-px h-[3px] w-4 rounded-sm" style={{ background: `#${(fmt.text ? fmt.textColor : fmt.shape ? fmt.fill : undefined) ?? 'ffffff'}`, boxShadow: '0 0 0 0.5px rgba(0,0,0,.25)' }} />
+        {(() => {
+          const c = fmt.text ? fmt.textColor : fmt.shape ? fmt.fill : undefined
+          return <span className="mt-px h-[3px] w-4 rounded-sm" style={{ background: c && c !== 'none' ? `#${c}` : '#ffffff', boxShadow: '0 0 0 0.5px rgba(0,0,0,.25)' }} />
+        })()}
       </button>
       {open === 'font' && (
         <Popup anchor={fontBtn.current} width={224} onClose={() => setOpen(null)}>
@@ -139,10 +142,14 @@ function SizeBox({ size, actions }: { size?: number; actions: React.MutableRefOb
 
 const TARGET_LABEL: Record<ColorTarget, string> = { text: 'Text', fill: 'Fill', line: 'Line', background: 'Background' }
 
-/** Swatch grid geometry: a fixed 12 columns, so the popup's width follows from it (no sideways scrolling). */
+/**
+ * Swatch grid geometry: a fixed 13 columns — the first slot is "None" for a fill or line (kept empty
+ * for text, so the colors stay in the same places on every tab), then black, white and the ten
+ * standard colors. The popup's width follows from it (no sideways scrolling).
+ */
 const SW = 20
 const GAP = 4
-const COLS = 12
+const COLS = 13
 /** Room around the grid for the selection ring (2 px + 1 px offset). */
 const RING = 3
 const GRID_W = COLS * SW + (COLS - 1) * GAP + 2 * RING
@@ -154,35 +161,56 @@ const EDGE = 'inset 0 0 0 1px rgba(0,0,0,.15)'
 /** The current color's ring: a white gap, then the accent color. */
 const RING_SHADOW = '0 0 0 1px #fff, 0 0 0 3px #3d63dd'
 
+/** The tab (Text / Fill / Line / Background) last picked, while the app runs. */
+let lastTarget: ColorTarget | null = null
+const NONE = 'NONE'
+/** "None": white with a red diagonal, as in PowerPoint. */
+const NONE_BG = 'linear-gradient(to top right, #fff calc(50% - 1.2px), #D7263D calc(50% - 1.2px), #D7263D calc(50% + 1.2px), #fff calc(50% + 1.2px))'
+
 function ColorPopup({ anchor, fmt, pres, version, onClose, onPick }: { anchor: HTMLElement | null; fmt: FormatState; pres: PresentationData; version: number; onClose(): void; onPick(t: ColorTarget, hex: string): void }) {
   const targets: ColorTarget[] = [...(fmt.text ? ['text' as const] : []), ...(fmt.shape ? ['fill' as const, 'line' as const] : []), ...(fmt.background ? ['background' as const] : [])]
-  const [target, setTarget] = useState<ColorTarget>(targets[0])
+  const [target, setTargetState] = useState<ColorTarget>(lastTarget && targets.includes(lastTarget) ? lastTarget : targets[0])
+  const setTarget = (t: ColorTarget) => { lastTarget = t; setTargetState(t) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const colors = useMemo(() => deckColors(pres), [pres, version])
+  const rows = useMemo(() => colorRows(deckColors(pres)), [pres, version])
   const current = (target === 'text' ? fmt.textColor : target === 'fill' ? fmt.fill : target === 'line' ? fmt.line : undefined)?.toUpperCase()
-  const rows = Math.ceil(colors.length / COLS)
-  const scrolls = rows > MAX_ROWS
+  // Each row wraps at COLS; the row count decides whether the deck colors scroll.
+  const lineCount = rows.reduce((n, r) => n + Math.ceil(r.length / COLS), 0)
+  const scrolls = lineCount > MAX_ROWS
   const width = GRID_W + 2 * PAD + (scrolls ? SCROLLBAR : 0)
-  const inPalette = !!current && (STANDARD_COLORS.includes(current) || colors.includes(current))
+  const inPalette = !!current && (current === NONE || STANDARD_COLORS.includes(current) || rows.some((r) => r.includes(current)))
   // The current color's swatch may be in a scrolled-off row: bring it into view.
   const scroller = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const el = scroller.current?.querySelector<HTMLElement>('[data-current]')
     if (el && scroller.current) scroller.current.scrollTop = Math.max(0, el.offsetTop - scroller.current.offsetTop - SW)
   }, [current, target])
+  // The current color is ringed wherever it appears — in the standard colors and the deck's both.
+  const ring = (on: boolean) => (on ? `${EDGE}, ${RING_SHADOW}` : EDGE)
   const swatch = (hex: string) => (
     <button
       key={hex}
       className={clsx('rounded-sm', current !== hex && 'hover:scale-110')}
-      // One shadow for both: the swatch's hairline edge and, for the current color, a ring around it.
-      style={{ width: SW, height: SW, background: `#${hex}`, boxShadow: current === hex ? `${EDGE}, ${RING_SHADOW}` : EDGE }}
+      style={{ width: SW, height: SW, background: `#${hex}`, boxShadow: ring(current === hex) }}
       title={`#${hex}`}
       data-current={current === hex || undefined}
       onClick={() => onPick(target, hex)}
     />
   )
-  const grid = (list: string[], extra?: React.CSSProperties) => (
-    <div className="grid" style={{ gridTemplateColumns: `repeat(${COLS}, ${SW}px)`, gap: GAP, padding: RING, width: GRID_W, ...extra }}>{list.map(swatch)}</div>
+  const noneSlot = target === 'fill' || target === 'line'
+    ? (
+      <button
+        key="none"
+        className={clsx('rounded-sm', current !== NONE && 'hover:scale-110')}
+        style={{ width: SW, height: SW, background: NONE_BG, boxShadow: ring(current === NONE) }}
+        title={target === 'fill' ? 'No fill (transparent)' : 'No line'}
+        data-none=""
+        onClick={() => onPick(target, 'none')}
+      />
+    )
+    : <span key="none" style={{ width: SW, height: SW }} />
+  const grid = (items: React.ReactNode[], extra?: React.CSSProperties) => (
+    <div className="grid" style={{ gridTemplateColumns: `repeat(${COLS}, ${SW}px)`, gap: GAP, padding: RING, width: GRID_W, ...extra }}>{items}</div>
   )
   return (
     <Popup anchor={anchor} width={width} onClose={onClose}>
@@ -197,15 +225,17 @@ function ColorPopup({ anchor, fmt, pres, version, onClose, onPick }: { anchor: H
           </div>
         )}
         {targets.length === 1 && <div className="mb-1.5 text-[11px] font-medium text-ink-3">{TARGET_LABEL[target]} color</div>}
-        {grid(STANDARD_COLORS)}
+        {grid([noneSlot, ...STANDARD_COLORS.map(swatch)])}
         <div className="mb-0.5 mt-2 text-[11px] font-medium text-ink-3">Deck colors</div>
-        {colors.length ? (
+        {rows.length ? (
           <div
             ref={scroller}
             className="relative overflow-x-hidden"
-            style={scrolls ? { maxHeight: MAX_ROWS * SW + (MAX_ROWS - 1) * GAP + 2 * RING, overflowY: 'auto', width: GRID_W + SCROLLBAR } : undefined}
+            style={scrolls ? { maxHeight: MAX_ROWS * SW + (MAX_ROWS - 1) * GAP + 2 * RING + (rows.length - 1) * 6, overflowY: 'auto', width: GRID_W + SCROLLBAR } : undefined}
+            data-deck-colors=""
           >
-            {grid(colors)}
+            {/* Dark, medium, light, grays: each row wraps; a small gap between rows. */}
+            {rows.map((row, i) => <div key={i} style={{ marginTop: i ? 6 - RING * 2 : 0 }}>{grid(row.map(swatch))}</div>)}
           </div>
         ) : (
           <div className="text-xs text-ink-3">No colors found in this deck.</div>
