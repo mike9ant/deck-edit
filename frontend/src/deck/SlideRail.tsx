@@ -6,7 +6,7 @@
  */
 
 import { memo, useEffect, useRef, useState } from 'react'
-import { Copy, CopyPlus, ClipboardPaste, MessageSquareText, Trash2 } from 'lucide-react'
+import { Copy, CopyPlus, ClipboardPaste, MessageSquareText, StickyNote, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
 import { copyNodes, materializeSlide, type PresentationData, type SlideData } from '@diceui/pptx-core'
 import { useDecks, type DeckSession } from './deckStore'
@@ -21,6 +21,9 @@ import type { DeckDiff, SlideDiff, SummaryLine } from './deckDiff'
 import { lineItems, rowItems, rowState, type Decision, type Decisions } from './review'
 import { DiffSummary, ThumbWordMarks } from './CompareView'
 import type { DeckComment } from './comments'
+import { deckWide, useFind } from './find'
+import { FindMarks } from './FindBar'
+import { useMenuActions } from '../desktopMenu'
 
 const Thumb = memo(function Thumb(p: { deckKey: string; pres: PresentationData; slide: SlideData; version: number; width: number }) {
   return <SlideRender deckKey={p.deckKey} pres={p.pres} slide={p.slide} version={p.version} width={p.width} thumbnail />
@@ -58,6 +61,15 @@ export function SlideRail({ session, width, compare, comments }: { session: Deck
   const suppressClick = useRef(false)
   const listRef = useRef<HTMLDivElement>(null)
   const notes = useNotes((s) => s.notes)
+  // Find (⌘F) across the deck: each slide's match count on its thumbnail, and maybe only those slides.
+  const findMatches = useFind((s) => (s.deck === key && deckWide(s) ? s.matches : null))
+  const onlyMatching = useFind((s) => s.onlyMatching) && !!findMatches
+  const findCounts = new Map<number, { slide: number; notes: number }>()
+  for (const m of findMatches ?? []) {
+    const c = findCounts.get(m.slideIndex) ?? { slide: 0, notes: 0 }
+    c[m.where]++
+    findCounts.set(m.slideIndex, c)
+  }
   const summaryW = compare?.summaryW ?? 0
   const thumbW = Math.max(60, Math.floor(useInnerWidth(listRef, width - 16) - 32 - summaryW))
   const thumbH = (thumbW * pres.height) / pres.width
@@ -157,6 +169,11 @@ export function SlideRail({ session, width, compare, comments }: { session: Deck
     setPicked([])
     setSlide(key, Math.min(session.slideIndex, pres.slides.length - 1))
   }
+  // Deck → Duplicate Slide / Delete Slide (desktop menu): the selected slides, as the buttons below.
+  useMenuActions(() => ({
+    'duplicate-slide': { enabled: !editOff && !compare?.review, run: () => void duplicate() },
+    'delete-slide': { enabled: !editOff && !compare?.review && pres.slides.length > 1, run: () => void remove() },
+  }))
   const copy = async () => {
     const ids = [...selected].sort((a, b) => indexOf(a) - indexOf(b))
     // A self-contained copy of each slide (shapes + the images they use), so
@@ -339,7 +356,7 @@ export function SlideRail({ session, width, compare, comments }: { session: Deck
   return (
     // Keeps its width (the thumbnails are sized from it), so they never hang out of the rail.
     <div className="flex h-full min-h-0 shrink-0 flex-col bg-paper" style={{ width }}>
-      <div ref={listRef} tabIndex={0} onKeyDown={onKeyDown} className="min-h-0 flex-1 select-none overflow-y-auto px-2 py-2 outline-none [scrollbar-gutter:stable]">
+      <div ref={listRef} data-slide-rail="" tabIndex={0} onKeyDown={onKeyDown} className="min-h-0 flex-1 select-none overflow-y-auto px-2 py-2 outline-none [scrollbar-gutter:stable]">
         {review?.header}
         {compare?.diff && compare.diff.deck.length > 0 && (
           <div className="mb-1.5 rounded border border-amber-200 bg-amber-50 px-1.5 py-1 text-[10px] leading-[13px] text-amber-900" title="Changes to the whole deck">
@@ -354,8 +371,9 @@ export function SlideRail({ session, width, compare, comments }: { session: Deck
           const isPicked = picked.includes(slide.id)
           const changed = sid && session.externallyChanged.includes(sid)
           const diffRow = rowOf.get(slide.id)
+          const found = findCounts.get(i)
           return (
-            <div key={slide.id} data-slide-index={i}>
+            <div key={slide.id} data-slide-index={i} className={clsx(onlyMatching && !found && !isCurrent && 'hidden')}>
               <div className={clsx('mx-1 h-1 rounded', dragOver === i ? 'bg-accent' : 'bg-transparent')} />
               <div
                 data-slide-row
@@ -396,10 +414,21 @@ export function SlideRail({ session, width, compare, comments }: { session: Deck
                     <div className={clsx('absolute inset-y-0 left-0 z-[1] w-[3px]', diffRow.status === 'added' ? 'bg-emerald-500' : diffRow.lines.length || diffRow.shapes.length ? 'bg-amber-500' : 'bg-sky-500')} />
                   )}
                   <Thumb deckKey={key} pres={pres} slide={slide} version={session.slideVersions[slide.id] ?? 0} width={thumbW} />
+                  {found && found.slide > 0 && <FindMarks deckKey={key} slideIndex={i} scale={thumbW} thumb />}
                   {diffRow?.shapes.some((x) => x.text) && <ThumbWordMarks shapes={diffRow.shapes} width={thumbW} />}
                   {openNotes > 0 && (
                     <div className="absolute right-1 top-1 rounded-full bg-note px-1.5 text-[10px] font-bold text-amber-950 shadow" title={`${openNotes} open note(s)`}>
                       {openNotes}
+                    </div>
+                  )}
+                  {found && (
+                    <div
+                      className="absolute bottom-1 left-1 flex items-center gap-0.5 rounded-full bg-yellow-300 px-1.5 text-[10px] font-bold leading-[15px] text-amber-950 shadow"
+                      title={[found.slide && `${found.slide} match${found.slide > 1 ? 'es' : ''} on the slide`, found.notes && `${found.notes} in the speaker notes`].filter(Boolean).join(', ')}
+                      data-find-badge=""
+                    >
+                      {found.slide > 0 && found.slide}
+                      {found.notes > 0 && <span className="flex items-center gap-px font-semibold">{found.slide > 0 && <span className="mx-px opacity-50">+</span>}<StickyNote size={9} />{found.notes}</span>}
                     </div>
                   )}
                   {changed && <div className="absolute left-1 top-1 h-2.5 w-2.5 rounded-full bg-violet-500 ring-2 ring-white" title="Changed by the agent" />}

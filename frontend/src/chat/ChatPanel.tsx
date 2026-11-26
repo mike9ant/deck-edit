@@ -11,8 +11,9 @@ import { AgentSetupCard, useAgentBlock } from './AgentSetup'
 import { TabStrip } from '../components/TabStrip'
 import {
   AlertTriangle, ArrowDown, BotMessageSquare, GitCompareArrows, Check, ChevronDown, ChevronRight, CircleDot, FileEdit, History, Loader2, MessageSquare, SquarePlus, Trash2,
-  Plus, RotateCcw, Send, Square, Terminal, Wrench, X, StickyNote, Pencil, Play, ImagePlus, Library, Snowflake, Scissors,
+  Plus, RotateCcw, Send, Square, Terminal, Wrench, X, StickyNote, Pencil, Play, ImagePlus, Library, Snowflake, Scissors, PanelRightClose,
 } from 'lucide-react'
+import { useMenuActions } from '../desktopMenu'
 import clsx from 'clsx'
 import { askConfirm } from '../components/confirmDialog'
 import { QuoteNoteBox } from '../notes/TextNotes'
@@ -87,6 +88,9 @@ export function ChatPanel() {
           }}
         >
           <History size={15} />
+        </button>
+        <button className="icon-btn mb-1 shrink-0" title="Hide the AI agent panel" onClick={() => useApp.getState().setChatCollapsed(true)}>
+          <PanelRightClose size={15} />
         </button>
       </div>
       {library ? (
@@ -960,6 +964,8 @@ function ComposerInner({ chat }: { chat: Chat }) {
   // subscription at normal speed a long or cold conversation costs nothing extra.
   const apiPriced = posture.auth === 'key' || (!!posture.fast && fastSupported(posture.model ?? ''))
   const longChat = apiPriced && !!cache && cache.contextTokens >= cache.threshold
+  // AI Agent → Continue in a Fresh Conversation (desktop menu): as the Split chip, when it's offered.
+  useMenuActions(() => ({ 'split-chat': { enabled: longChat && !running && !splitNext && !askSplit, run: () => setSplitNext(true) } }))
 
   /** A posture pick applies to this chat AND becomes the default for new chats (as in Code Navigator). */
   const changePosture = (p: Partial<Posture>) => {

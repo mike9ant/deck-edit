@@ -15,6 +15,11 @@ import { SlideRail } from './SlideRail'
 import { SlideEditor, type AlignKind, type FormatState, type NodeOrder, type SlideActions } from './SlideEditor'
 import { FormatTools } from './FormatTools'
 import { NotesPane } from './NotesPane'
+import { FindBar, FindMarks, useFindShortcuts } from './FindBar'
+import { useFind } from './find'
+import { useMenuActions } from '../desktopMenu'
+import { CompareWithDialog } from './CompareWithDialog'
+import { askConfirm } from '../components/confirmDialog'
 import { NoteToolButton, SelectToolButton, useEscapeEndsNoteMode } from '../notes/NoteDrawing'
 import { Splitter } from '../components/Splitter'
 import { useInnerWidth } from '../components/useInnerWidth'
@@ -24,7 +29,7 @@ import { useEditMode } from '../store/editGuard'
 import { EditDisabledChip } from '../components/EditNotice'
 import { useChat } from '../store/chatStore'
 import { api } from '../api/client'
-import { compareForAgent, useCompare } from './compareStore'
+import { compareForAgent, reviewUnsaved, useCompare } from './compareStore'
 import { BaseSlideView, CompareBar, DiffOverlay, SlideFrame, useCompareDiff, type SlideMark } from './CompareView'
 import { CommentMarkers, useDeckComments } from './CommentsView'
 import { AppliedNote, ReviewHeader } from './ReviewView'
@@ -101,6 +106,46 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   const [showComments, setShowComments] = useState(false)
   const compare = useCompare((s) => s.compares[key])
   useCompareDiff(session, compare)
+  useFindShortcuts(key)
+  const findOpen = useFind((s) => s.deck === key)
+  const [comparingWith, setComparingWith] = useState(false)
+
+  // The desktop app's Deck and View menus. (Read when the app asks — after this render, so only
+  // values set up above, never ones computed below the early returns.)
+  useMenuActions(() => {
+    const pres = session?.pres
+    const reviewing = !!compare?.review
+    const fromView = !!(compare?.baseSide?.pres && (compare.removed || compare.view === 'before'))
+    const editable = !!pres && !editOff && !reviewing
+    const i = session?.slideIndex ?? 0
+    const go = (to: number) => {
+      useDecks.getState().setSlide(key, to)
+      if (compare) useCompare.getState().showRemoved(key, null)
+    }
+    const leaveReview = async (verb: string, label: string) => {
+      const n = reviewUnsaved(compare)
+      return !n || (await askConfirm(`${verb}? Your ${n} accepted change(s) haven't been applied and will be lost.`, label))
+    }
+    return {
+      'new-text-box': { enabled: editable && !fromView, run: () => { setNoteMode(false); actions.current.addTextBox() } },
+      'note-for-ai': { enabled: !!pres, checked: noteMode, run: () => setNoteMode(!noteMode) },
+      'toggle-comments': { enabled: comments.size > 0, checked: showComments && comments.size > 0, run: () => setShowComments(!showComments) },
+      'toggle-resolved': { enabled: !!pres, checked: showResolved, run: () => setShowResolved(!showResolved) },
+      'next-slide': { enabled: !!pres && i < pres.slides.length - 1, run: () => go(i + 1) },
+      'prev-slide': { enabled: !!pres && i > 0, run: () => go(i - 1) },
+      'compare-with': { enabled: !!pres && !reviewing, run: () => setComparingWith(true) },
+      'review-changes': {
+        enabled: !!compare?.diff,
+        checked: reviewing,
+        run: async () => {
+          if (!reviewing) return void useCompare.getState().startReview(key)
+          if (await leaveReview('Leave the review', 'Leave review')) useCompare.getState().stopReview(key)
+        },
+      },
+      'close-compare': { enabled: !!compare, run: async () => { if (await leaveReview('Close the comparison', 'Close')) useCompare.getState().close(key) } },
+      'open-powerpoint': { enabled: !!pres, run: () => void api.openExternal(pid, path) },
+    }
+  })
 
   useEffect(() => {
     void open(pid, path)
@@ -217,7 +262,8 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col" onKeyDown={onKeyDown}>
+    <div className="flex min-h-0 flex-1 flex-col" onKeyDown={onKeyDown} data-deck-root="">
+      {comparingWith && <CompareWithDialog pid={pid} path={path} onClose={() => setComparingWith(false)} />}
       {compare && <CompareBar compare={compare} session={session} />}
       {compare?.review?.applied && <AppliedNote compare={compare} />}
       <div className="toolbar-fit flex h-10 shrink-0 items-center gap-1 border-b border-hair bg-panel px-2">
@@ -315,16 +361,18 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
                 showResolved={showResolved}
                 registerActions={(a) => (actions.current = a)}
                 onFormat={setFmt}
-                overlay={(diffMarks || (showComments && slideComments.length > 0)) ? (scale) => (
+                overlay={(diffMarks || findOpen || (showComments && slideComments.length > 0)) ? (scale) => (
                   <>
                     {diffMarks && diffRow.shapes.length > 0 && <DiffOverlay shapes={diffRow.shapes} scale={scale} side="after" focus={compare.hover} ratio={ratio} />}
                     {diffMarks && slideMark && <SlideFrame mark={slideMark} />}
+                    {findOpen && <FindMarks deckKey={key} slideIndex={session.slideIndex} scale={scale} />}
                     {showComments && current && slideComments.length > 0 && <CommentMarkers comments={slideComments} slide={current} scale={scale} slideW={pres.width} />}
                   </>
                 ) : undefined}
               />
             )}
             <ReloadingBadge active={session.reloading} />
+            {findOpen && <FindBar session={session} />}
           </div>
           <NotesPane session={session} />
         </div>

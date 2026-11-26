@@ -26,6 +26,8 @@ import { useCompare } from './compareStore'
 import { paragraphOps, wordDiff, type Op } from './deckDiff'
 import { rowKey, type Decision } from './review'
 import { WordCounts } from './CompareView'
+import { useFind } from './find'
+import { useMenuActions } from '../desktopMenu'
 
 const LS_OPEN = 'deckedit-notes-open'
 const LS_HEIGHT = 'deckedit-notes-height'
@@ -58,6 +60,16 @@ export function NotesPane({ session }: { session: DeckSession }) {
   const notesKey = notesRow ? `${rowKey(notesRow)}|notes` : ''
   const notesDecision = useCompare((s) => (notesKey ? s.compares[session.key]?.review?.decisions[notesKey] : undefined))
   const [showDiff, setShowDiff] = useState(true)
+  // Find (⌘F) stepping to a match in this slide's notes: the panel opens (and shows the editable notes) to show it.
+  const findInNotes = useFind((s) => {
+    const m = s.deck === session.key ? s.matches[s.current] : undefined
+    return m?.where === 'notes' ? `${m.slideId}#${m.occurrence}` : null
+  })
+  useEffect(() => {
+    if (!findInNotes || !slide || !findInNotes.startsWith(`${slide.id}#`)) return
+    setOpen(true)
+    setShowDiff(false)
+  }, [findInNotes, slide?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [rendered, setRendered] = useState(0)
   const render = () => {
@@ -289,6 +301,8 @@ export function NotesPane({ session }: { session: DeckSession }) {
     localStorage.setItem(LS_OPEN, open ? '0' : '1')
   }
 
+  useMenuActions(() => ({ 'toggle-notes': { checked: open, run: toggle } }))
+
   const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
     const startY = e.clientY
@@ -311,7 +325,7 @@ export function NotesPane({ session }: { session: DeckSession }) {
   const preview = text.trim() ? short(text, 110) : 'No speaker notes'
 
   return (
-    <div className="shrink-0 border-t border-hair bg-panel">
+    <div className="shrink-0 border-t border-hair bg-panel" data-notes-pane="">
       {open && <div className="h-1 cursor-row-resize hover:bg-accent/20" onPointerDown={startResize} title="Drag to resize" />}
       <div className="relative flex items-center pr-2 hover:bg-paper">
         <button className="flex min-w-0 flex-1 items-center gap-1.5 px-3 py-1.5 text-left text-xs text-ink-2" onClick={toggle}>

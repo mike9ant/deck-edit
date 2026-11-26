@@ -122,6 +122,14 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
   background-color: rgb(251 191 36 / 0.35);
 }
 
+/* Find (deck/FindBar.tsx): every match, and the current one. */
+::highlight(find-match) {
+  background-color: rgb(253 224 71 / 0.75);
+}
+::highlight(find-current) {
+  background-color: rgb(251 146 60);
+}
+
 /* A slide's text selection kept visible while a toolbar field (the font size) has the focus. */
 ::highlight(held-selection) {
   background-color: rgb(61 99 221 / 0.28);

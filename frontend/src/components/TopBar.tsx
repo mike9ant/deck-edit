@@ -8,6 +8,7 @@ import { api } from '../api/client'
 import { SettingsDialog } from '../chat/AgentSettings'
 import { useAgent } from '../store/agentStore'
 import { askConfirm } from './confirmDialog'
+import { useMenuActions } from '../desktopMenu'
 
 export function TopBar() {
   const { projects, projectId, selectProject, loadProjects } = useApp()
@@ -16,6 +17,10 @@ export function TopBar() {
   const [creating, setCreating] = useState(false)
   const settings = useAgent((s) => s.settingsOpen)
   const menuRef = useRef<HTMLDivElement>(null)
+  useMenuActions(() => ({
+    'new-project': { enabled: !creating, run: () => setCreating(true) },
+    settings: { enabled: !settings, run: () => useAgent.getState().openSettings() },
+  }))
 
   useEffect(() => {
     if (!menu) return

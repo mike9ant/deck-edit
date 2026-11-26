@@ -54,6 +54,9 @@ interface AppState {
   /** The Files panel folded down to a thin strip. */
   filesCollapsed: boolean
   setFilesCollapsed(v: boolean): void
+  /** The AI agent (chat) panel folded down to a thin strip. */
+  chatCollapsed: boolean
+  setChatCollapsed(v: boolean): void
   /** Files/folders were renamed or moved: open tabs (and kept/changed marks) follow. */
   renameOpenPaths(pairs: [string, string][]): void
   /** Files/folders were deleted: close their tabs. */
@@ -102,6 +105,11 @@ export const useApp = create<AppState>((set, get) => ({
   setFilesCollapsed(v) {
     localStorage.setItem('deckedit-files-collapsed', v ? '1' : '0')
     set({ filesCollapsed: v })
+  },
+  chatCollapsed: localStorage.getItem('deckedit-chat-collapsed') === '1',
+  setChatCollapsed(v) {
+    localStorage.setItem('deckedit-chat-collapsed', v ? '1' : '0')
+    set({ chatCollapsed: v })
   },
   renameOpenPaths(pairs) {
     const map = (p: string) => {

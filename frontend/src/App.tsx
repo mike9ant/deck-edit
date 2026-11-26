@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react'
-import { FolderPlus, PanelLeftOpen, Pin, Presentation, X } from 'lucide-react'
+import { Bot, FolderPlus, PanelLeftOpen, Pin, Presentation, X } from 'lucide-react'
 import { TabStrip } from './components/TabStrip'
 import { EditNotice } from './components/EditNotice'
 import clsx from 'clsx'
@@ -31,11 +31,22 @@ import { handleScreenshot } from './screenshot'
 import { handleCompareRequest, handleReviewRequest, reviewUnsaved, useCompare } from './deck/compareStore'
 import { askConfirm } from './components/confirmDialog'
 import { markChangedOnFileEvent } from './store/tabKeeping'
+import { useMenuActions, type MenuAction } from './desktopMenu'
+import { api } from './api/client'
 
 export default function App() {
-  const { projectId, projects, loadProjects, widths, setWidth, filesCollapsed, setFilesCollapsed } = useApp()
+  const { projectId, projects, loadProjects, widths, setWidth, filesCollapsed, setFilesCollapsed, chatCollapsed, setChatCollapsed, activePath } = useApp()
   const [loaded, setLoaded] = useState(false)
   const treeTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
+
+  // The desktop app's menu bar: File and View items about the window's panels and the open file.
+  useMenuActions(() => ({
+    'close-tab': { enabled: !!(projectId && activePath), run: () => projectId && activePath && void closeTabAsking(projectId, activePath) },
+    reveal: { enabled: !!projectId, run: () => projectId && void api.reveal(projectId, activePath ?? '') },
+    'toggle-files': { enabled: !!projectId, checked: !!projectId && !filesCollapsed, run: () => setFilesCollapsed(!filesCollapsed) },
+    'toggle-chat': { enabled: !!projectId, checked: !!projectId && !chatCollapsed, run: () => setChatCollapsed(!chatCollapsed) },
+    ...agentMenuActions(projectId, () => setChatCollapsed(false)),
+  }))
 
   useEffect(() => {
     loadProjects().finally(() => setLoaded(true))
@@ -131,8 +142,16 @@ export default function App() {
             <DocTabs />
             <DocArea pid={projectId} />
           </div>
-          <Splitter width={widths.chat} min={300} max={900} side="right" onChange={(w) => setWidth('chat', w)} />
-          <div className="min-w-[300px] shrink" style={{ width: widths.chat }}><ChatPanel /></div>
+          {chatCollapsed ? (
+            <div className="flex w-8 shrink-0 flex-col items-center border-l border-hair bg-paper pt-1.5">
+              <button className="icon-btn" title="Show the AI agent panel" onClick={() => setChatCollapsed(false)}><Bot size={15} /></button>
+            </div>
+          ) : (
+            <>
+              <Splitter width={widths.chat} min={300} max={900} side="right" onChange={(w) => setWidth('chat', w)} />
+              <div className="min-w-[300px] shrink" style={{ width: widths.chat }}><ChatPanel /></div>
+            </>
+          )}
         </div>
       ) : loaded ? (
         <Welcome hasProjects={projects.length > 0} />
@@ -181,12 +200,10 @@ function DocTabs() {
             </button>
           )}
           {/* Its space is kept while hidden: showing it on hover mustn't shift the tab's other buttons. */}
-          <button className={clsx('shrink-0 text-ink-3 hover:text-ink group-hover:visible', t === activePath ? 'visible' : 'invisible')} title="Close" onClick={async (e) => {
+          <button className={clsx('shrink-0 text-ink-3 hover:text-ink group-hover:visible', t === activePath ? 'visible' : 'invisible')} title="Close (⌘W in the desktop app)" onClick={(e) => {
             e.stopPropagation()
-            // A review with decisions not yet applied would be lost: ask first.
-            const pending = projectId ? reviewUnsaved(useCompare.getState().compares[`${projectId}:${t}`]) : 0
-            if (pending && !(await askConfirm(`Close ${t.split('/').pop()}? Your ${pending} accepted change(s) haven't been applied and will be lost.`, 'Close'))) return
-            closeTab(t)
+            if (projectId) void closeTabAsking(projectId, t)
+            else closeTab(t)
           }}><X size={12} /></button>
         </div>
         )
@@ -194,6 +211,39 @@ function DocTabs() {
     </TabStrip>
     </div>
   )
+}
+
+/**
+ * The AI Agent menu's items that don't need the chat panel open (read from the chat store when the
+ * desktop app asks): a new chat, stopping the active chat's turn, reverting its last file changes.
+ */
+function agentMenuActions(projectId: string | null, showPanel: () => void): Record<string, MenuAction> {
+  const chat = useChat.getState()
+  const active = chat.activeId ? chat.chats[chat.activeId] : undefined
+  const running = active?.turns.find((t) => t.status === 'running')
+  const revertable = !running ? [...(active?.turns ?? [])].reverse().find((t) => t.changes.length > 0 && t.snapshotId && !t.reverted) : undefined
+  return {
+    'new-chat': { enabled: !!projectId, run: () => { showPanel(); void useChat.getState().newChat() } },
+    'stop-agent': { enabled: !!running, run: () => active && void useChat.getState().stop(active.id) },
+    'revert-last-turn': {
+      enabled: !!revertable,
+      run: async () => {
+        if (!active || !revertable) return
+        const n = revertable.changes.length
+        const what = revertable.changes.slice(0, 3).map((c) => c.path.split('/').pop()).join(', ') + (n > 3 ? ', …' : '')
+        if (!(await askConfirm(`Revert the agent's last changes (${n} file${n > 1 ? 's' : ''}: ${what})? A backup of the current state is kept — Undo revert brings them back.`, 'Revert'))) return
+        showPanel()
+        void useChat.getState().revert(active.id, revertable.id)
+      },
+    },
+  }
+}
+
+/** Close a tab — asking first when a review in it has accepted changes not yet applied (they'd be lost). */
+async function closeTabAsking(pid: string, path: string) {
+  const pending = reviewUnsaved(useCompare.getState().compares[`${pid}:${path}`])
+  if (pending && !(await askConfirm(`Close ${path.split('/').pop()}? Your ${pending} accepted change(s) haven't been applied and will be lost.`, 'Close'))) return
+  useApp.getState().closeTab(path)
 }
 
 function DocArea({ pid }: { pid: string }) {

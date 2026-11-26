@@ -593,7 +593,7 @@ function lineOf(n: SlideNode): string {
 }
 
 /** All the text in a node (shapes, table cells, groups). */
-function nodeText(n: SlideNode): string {
+export function nodeText(n: SlideNode): string {
   if (n.nodeType === 'shape') return bodyText(n.textBody as Body)
   if (n.nodeType === 'table') return n.rows.map((r) => r.cells.map((c) => bodyText(c.textBody as Body)).join('\t')).join('\n')
   if (n.nodeType === 'group') return [...(el(n.source)?.getElementsByTagNameNS('*', 't') ?? [])].map((t) => t.textContent ?? '').join(' ')
