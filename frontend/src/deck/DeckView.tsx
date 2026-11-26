@@ -24,6 +24,11 @@ import { useEditMode } from '../store/editGuard'
 import { EditDisabledChip } from '../components/EditNotice'
 import { useChat } from '../store/chatStore'
 import { api } from '../api/client'
+import { compareForAgent, useCompare } from './compareStore'
+import { BaseSlideView, CompareBar, DiffOverlay, SlideFrame, useCompareDiff, type SlideMark } from './CompareView'
+
+/** Width of the "what changed" column beside the thumbnails while comparing. */
+const SUMMARY_W = 168
 
 export function DeckView({ pid, path }: { pid: string; path: string }) {
   const key = deckKey(pid, path)
@@ -45,6 +50,8 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   const actions = useRef<SlideActions>({ addTextBox() {}, align() {}, arrange() {}, setFont() {}, setSize() {}, stepSize() {}, setColor() {}, holdSelection() {}, releaseSelection() {} })
   const [fmt, setFmt] = useState<FormatState | null>(null)
   const editOff = useEditMode() === 'off'
+  const compare = useCompare((s) => s.compares[key])
+  useCompareDiff(session, compare)
 
   useEffect(() => {
     void open(pid, path)
@@ -70,16 +77,39 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
         slideCount: session.pres!.slides.length,
         slideId: session.sldIds.get(slide.id) ?? '',
         selection: session.selection.map((id) => slide.nodes.find((n) => n.id === id)?.name ?? id),
+        compare: compareForAgent(pid, path),
       }).catch(() => {})
     }, 300)
     return () => clearTimeout(t)
-  }, [pid, path, session?.slideIndex, session?.selection, session?.version])
+  }, [pid, path, session?.slideIndex, session?.selection, session?.version, compare?.diff, compare?.view, compare?.removed])
 
   if (!session || (session.loading && !session.pres)) {
     return <Centered><Loader2 className="animate-spin" size={18} /> Opening {path.split('/').pop()}…</Centered>
   }
   if (session.error && !session.pres) return <Centered className="text-red-700">{session.error}</Centered>
   const pres = session.pres!
+
+  // Comparing: the current slide's changes, and what the main view shows (the live slide, its base
+  // version, or a removed slide).
+  const current = pres.slides[session.slideIndex]
+  const diffRow = compare?.diff?.rows.find((r) => r.newSlide === current?.id)
+  const basePres = compare?.baseSide?.pres ?? null
+  const removedRow = compare?.removed ? compare.diff?.rows.find((r) => r.oldSlide === compare.removed) : undefined
+  const baseName = compare?.baseInfo?.name ?? compare?.base.path.split('/').pop() ?? ''
+  const baseView = compare && basePres && (compare.removed || compare.view === 'before')
+    ? compare.removed
+      ? <BaseSlideView deckKey={key} pres={basePres} slideId={compare.removed} shapes={[]} marks={false}
+          frame={{ kind: 'removed', label: `Removed slide (was slide ${(removedRow?.oldIndex ?? 0) + 1})` }}
+          banner={<>Removed slide — slide {(removedRow?.oldIndex ?? 0) + 1} of <b>{baseName}</b>{compare.baseInfo?.detail ? ` (${compare.baseInfo.detail})` : ''}, read-only</>} />
+      : <BaseSlideView deckKey={key} pres={basePres} slideId={diffRow?.oldSlide ?? null} shapes={diffRow?.shapes ?? []} marks={compare.marks}
+          banner={<>From — slide {diffRow?.oldIndex != null ? diffRow.oldIndex + 1 : '–'} of <b>{baseName}</b>{compare.baseInfo?.detail ? ` (${compare.baseInfo.detail})` : ''}, read-only. Switch to <b>To</b> to edit.</>} />
+    : null
+  const ratio = basePres ? pres.width / basePres.width : 1
+  // The slide itself: new, or moved (with marks on, a frame around it says so).
+  const slideMark: SlideMark | undefined = !compare?.marks || !diffRow ? undefined
+    : diffRow.status === 'added' ? { kind: 'added', label: 'Added slide' }
+      : diffRow.movedFrom ? { kind: 'moved', label: `Moved to slide ${(diffRow.newIndex ?? 0) + 1} from ${diffRow.movedFrom}` }
+        : undefined
 
   const changedNums = session.externallyChanged
     .map((sid) => pres.slides.findIndex((s) => session.sldIds.get(s.id) === sid) + 1)
@@ -99,6 +129,7 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" onKeyDown={onKeyDown}>
+      {compare && <CompareBar compare={compare} session={session} />}
       <div className="toolbar-fit flex h-10 shrink-0 items-center gap-1 border-b border-hair bg-panel px-2">
         {editOff ? (
           <>
@@ -151,18 +182,43 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
         </div>
       )}
       <div ref={rowRef} className="flex min-h-0 flex-1 overflow-hidden">
-        <SlideRail session={session} width={railShown} />
+        <SlideRail
+          session={session}
+          width={railShown + (compare ? SUMMARY_W : 0)}
+          compare={compare ? {
+            diff: compare.diff, basePres, removed: compare.removed, summaryW: SUMMARY_W,
+            onShowRemoved: (id) => useCompare.getState().showRemoved(key, id),
+            // A summary line: its slide, its shapes selected (marks stay on), on the live slide.
+            onPick: (i, line) => {
+              useDecks.getState().setSlide(key, i)
+              useCompare.getState().update(key, { removed: null, view: 'after', marks: true, hover: null })
+              const slide = useDecks.getState().sessions[key]?.pres?.slides[i]
+              const ids = line?.kind === 'removed' ? [] : (line?.ids ?? []).filter((id) => slide?.nodes.some((n) => n.id === id))
+              useDecks.getState().setSelection(key, ids)
+            },
+            // Hovering a line of the slide in view marks its shapes there.
+            onHover: (i, ids) => useCompare.getState().update(key, { hover: ids && i === useDecks.getState().sessions[key]?.slideIndex ? ids : null }),
+          } : undefined}
+        />
         <Splitter width={railShown} min={120} max={420} onChange={(w) => setWidth('rail', w)} />
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="relative flex min-h-0 flex-1 flex-col">
-            <SlideEditor
-              session={session}
-              noteMode={noteMode}
-              setNoteMode={setNoteMode}
-              showResolved={showResolved}
-              registerActions={(a) => (actions.current = a)}
-              onFormat={setFmt}
-            />
+            {baseView ?? (
+              <SlideEditor
+                session={session}
+                noteMode={noteMode}
+                setNoteMode={setNoteMode}
+                showResolved={showResolved}
+                registerActions={(a) => (actions.current = a)}
+                onFormat={setFmt}
+                overlay={compare?.marks && diffRow && (diffRow.shapes.length || slideMark) ? (scale) => (
+                  <>
+                    {diffRow.shapes.length > 0 && <DiffOverlay shapes={diffRow.shapes} scale={scale} side="after" focus={compare.hover} ratio={ratio} />}
+                    {slideMark && <SlideFrame mark={slideMark} />}
+                  </>
+                ) : undefined}
+              />
+            )}
             <ReloadingBadge active={session.reloading} />
           </div>
           <NotesPane session={session} />

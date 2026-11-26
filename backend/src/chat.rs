@@ -787,6 +787,19 @@ fn compose_prompt(state: &AppState, project_id: &str, chat_id: &str, root: &Path
     } else if let Some(f) = ctx.and_then(|c| c.get("openFile")).and_then(|v| v.as_str()) {
         out.push_str(&format!("The user has open: {f}\n"));
     }
+    // The deck is open in the app's compare view: say so, with the differences it found.
+    if let Some(cmp) = ctx.and_then(|c| c.get("compare")).filter(|c| c.is_object()) {
+        let base = s(cmp.get("base"));
+        let what = match s(cmp.get("baseLabel")) {
+            l if !l.is_empty() => format!("its backup from {l} ({base} as it was then — not a file in the folder)"),
+            _ => format!("[{base}](<{base}>)"),
+        };
+        out.push_str(&format!(
+"The user is comparing this deck with {what} in the app's compare view (showing {}; changes marked on the slides and listed beside the thumbnails). The totals, and the differences on the slide in view (for the full list, call get_user_view):\n{}\n",
+            s(cmp.get("view")),
+            s(cmp.get("summary")).chars().take(6000).collect::<String>().trim_end(),
+        ));
+    }
     out.push_str(&format!("Scratch folder for your scripts (yours alone): {}\n", scratch_dir(chat_id).display()));
     out.push_str(LINK_REMINDER);
     let others = state.chats.running_in_project(project_id, chat_id);
@@ -856,7 +869,7 @@ pub fn system_prompt(state: &AppState) -> String {
 How the app works:
 - The user sees the deck live: whenever a .pptx/.pdf file in the folder changes on disk, the app reloads it within a second. So edit decks IN PLACE and save to the same path — the user watches your changes appear. Save after each logical change (e.g. per slide) so progress shows up while you work.
 - The user also edits slides themselves in the app (text, moving/resizing boxes and images, reordering/duplicating slides, dropping in images). Their edits are saved straight into the file before your turn; each message lists them. Re-open the file at the start of every turn and never overwrite their edits with stale state.
-- The user pins notes on slides for you — either at a point, or by drawing freehand (circling or marking an area; the note then gives the area in % of the slide and the shapes it covers: focus your change there). Open notes are listed in the context block. Use the `deck` MCP tools: `list_notes`, `resolve_note` (always resolve a note you've addressed, with a one-line summary of what you did), `add_note` (leave a question/remark for the user on a slide), `get_user_view` (what the user is looking at now) and `screenshot_slide` (renders a slide exactly as the app shows it — use it to check your visual result after significant layout changes).
+- The user pins notes on slides for you — either at a point, or by drawing freehand (circling or marking an area; the note then gives the area in % of the slide and the shapes it covers: focus your change there). Open notes are listed in the context block. Use the `deck` MCP tools: `list_notes`, `resolve_note` (always resolve a note you've addressed, with a one-line summary of what you did), `add_note` (leave a question/remark for the user on a slide), `get_user_view` (what the user is looking at now), `screenshot_slide` (renders a slide exactly as the app shows it — use it to check your visual result after significant layout changes) and `compare_decks` (opens the app's comparison of two versions of a deck, changes marked on the slides — another .pptx, or the deck before this turn/chat — and returns what changed per slide; use it when the user asks to compare decks or what changed).
 - Before every turn the app snapshots the folder; the user can revert your whole turn with one click. You don't need to make your own backups.
 
 Editing PowerPoint files:
@@ -1341,5 +1354,12 @@ async fn snapshot_file(
     let path = backups::backup_file(&state.data_dir, &id, &sid, &q.path)?;
     let bytes = tokio::fs::read(&path).await?;
     let mime = mime_guess::from_path(&path).first_or_octet_stream();
-    Ok(([(axum::http::header::CONTENT_TYPE, mime.to_string())], bytes).into_response())
+    // The version token of the file as it was (modified time and size, like `x-etag` on the live file).
+    let etag = backups::load(&state.data_dir, &id, &sid)?
+        .files
+        .iter()
+        .find(|f| f.rel == q.path)
+        .map(|f| format!("{}-{}", f.mtime_ns, f.size))
+        .unwrap_or_default();
+    Ok(([(axum::http::header::CONTENT_TYPE, mime.to_string()), (axum::http::header::HeaderName::from_static("x-etag"), etag)], bytes).into_response())
 }

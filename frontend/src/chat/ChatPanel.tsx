@@ -10,7 +10,7 @@ import { ChatMarkdown } from './chatLinks'
 import { AgentSetupCard, useAgentBlock } from './AgentSetup'
 import { TabStrip } from '../components/TabStrip'
 import {
-  AlertTriangle, ArrowDown, BotMessageSquare, Check, ChevronDown, ChevronRight, CircleDot, FileEdit, History, Loader2, MessageSquare, SquarePlus, Trash2,
+  AlertTriangle, ArrowDown, BotMessageSquare, GitCompareArrows, Check, ChevronDown, ChevronRight, CircleDot, FileEdit, History, Loader2, MessageSquare, SquarePlus, Trash2,
   Plus, RotateCcw, Send, Square, Terminal, Wrench, X, StickyNote, Pencil, Play, ImagePlus, Library, Snowflake, Scissors,
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -25,7 +25,8 @@ import { notePlaceLabel, noteNumber, notesForChat, otherChatsNotes, useNotes } f
 import { useAgent } from '../store/agentStore'
 import { useDecks } from '../deck/deckStore'
 import { usePdfs } from '../pdf/pdfStore'
-import type { CacheCheck, Chat, Note, Posture, Turn, TurnEvent } from '../api/types'
+import type { CacheCheck, Chat, FileChange, Note, Posture, Turn, TurnEvent } from '../api/types'
+import { useCompare } from '../deck/compareStore'
 import { buildTurnContext, pendingEditCount } from './turnContext'
 import { useTextEditTick } from '../viewers/textEdits'
 import { PosturePopover } from './PosturePopover'
@@ -510,6 +511,14 @@ function TurnViewInner({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; 
   }, [turn.events])
   const ctx = contextSummary(turn)
   const later = chat.turns.slice(chat.turns.indexOf(turn) + 1).some((t) => t.changes.length && !t.reverted)
+  // Decks this turn changed that can be compared with how they were before it (its backup).
+  const comparable = (c: FileChange) => !!turn.snapshotId && !turn.reverted && c.restorable && (c.kind === 'modified' || c.kind === 'moved') && /\.pptx$/i.test(c.path)
+  const compareDeck = (c: FileChange) => {
+    const pid = useApp.getState().projectId
+    if (!pid || !turn.snapshotId) return
+    const n = chat.turns.indexOf(turn) + 1
+    void useCompare.getState().open(pid, c.path, { kind: 'snapshot', snapshotId: turn.snapshotId, path: c.from ?? c.path, label: `before turn ${n} of “${chat.title}”` })
+  }
   const [showEdits, setShowEdits] = useState(false)
   const models = useAgent((s) => s.models)
   const posture = turnPostureLabel(turn, models.length ? models : FALLBACK_MODELS)
@@ -612,7 +621,7 @@ function TurnViewInner({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; 
                   void revert(chat.id, turn.id)
                 }}
               >
-                <RotateCcw size={12} /> Revert
+                <RotateCcw size={12} /> Revert turn
               </button>
             )}
             {turn.reverted && (
@@ -622,12 +631,23 @@ function TurnViewInner({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; 
             )}
           </div>
           {turn.changes.map((c) => (
-            <button key={c.path} className={clsx('flex w-full items-center gap-1.5 truncate rounded px-1 py-0.5 text-left hover:bg-white', turn.reverted && 'line-through opacity-60')} onClick={() => c.kind !== 'deleted' && openFile(c.path)}>
-              <span className={clsx('w-14 shrink-0 text-[10px] uppercase', c.kind === 'created' ? 'text-emerald-700' : c.kind === 'deleted' ? 'text-red-700' : c.kind === 'moved' ? 'text-sky-700' : 'text-amber-700')}>{c.kind}</span>
-              <span className="truncate" title={c.from ? `${c.from} → ${c.path}` : c.path}>
-                {c.from ? <><span className="text-ink-3">{c.from} → </span>{c.path}</> : c.path}
-              </span>
-            </button>
+            <div key={c.path} className="group/change flex items-center gap-1">
+              <button className={clsx('flex min-w-0 flex-1 items-center gap-1.5 truncate rounded px-1 py-0.5 text-left hover:bg-white', turn.reverted && 'line-through opacity-60')} onClick={() => c.kind !== 'deleted' && openFile(c.path)}>
+                <span className={clsx('w-14 shrink-0 text-[10px] uppercase', c.kind === 'created' ? 'text-emerald-700' : c.kind === 'deleted' ? 'text-red-700' : c.kind === 'moved' ? 'text-sky-700' : 'text-amber-700')}>{c.kind}</span>
+                <span className="truncate" title={c.from ? `${c.from} → ${c.path}` : c.path}>
+                  {c.from ? <><span className="text-ink-3">{c.from} → </span>{c.path}</> : c.path}
+                </span>
+              </button>
+              {comparable(c) && (
+                <button
+                  className="flex shrink-0 items-center gap-1 rounded border border-hair bg-white px-1.5 py-px text-ink-2 hover:border-amber-300 hover:text-amber-800"
+                  title={`Compare ${c.path.split('/').pop()} with how it was before this turn — changes marked slide by slide`}
+                  onClick={() => compareDeck(c)}
+                >
+                  <GitCompareArrows size={12} /> Compare
+                </button>
+              )}
+            </div>
           ))}
         </div>
       )}
@@ -804,7 +824,7 @@ function ToolGroup({ events, running }: { events: TurnEvent[]; running: boolean 
 }
 
 const toolLabel = (t: string) =>
-  ({ Bash: 'Ran', Read: 'Read', Write: 'Wrote', Edit: 'Edited', MultiEdit: 'Edited', Grep: 'Searched', Glob: 'Listed', backup: 'Backup', list_notes: 'Notes', resolve_note: 'Resolved note', add_note: 'Added note', screenshot_slide: 'Looked at', get_user_view: 'Checked view', WebSearch: 'Searched web', WebFetch: 'Fetched', Task: 'Agent' } as Record<string, string>)[t] ?? t
+  ({ Bash: 'Ran', Read: 'Read', Write: 'Wrote', Edit: 'Edited', MultiEdit: 'Edited', Grep: 'Searched', Glob: 'Listed', backup: 'Backup', list_notes: 'Notes', resolve_note: 'Resolved note', add_note: 'Added note', screenshot_slide: 'Looked at', compare_decks: 'Compared', get_user_view: 'Checked view', WebSearch: 'Searched web', WebFetch: 'Fetched', Task: 'Agent' } as Record<string, string>)[t] ?? t
 
 function EventView({ e, resolved, onAnswer, onOpen }: { e: TurnEvent; resolved: Map<string, string>; onAnswer: (rid: string, d: 'allow' | 'allowAlways' | 'deny') => Promise<void>; onOpen(p: string): void }) {
   switch (e.kind) {

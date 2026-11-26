@@ -62,6 +62,12 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, (await res.text()) || res.statusText)
     return { bytes: await res.arrayBuffer(), etag: res.headers.get('x-etag') ?? '' }
   },
+  /** A file as it was in a snapshot (before an agent turn), with its version token then. */
+  async readSnapshotFile(pid: string, snapshotId: string, path: string): Promise<{ bytes: ArrayBuffer; etag: string }> {
+    const res = await fetch(`/api/projects/${pid}/snapshots/${encodeURIComponent(snapshotId)}/file?${q(path)}`, { cache: 'no-store' })
+    if (!res.ok) throw new ApiError(res.status, (await res.text()) || res.statusText)
+    return { bytes: await res.arrayBuffer(), etag: res.headers.get('x-etag') ?? '' }
+  },
   async readText(pid: string, path: string): Promise<{ text: string; etag: string }> {
     const { bytes, etag } = await api.readFile(pid, path)
     return { text: new TextDecoder().decode(bytes), etag }
@@ -155,4 +161,6 @@ export const api = {
   importConversationOutput: (id: string, projectId: string, path: string) =>
     json<{ path: string }>('POST', `/conversations/${encodeURIComponent(id)}/import`, { projectId, path }),
   screenshotResult: (rid: string, dataUrl: string) => json('POST', `/screenshots/${rid}`, { dataUrl }),
+  /** The comparison's text for the agent's compare_decks (or `error: …`). */
+  compareResult: (rid: string, summary: string) => json('POST', `/compares/${rid}`, { summary }),
 }

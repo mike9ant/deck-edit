@@ -23,7 +23,7 @@ index dd73442..5d591da 100644
  interface SetTextBodyRun {
    text: string;
 diff --git a/node_modules/@diceui/pptx-core/dist/index.mjs b/node_modules/@diceui/pptx-core/dist/index.mjs
-index c6cc36a..68e82d9 100644
+index c6cc36a..f7321ea 100644
 --- a/node_modules/@diceui/pptx-core/dist/index.mjs
 +++ b/node_modules/@diceui/pptx-core/dist/index.mjs
 @@ -2401,15 +2401,32 @@ function validateDecodedEntrySize(path, size, state) {
@@ -251,7 +251,19 @@ index c6cc36a..68e82d9 100644
  			const usesImplicitSingleLineFit = !hasSpAutoFit && !hasNormAutofit && !hasNoAutofit && isSingleLineTextBody(node.textBody) && !hasBulletParagraph(node.textBody) && (textWrap === "none" || textWrap === void 0 && isShortImplicitSingleLineLabel(node.textBody));
  			const usesNoAutofitSingleLineTitleFit = hasNoAutofit && isTitlePlaceholder(node.placeholder) && isSingleLineTextBody(node.textBody);
  			textContainer.style.overflowX = "visible";
-@@ -20669,6 +20767,22 @@ function applySetTextBody(pres, op) {
+@@ -19451,7 +19549,10 @@ function renderThumbnail(presentation, slide, options) {
+ 			} catch {}
+ 		}
+ 		for (const node of slide.nodes) try {
+-			container.appendChild(renderNode(node, ctx));
++			// deck-edit patch: tag thumbnail shapes with their node id too, as renderSlide does (marks find them by it).
++			const el = renderNode(node, ctx);
++			el.setAttribute(PPTX_ATTRS.nodeId, node.id);
++			container.appendChild(el);
+ 		} catch {}
+ 	} catch {}
+ 	const mediaUrlCache = ctx.mediaUrlCache;
+@@ -20669,6 +20770,22 @@ function applySetTextBody(pres, op) {
  			}
  			if (srcPara.endParaRPr?.element) endParaRPrNode = new SafeXmlNode(srcPara.endParaRPr.element.cloneNode(true));
  		}
@@ -274,7 +286,7 @@ index c6cc36a..68e82d9 100644
  		const runs = [];
  		function resolveDefaultRPr(srcParaIdx) {
  			if (srcParaIdx < 0 || srcParaIdx >= origParagraphs.length) return null;
-@@ -20949,7 +21063,8 @@ function applySetSolidFill(pres, op) {
+@@ -20949,7 +21066,8 @@ function applySetSolidFill(pres, op) {
  	const node = findNode(pres, slide, op.nodeId);
  	if (node.nodeType !== "shape") throw new Error(`applyEdit: setSolidFill only supports shape nodes, got "${node.nodeType}".`);
  	const shape = node;
@@ -284,7 +296,7 @@ index c6cc36a..68e82d9 100644
  	const spPrElement = requireElement(node.source.child("spPr"), `spPr of node "${node.id}"`);
  	const doc = spPrElement.ownerDocument;
  	let oldFillElement = null;
-@@ -20965,10 +21080,12 @@ function applySetSolidFill(pres, op) {
+@@ -20965,10 +21083,12 @@ function applySetSolidFill(pres, op) {
  		insertRef = child;
  		break;
  	}

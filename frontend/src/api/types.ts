@@ -80,6 +80,8 @@ export interface TurnContext {
   openFile?: string
   /** Other open tabs, besides the one in view. */
   openTabs?: string[]
+  /** The deck is open in compare mode: with what, which view, and the differences found. */
+  compare?: { base: string; baseKind: 'file' | 'snapshot'; baseLabel?: string; view: string; marks: boolean; summary: string }
 }
 
 export interface Turn {
@@ -155,6 +157,8 @@ export type ServerEvent =
   | { type: 'turn'; chatId: string; turnId: string; projectId: string; status: Turn['status']; changes?: FileChange[] }
   | { type: 'chatUpdated'; chatId: string }
   | { type: 'screenshot'; requestId: string; projectId: string; deck: string; slideIndex: number; showNotes?: boolean }
+  /** The agent's compare_decks: open the comparison and post its summary back. */
+  | { type: 'compare'; requestId: string; projectId: string; deck: string; base: { kind: 'file'; path: string } | { kind: 'snapshot'; snapshotId: string; path: string; label: string } }
 
 export type ApprovalMode = 'manual' | 'acceptEdits' | 'plan' | 'auto'
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'

@@ -8,6 +8,7 @@ import type { TurnContext } from '../api/types'
 import { docKind, useApp } from '../store/appStore'
 import { deckKey, useDecks } from '../deck/deckStore'
 import { nodeText } from '../deck/deckModel'
+import { compareForAgent } from '../deck/compareStore'
 import { pdfKey, usePdfs } from '../pdf/pdfStore'
 import { flushTextSaves, textEditLines } from '../viewers/textEdits'
 
@@ -50,6 +51,7 @@ async function viewContext(projectId: string, consume: boolean): Promise<TurnCon
           })
         : [],
       userChanges: consume ? decks.takeUserChanges(key) : decks.peekUserChanges(key),
+      compare: compareForAgent(projectId, activePath, s.slideIndex),
     }
   }
   if (kind === 'pdf') {

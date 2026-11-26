@@ -42,7 +42,8 @@ pub struct AppState {
     /// (project id, deck path) → slide list `[{slideId, index, title}]`,
     /// reported by the frontend whenever a deck loads.
     pub deck_maps: Arc<Mutex<HashMap<(String, String), Value>>>,
-    /// screenshot request id → resolver for the PNG data URL the frontend posts back.
+    /// screenshot (or deck comparison) request id → resolver for the PNG data URL (or the
+    /// comparison's text) the frontend posts back.
     pub screenshots: Arc<Mutex<HashMap<String, oneshot::Sender<String>>>>,
 }
 

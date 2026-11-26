@@ -17,12 +17,29 @@ import { useNotes } from '../store/notesStore'
 import { useApp } from '../store/appStore'
 import { requestEdit, useEditMode } from '../store/editGuard'
 import { useInnerWidth } from '../components/useInnerWidth'
+import type { DeckDiff, SlideDiff, SummaryLine } from './deckDiff'
+import { DiffSummary, ThumbWordMarks } from './CompareView'
 
 const Thumb = memo(function Thumb(p: { deckKey: string; pres: PresentationData; slide: SlideData; version: number; width: number }) {
   return <SlideRender deckKey={p.deckKey} pres={p.pres} slide={p.slide} version={p.version} width={p.width} thumbnail />
 })
 
-export function SlideRail({ session, width }: { session: DeckSession; width: number }) {
+/** Comparing the deck with a base version: what changed is listed beside each thumbnail. */
+export interface RailCompare {
+  diff: DeckDiff | null
+  basePres: PresentationData | null
+  /** The removed slide shown in the main view (its part in the base). */
+  removed: string | null
+  /** Width of the summary column (included in the rail's width). */
+  summaryW: number
+  onShowRemoved(oldSlide: string | null): void
+  /** A summary line clicked: go to the slide (and select the line's shapes). */
+  onPick(slideIndex: number, line: SummaryLine | null): void
+  /** A summary line under the pointer: mark its shapes (null: none). */
+  onHover(slideIndex: number, ids: string[] | null): void
+}
+
+export function SlideRail({ session, width, compare }: { session: DeckSession; width: number; compare?: RailCompare }) {
   const { apply, setSlide } = useDecks()
   const editOff = useEditMode() === 'off'
   const pres = session.pres!
@@ -37,7 +54,47 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
   const suppressClick = useRef(false)
   const listRef = useRef<HTMLDivElement>(null)
   const notes = useNotes((s) => s.notes)
-  const thumbW = Math.max(60, Math.floor(useInnerWidth(listRef, width - 16) - 32))
+  const summaryW = compare?.summaryW ?? 0
+  const thumbW = Math.max(60, Math.floor(useInnerWidth(listRef, width - 16) - 32 - summaryW))
+  const thumbH = (thumbW * pres.height) / pres.width
+  // The comparison by slide: each slide's row, and the removed slides that go after it ('' = at the top).
+  const rowOf = new Map<string, SlideDiff>()
+  const removedAfter = new Map<string, SlideDiff[]>()
+  if (compare?.diff) {
+    let last = ''
+    for (const r of compare.diff.rows) {
+      if (r.newSlide) {
+        rowOf.set(r.newSlide, r)
+        last = r.newSlide
+      } else removedAfter.set(last, [...(removedAfter.get(last) ?? []), r])
+    }
+  }
+  const maxLines = Math.max(2, Math.floor((thumbH + 2) / 13))
+  const removedRows = (after: string) =>
+    compare?.basePres && (removedAfter.get(after) ?? []).map((r) => {
+      const old = compare.basePres!.slides.find((x) => x.id === r.oldSlide)
+      if (!old) return null
+      const on = compare.removed === r.oldSlide
+      return (
+        <div
+          key={`removed:${r.oldSlide}`}
+          className="group flex cursor-pointer items-start gap-1.5 py-0.5"
+          title="Removed — click to see it as it was"
+          onClick={() => compare.onShowRemoved(on ? null : r.oldSlide!)}
+        >
+          <div className="w-5 shrink-0 pt-0.5 text-right text-[11px] tabular-nums text-red-400">–</div>
+          <div className={clsx('relative overflow-hidden rounded-[3px] ring-offset-1', on ? 'ring-2 ring-red-500' : 'ring-1 ring-red-300 group-hover:ring-red-400')}>
+            <div className="opacity-40 grayscale">
+              <SlideRender deckKey={`${key}#base`} pres={compare.basePres!} slide={old} version={0} width={thumbW} thumbnail />
+            </div>
+            <div className="absolute inset-0 bg-red-500/10" />
+          </div>
+          <div style={{ width: summaryW - 8 }} className="shrink-0">
+            <DiffSummary row={r} maxLines={maxLines} />
+          </div>
+        </div>
+      )
+    })
   const current = pres.slides[session.slideIndex]
 
   // Keep the current slide in view.
@@ -249,12 +306,19 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
     // Keeps its width (the thumbnails are sized from it), so they never hang out of the rail.
     <div className="flex h-full min-h-0 shrink-0 flex-col bg-paper" style={{ width }}>
       <div ref={listRef} tabIndex={0} onKeyDown={onKeyDown} className="min-h-0 flex-1 select-none overflow-y-auto px-2 py-2 outline-none [scrollbar-gutter:stable]">
+        {compare?.diff && compare.diff.deck.length > 0 && (
+          <div className="mb-1.5 rounded border border-amber-200 bg-amber-50 px-1.5 py-1 text-[10px] leading-[13px] text-amber-900" title="Changes to the whole deck">
+            {compare.diff.deck.join(' · ')}
+          </div>
+        )}
+        {removedRows('')}
         {pres.slides.map((slide, i) => {
           const sid = session.sldIds.get(slide.id) ?? ''
           const openNotes = notes.filter((n) => n.deck === session.path && n.status === 'open' && (sid ? n.slideId === sid : n.slideIndex === i + 1)).length
           const isCurrent = i === session.slideIndex
           const isPicked = picked.includes(slide.id)
           const changed = sid && session.externallyChanged.includes(sid)
+          const diffRow = rowOf.get(slide.id)
           return (
             <div key={slide.id} data-slide-index={i}>
               <div className={clsx('mx-1 h-1 rounded', dragOver === i ? 'bg-accent' : 'bg-transparent')} />
@@ -277,6 +341,7 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
                   } else {
                     setPicked([])
                     setSlide(key, i)
+                    compare?.onShowRemoved(null)
                   }
                 }}
                 className="group flex cursor-pointer items-start gap-1.5 py-0.5"
@@ -285,10 +350,14 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
                 <div
                   className={clsx(
                     'relative overflow-hidden rounded-[3px] ring-offset-1',
-                    isCurrent ? 'ring-2 ring-accent' : isPicked ? 'ring-2 ring-accent/50' : 'ring-1 ring-hair group-hover:ring-ink-3',
+                    isCurrent && !compare?.removed ? 'ring-2 ring-accent' : isPicked ? 'ring-2 ring-accent/50' : 'ring-1 ring-hair group-hover:ring-ink-3',
                   )}
                 >
+                  {diffRow && diffRow.status !== 'same' && (
+                    <div className={clsx('absolute inset-y-0 left-0 z-[1] w-[3px]', diffRow.status === 'added' ? 'bg-emerald-500' : diffRow.lines.length || diffRow.shapes.length ? 'bg-amber-500' : 'bg-sky-500')} />
+                  )}
                   <Thumb deckKey={key} pres={pres} slide={slide} version={session.slideVersions[slide.id] ?? 0} width={thumbW} />
+                  {diffRow?.shapes.some((x) => x.text) && <ThumbWordMarks shapes={diffRow.shapes} width={thumbW} />}
                   {openNotes > 0 && (
                     <div className="absolute right-1 top-1 rounded-full bg-note px-1.5 text-[10px] font-bold text-amber-950 shadow" title={`${openNotes} open note(s)`}>
                       {openNotes}
@@ -296,7 +365,13 @@ export function SlideRail({ session, width }: { session: DeckSession; width: num
                   )}
                   {changed && <div className="absolute left-1 top-1 h-2.5 w-2.5 rounded-full bg-violet-500 ring-2 ring-white" title="Changed by the agent" />}
                 </div>
+                {compare && (
+                  <div style={{ width: summaryW - 8 }} className="shrink-0">
+                    {compare.diff ? <DiffSummary row={diffRow} maxLines={maxLines} onPick={(l) => compare.onPick(i, l)} onHover={(ids) => compare.onHover(i, ids)} /> : null}
+                  </div>
+                )}
               </div>
+              {removedRows(slide.id)}
             </div>
           )
         })}

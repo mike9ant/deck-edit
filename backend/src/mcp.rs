@@ -24,6 +24,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/mcp", any(mcp))
         .route("/screenshots/{rid}", post(screenshot_result))
+        .route("/compares/{rid}", post(compare_result))
 }
 
 #[derive(Deserialize)]
@@ -98,7 +99,7 @@ async fn mcp(
 /// Mark the tools that only read as `readOnlyHint` — Claude Code's plan mode
 /// blocks MCP tools it can't tell are read-only.
 fn with_annotations(mut tools: Value) -> Value {
-    const READ_ONLY: [&str; 5] = ["list_notes", "get_user_view", "screenshot_slide", "search_conversations", "read_conversation"];
+    const READ_ONLY: [&str; 6] = ["list_notes", "get_user_view", "screenshot_slide", "search_conversations", "read_conversation", "compare_decks"];
     if let Some(arr) = tools.as_array_mut() {
         for t in arr {
             let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
@@ -151,7 +152,7 @@ fn tool_defs() -> Value {
         },
         {
             "name": "get_user_view",
-            "description": "What the user is looking at right now: open deck, current slide number, selected shapes.",
+            "description": "What the user is looking at right now: open deck, current slide number, selected shapes — and, when the deck is open in compare mode, what it is compared with (another file or a turn backup), which view shows, and the differences found (`compare`).",
             "inputSchema": { "type": "object", "properties": {} }
         },
         {
@@ -178,6 +179,19 @@ fn tool_defs() -> Value {
                     "max_chars": { "type": "integer", "description": "Default 40000." }
                 },
                 "required": ["id"]
+            }
+        },
+        {
+            "name": "compare_decks",
+            "description": "Compare two versions of a deck and open the comparison in the app for the user: the `deck` version (\"to\") is shown with its changes from `base` (\"from\") marked on the slides (added green, changed orange, removed red) and listed beside each thumbnail. Returns the same comparison as text, slide by slide: text changes (words added/removed), shapes added/removed/moved/resized, pictures replaced, chart values, table cells, speaker notes, and slides added, removed or moved. Use it when the user asks to compare decks or what changed, or to review your own changes to a deck. Give `base` (another .pptx in the project) or `since` (the deck as it was before this turn, or before this chat's first turn).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "deck": { "type": "string", "description": "The deck to show (the \"to\" side of the comparison), relative to the project folder." },
+                    "base": { "type": "string", "description": "Another .pptx to compare it with (the \"from\" side), relative to the project folder." },
+                    "since": { "type": "string", "enum": ["turn_start", "chat_start"], "description": "Instead of `base`: compare with the deck as it was before this turn (default), or before this chat's first turn." }
+                },
+                "required": ["deck"]
             }
         },
         {
@@ -435,8 +449,65 @@ async fn call_tool(state: &AppState, chat_id: &str, name: &str, args: &Value) ->
                 }
             }
         }
+        "compare_decks" => {
+            let deck = s("deck");
+            if deck.is_empty() {
+                return text_result("Give the deck to compare (`deck`).".into(), true);
+            }
+            if state.events.receiver_count() == 0 {
+                return text_result("The app isn't open in a browser, so decks can't be compared right now.".into(), true);
+            }
+            let other = s("base");
+            let base = if !other.is_empty() {
+                json!({ "kind": "file", "path": other })
+            } else {
+                let since = s("since");
+                // A turn's backup is the folder as it was when the turn started.
+                let snapshot = if since == "chat_start" {
+                    chat.turns.iter().find_map(|t| t.snapshot_id.clone())
+                } else {
+                    chat.turns.iter().rev().find_map(|t| t.snapshot_id.clone())
+                };
+                let Some(sid) = snapshot else {
+                    return text_result("There's no backup to compare with yet — give `base` (another deck) instead.".into(), true);
+                };
+                let label = if since == "chat_start" { "before this chat" } else { "before this turn" };
+                json!({ "kind": "snapshot", "snapshotId": sid, "path": deck, "label": label })
+            };
+            let rid = uuid::Uuid::new_v4().to_string();
+            let (tx, rx) = oneshot::channel();
+            state.screenshots.lock().unwrap().insert(rid.clone(), tx);
+            state.publish(json!({ "type": "compare", "requestId": rid, "projectId": pid, "deck": deck, "base": base }));
+            match tokio::time::timeout(Duration::from_secs(90), rx).await {
+                Ok(Ok(text)) => match text.strip_prefix("error:") {
+                    Some(e) => text_result(e.trim().to_string(), true),
+                    None => text_result(text, false),
+                },
+                _ => {
+                    state.screenshots.lock().unwrap().remove(&rid);
+                    text_result("Timed out waiting for the app to compare the decks.".into(), true)
+                }
+            }
+        }
         other => text_result(format!("unknown tool {other}"), true),
     }
+}
+
+#[derive(Deserialize)]
+struct CompareBody {
+    /// The comparison as text, or `error: …`.
+    summary: String,
+}
+
+/// The app's answer to a `compare_decks` request.
+async fn compare_result(
+    State(state): State<AppState>,
+    AxPath(rid): AxPath<String>,
+    Json(b): Json<CompareBody>,
+) -> Json<Value> {
+    let tx = state.screenshots.lock().unwrap().remove(&rid);
+    let delivered = tx.is_some_and(|tx| tx.send(b.summary).is_ok());
+    Json(json!({ "ok": delivered }))
 }
 
 #[derive(Deserialize)]

@@ -22,6 +22,9 @@ import { NotesList, QuoteNoteBox } from '../notes/TextNotes'
 import { actNowPrompt } from '../notes/NotePins'
 import { setQuoteHighlight } from '../notes/quoteHighlight'
 import { domRangeOf } from '../viewers/textRanges'
+import { useCompare } from './compareStore'
+import { paragraphOps, wordDiff } from './deckDiff'
+import { OpsText, WordCounts } from './CompareView'
 
 const LS_OPEN = 'deckedit-notes-open'
 const LS_HEIGHT = 'deckedit-notes-height'
@@ -46,6 +49,9 @@ export function NotesPane({ session }: { session: DeckSession }) {
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const undoRedoRef = useRef<(redo: boolean) => Promise<void>>(async () => {})
   const slideNo = session.slideIndex + 1
+  // Comparing with another version: this slide's notes then (if they changed), shown as a diff.
+  const notesDiff = useCompare((s) => s.compares[session.key]?.diff?.rows.find((r) => r.newSlide === slide?.id)?.notes)
+  const [showDiff, setShowDiff] = useState(true)
 
   const [rendered, setRendered] = useState(0)
   const render = () => {
@@ -309,6 +315,25 @@ export function NotesPane({ session }: { session: DeckSession }) {
           {!open && <span className="ml-2 truncate text-ink-3">{preview}</span>}
           {saving && <Loader2 size={12} className="ml-auto shrink-0 animate-spin text-ink-3" />}
         </button>
+        {open && notesDiff && (
+          <span className="mr-2 shrink-0 text-[11px]" title="Words removed and added in these notes, compared with the other version">
+            <WordCounts {...wordDiff(notesDiff.old, notesDiff.new)} />
+          </span>
+        )}
+        {open && notesDiff && (
+          <div className="mr-1 flex shrink-0 overflow-hidden rounded border border-hair bg-white text-[11px]" role="group" aria-label="Speaker notes view">
+            {([['diff', 'Changes'], ['edit', 'Edit']] as const).map(([v, label]) => (
+              <button
+                key={v}
+                className={clsx('px-1.5 py-px', (v === 'diff') === showDiff ? 'bg-ink text-white' : 'text-ink-2 hover:bg-paper')}
+                title={v === 'diff' ? 'How these notes changed: removed text struck through, new text in green' : 'Edit the notes as they are now'}
+                onClick={() => setShowDiff(v === 'diff')}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
         {open && (
           <div className="flex shrink-0 items-center gap-0.5">
             <button
@@ -358,8 +383,35 @@ export function NotesPane({ session }: { session: DeckSession }) {
             onKeyDown={onKeyDown}
             onPaste={onPaste}
           />
+          {notesDiff && showDiff && <NotesDiffView before={notesDiff.old} after={notesDiff.new} onEdit={() => setShowDiff(false)} />}
         </div>
       )}
+    </div>
+  )
+}
+
+/** The notes' change in place: kept text as is, removed text struck through in red, new text in green. */
+function NotesDiffView({ before, after, onEdit }: { before: string; after: string; onEdit(): void }) {
+  const paras = paragraphOps(before, after)
+  return (
+    <div
+      className="absolute inset-0 overflow-auto bg-white px-4 py-2 text-[13px] leading-relaxed text-ink"
+      data-notes-diff=""
+      onDoubleClick={onEdit}
+      title="Double-click to edit the notes"
+    >
+      {paras.map((p, i) => (
+        <p
+          key={i}
+          className={clsx(
+            'min-h-[1.2em] whitespace-pre-wrap break-words',
+            p.k === 'del' && 'text-red-600 line-through decoration-red-500/80',
+            p.k === 'add' && 'bg-emerald-50 text-emerald-800',
+          )}
+        >
+          {p.k === 'edit' ? <OpsText ops={p.ops} /> : p.ops.map((o) => o.t).join(' ')}
+        </p>
+      ))}
     </div>
   )
 }

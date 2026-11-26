@@ -28,6 +28,7 @@ import { onServerEvent } from './api/events'
 import { handleDeckFileEvent } from './deck/deckStore'
 import { handlePdfFileEvent } from './pdf/pdfStore'
 import { handleScreenshot } from './screenshot'
+import { handleCompareRequest } from './deck/compareStore'
 import { markChangedOnFileEvent } from './store/tabKeeping'
 
 export default function App() {
@@ -68,6 +69,9 @@ export default function App() {
             break
           case 'screenshot':
             void handleScreenshot(ev)
+            break
+          case 'compare':
+            void handleCompareRequest(ev)
             break
           case 'hello':
           case 'resync':

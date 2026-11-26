@@ -4,7 +4,8 @@
  *   keeps its tab; ⌘-click / ⇧-click select several; ↑/↓ move the selection;
  * - rename in place: click the selected item again after a pause, or Enter / F2;
  * - drag items onto a folder (or the empty space below, for the top level) to
- *   move them; images can also be dragged onto slides;
+ *   move them; images can also be dragged onto slides; a deck dragged onto the
+ *   right half of another deck's row compares the two (left half: move);
  * - new folder, and delete (⌫ — after a confirmation; files go to the Trash,
  *   folders only when empty) from the header or the keyboard;
  * - files dragged in from Finder are copied in — onto a folder row to land in
@@ -14,7 +15,7 @@
 
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  ChevronRight, File, FileImage, FileSpreadsheet, FileText, Folder, FolderPlus, Loader2, PanelLeftClose, Presentation, RefreshCw, FileType2, Trash2, Upload,
+  ChevronRight, File, FileImage, FileSpreadsheet, FileText, Folder, FolderPlus, Loader2, PanelLeftClose, Presentation, RefreshCw, FileType2, Trash2, Upload, GitCompareArrows,
 } from 'lucide-react'
 import clsx from 'clsx'
 import type { TreeNode } from '../api/types'
@@ -23,6 +24,7 @@ import { collectDropped, isOsFileDrag, uploadDropped } from './fileDrop'
 import { baseName, deletePaths, joinPath, movePaths, newFolder, parentOf, planMove } from './fileOps'
 import { MiddleEllipsis } from './MiddleEllipsis'
 import { NoteCountBadge } from '../notes/NoteCountBadge'
+import { useCompare } from '../deck/compareStore'
 
 const MOVE_TYPE = 'application/x-deckedit-paths'
 /** A second click on the selected item between these delays renames it (a faster one is a double-click). */
@@ -56,7 +58,15 @@ function visible(nodes: TreeNode[], open: Set<string>, out: TreeNode[] = []): Tr
   return out
 }
 
+const isDeck = (p: string) => /\.pptx$/i.test(p)
+/** Half-width (px) of the dead band around a row's middle, where Move / Compare doesn't switch. */
+const ZONE_BAND = 14
+
+/** A deck dragged over another deck's row: the left half moves it (into that folder), the right half compares the two. */
+type DeckHover = { path: string; zone: 'move' | 'compare'; from: string }
+
 interface TreeCtxValue {
+  hover: DeckHover | null
   selected: string[]
   editing: string | null
   open: Set<string>
@@ -81,6 +91,11 @@ export function FileTree() {
   const [dropKind, setDropKind] = useState<'copy' | 'move'>('copy')
   const [uploading, setUploading] = useState<{ done: number; total: number } | null>(null)
   const [justAdded, setJustAdded] = useState<Set<string>>(new Set())
+  /** The rows being dragged within the tree (drag events don't tell what they carry until the drop). */
+  const dragging = useRef<string[]>([])
+  const [hover, setHover] = useState<DeckHover | null>(null)
+  /** A deck being dragged: our own copy of its row follows the pointer, saying what a drop does now. */
+  const [ghost, setGhost] = useState<string | null>(null)
   const anchor = useRef<string | null>(null)
   const lastClick = useRef<{ path: string; t: number } | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
@@ -166,6 +181,13 @@ export function FileTree() {
     const paths = selected.includes(n.path) ? selected : [n.path]
     if (!selected.includes(n.path)) setSelected([n.path])
     e.dataTransfer.setData(MOVE_TYPE, JSON.stringify(paths))
+    dragging.current = paths
+    // One deck: the browser's picture of the row is a snapshot (it can't show the drop's action, and
+    // it covers the row under it) — show our own instead (DragGhost), with the action in it.
+    if (paths.length === 1 && isDeck(paths[0])) {
+      e.dataTransfer.setDragImage(BLANK_DRAG_IMAGE, 0, 0)
+      setGhost(paths[0])
+    }
     // A single image can also be dropped onto a slide.
     if (paths.length === 1 && docKind(paths[0]) === 'image') e.dataTransfer.setData('application/x-deckedit-path', paths[0])
     e.dataTransfer.effectAllowed = 'copyMove'
@@ -218,6 +240,16 @@ export function FileTree() {
     if (!projectId) return
     const dir = dropDirAt(e.target)
     setDropDir(null)
+    const compareWith = hover?.zone === 'compare' ? hover : null
+    setHover(null)
+    setGhost(null)
+    dragging.current = []
+    // A deck dropped on the right half of another deck: compare the two.
+    if (compareWith && e.dataTransfer.getData(MOVE_TYPE)) {
+      e.preventDefault()
+      void useCompare.getState().openFiles(projectId, compareWith.from, compareWith.path)
+      return
+    }
     // Rows dragged within the tree: move them.
     const moving = e.dataTransfer.getData(MOVE_TYPE)
     if (moving) {
@@ -260,7 +292,7 @@ export function FileTree() {
     })()
   }
 
-  const ctx: TreeCtxValue = { selected, editing, open, dropDir, justAdded, activePath, onRowClick, onRowDoubleClick, toggle, onDragStart, finishRename: (n, name) => void finishRename(n, name) }
+  const ctx: TreeCtxValue = { hover, selected, editing, open, dropDir, justAdded, activePath, onRowClick, onRowDoubleClick, toggle, onDragStart, finishRename: (n, name) => void finishRename(n, name) }
 
   return (
     <div
@@ -270,12 +302,46 @@ export function FileTree() {
         const internal = e.dataTransfer.types.includes(MOVE_TYPE)
         if (!internal && !isOsFileDrag(e.dataTransfer)) return
         e.preventDefault()
+        // One deck over another deck's row: its right half compares them.
+        const row = (e.target as HTMLElement | null)?.closest?.('[data-tree-path]') as HTMLElement | null
+        const over = row?.getAttribute('data-tree-path') ?? ''
+        const from = dragging.current.length === 1 ? dragging.current[0] : ''
+        if (internal && from && isDeck(from) && row?.getAttribute('data-kind') === 'file' && isDeck(over) && over !== from) {
+          // Halves with a dead band around the middle: the side switches only when the pointer
+          // clearly crosses over, never back and forth while it rests near the line.
+          const r = row.getBoundingClientRect()
+          const mid = r.left + r.width / 2
+          const was = hover?.path === over ? hover.zone : null
+          const zone: DeckHover['zone'] =
+            was === 'compare' ? (e.clientX < mid - ZONE_BAND ? 'move' : 'compare')
+              : was === 'move' ? (e.clientX > mid + ZONE_BAND ? 'compare' : 'move')
+                : e.clientX > mid ? 'compare' : 'move'
+          if (hover?.path !== over || hover.zone !== zone) setHover({ path: over, zone, from })
+          if (zone === 'compare') {
+            e.dataTransfer.dropEffect = 'copy'
+            setDropDir(null)
+            return
+          }
+        } else if (hover) setHover(null)
         e.dataTransfer.dropEffect = internal ? 'move' : 'copy'
         setDropKind(internal ? 'move' : 'copy')
         setDropDir(dropDirAt(e.target))
       }}
       onDragLeave={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropDir(null)
+        // Only when the drag really leaves the panel: moving between the rows' own elements fires
+        // dragleave too, often without a relatedTarget (Chrome, WebKit), which read as leaving.
+        const r = e.currentTarget.getBoundingClientRect()
+        const inside = e.clientX > r.left && e.clientX < r.right && e.clientY > r.top && e.clientY < r.bottom
+        if (!inside && !e.currentTarget.contains(e.relatedTarget as Node)) {
+          setDropDir(null)
+          setHover(null)
+        }
+      }}
+      onDragEnd={() => {
+        dragging.current = []
+        setHover(null)
+        setDropDir(null)
+        setGhost(null)
       }}
       onDrop={onDrop}
     >
@@ -307,12 +373,65 @@ export function FileTree() {
           {tree.map((n) => <Row key={n.path} node={n} depth={0} />)}
         </div>
       </TreeCtx.Provider>
-      {dropDir !== null && (
+      {ghost && (
+        <DragGhost
+          path={ghost}
+          action={hover?.path && hover.zone === 'compare' ? 'compare' : dropDir !== null && dropDir !== parentOf(ghost) ? 'move' : null}
+        />
+      )}
+      {hover?.zone === 'compare' ? (
+        <div className="pointer-events-none absolute inset-x-2 bottom-2 flex items-center justify-center gap-1.5 rounded-md bg-amber-600/95 px-2 py-1.5 text-xs text-white">
+          <GitCompareArrows size={13} /> Compare {baseName(hover.from)} with {baseName(hover.path)}
+        </div>
+      ) : dropDir !== null && (
         <div className="pointer-events-none absolute inset-x-2 bottom-2 flex items-center justify-center gap-1.5 rounded-md bg-ink/85 px-2 py-1.5 text-xs text-white">
           <Upload size={13} /> {dropKind === 'move' ? 'Move into' : 'Copy into'} {dropDir || 'the project folder'}
         </div>
       )}
       {confirm && <ConfirmDelete paths={confirm} onCancel={() => { setConfirm(null); listRef.current?.focus() }} onConfirm={() => void doDelete(confirm)} />}
+    </div>
+  )
+}
+
+/** A transparent image, to hide the browser's own picture of a dragged row. */
+const BLANK_DRAG_IMAGE = (() => {
+  if (typeof Image === 'undefined') return undefined as unknown as HTMLImageElement
+  const img = new Image()
+  img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'
+  return img
+})()
+
+/**
+ * The dragged deck's row, following the pointer: its name, then what dropping it now does —
+ * "Compare" (on another deck's right half), "Move here" (into another folder), or nothing.
+ */
+function DragGhost({ path, action }: { path: string; action: 'compare' | 'move' | null }) {
+  const el = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const at = (e: DragEvent) => {
+      const g = el.current
+      if (!g) return
+      // Leaving the window, the browser reports (0, 0): hide until the pointer is back.
+      const out = e.clientX === 0 && e.clientY === 0
+      g.style.visibility = out ? 'hidden' : 'visible'
+      g.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 6}px)`
+    }
+    window.addEventListener('dragover', at)
+    window.addEventListener('dragleave', at)
+    return () => {
+      window.removeEventListener('dragover', at)
+      window.removeEventListener('dragleave', at)
+    }
+  }, [])
+  return (
+    <div ref={el} className="pointer-events-none fixed left-0 top-0 z-50 flex max-w-[320px] items-center gap-1.5 rounded-md border border-hair bg-white/95 px-2 py-1 text-[13px] shadow-lg" style={{ visibility: 'hidden' }}>
+      <span className="shrink-0">{icon(path)}</span>
+      <span className="flex min-w-0"><MiddleEllipsis name={baseName(path)} /></span>
+      {action && (
+        <span className={clsx('shrink-0 rounded px-1.5 py-px text-[11px] font-semibold text-white', action === 'compare' ? 'bg-amber-600' : 'bg-ink')}>
+          {action === 'compare' ? 'Compare' : 'Move here'}
+        </span>
+      )}
     </div>
   )
 }
@@ -362,14 +481,19 @@ function Row({ node, depth }: { node: TreeNode; depth: number }) {
   const isSelected = c.selected.includes(node.path)
   const isEditing = c.editing === node.path
   const target = isDir && c.dropDir === node.path
+  // A deck dragged over this deck's row, on its right half (Compare): the row lights up.
+  const deckHover = !isDir && c.hover?.path === node.path ? c.hover : null
   const row = (
     <div
       data-drop-dir={isDir ? node.path : parentOf(node.path)}
+      data-tree-path={node.path}
+      data-kind={node.kind}
       className={clsx(
-        'flex w-full cursor-default select-none items-center gap-1.5 py-[3px] pr-2',
+        'relative flex w-full cursor-default select-none items-center gap-1.5 py-[3px] pr-2',
         isSelected ? 'bg-accent-soft' : 'hover:bg-black/5',
         !isDir && c.activePath === node.path && 'font-medium text-accent',
         c.justAdded.has(node.path) && 'bg-emerald-50 font-medium text-emerald-800',
+        deckHover?.zone === 'compare' && 'bg-amber-100 ring-2 ring-inset ring-amber-400',
       )}
       style={{ paddingLeft: 8 + depth * 14 + (isDir ? 0 : 17) }}
       title={node.path}

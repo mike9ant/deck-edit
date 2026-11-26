@@ -49,6 +49,8 @@ interface Props {
   registerActions(a: SlideActions): void
   /** The selection's font, size and colors, for the toolbar (null: nothing to format). */
   onFormat?(f: FormatState | null): void
+  /** Drawn over the slide, under the notes (e.g. a comparison's marks); given the slide's scale. */
+  overlay?: (scale: number) => React.ReactNode
 }
 
 /** What the toolbar's font / size / color tools show and can change. */
@@ -106,7 +108,7 @@ const rot = (x: number, y: number, deg: number) => {
 }
 const label = (n: SlideNode) => n.name || `${n.nodeType} ${n.id}`
 
-export function SlideEditor({ session, noteMode, setNoteMode, showResolved, registerActions, onFormat }: Props) {
+export function SlideEditor({ session, noteMode, setNoteMode, showResolved, registerActions, onFormat, overlay }: Props) {
   const { apply, setSelection, saveNow } = useDecks()
   /** Editing turned off for the project: shapes can be selected (and noted), not changed. */
   const editOff = useEditMode() === 'off'
@@ -1131,6 +1133,7 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
             <div className="absolute border border-accent bg-accent/10" style={{ left: marquee.x * scale, top: marquee.y * scale, width: marquee.w * scale, height: marquee.h * scale }} />
           )}
         </div>
+        {overlay?.(scale)}
         {drawing && <DrawLayer width={stageW} height={stageH} onStroke={addStroke} onTap={tapPin} />}
         <NotePins
           notes={slideNotes}
