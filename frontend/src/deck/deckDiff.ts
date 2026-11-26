@@ -17,6 +17,7 @@
  */
 
 import type { PresentationData, SlideData, SlideNode } from '@diceui/pptx-core'
+import type { DeckComment } from './comments'
 
 export type ChangeKind = 'added' | 'removed' | 'changed'
 
@@ -104,6 +105,8 @@ export interface DeckSide {
   sldIds: Map<string, string>
   /** slide part → its speaker notes text (optional). */
   notes?: Map<string, string>
+  /** slide part → its review comments (optional; slides without any left out). */
+  comments?: Map<string, DeckComment[]>
 }
 
 // ─── Normalized XML ──────────────────────────────────────────────────────────────────────────────
@@ -825,6 +828,24 @@ function slideChanges(old: DeckSide, now: DeckSide, os: SlideData, ns: SlideData
     const counts = wordDiff(na, nb)
     lines.push({ kind: 'changed', text: label, ops: notesPreview(na, nb), what: na.trim() && nb.trim() ? 'Notes' : label, counts })
   }
+  // Review comments: matched by their ids (kept in every copy of the deck).
+  if (old.comments && now.comments) {
+    const said = (c: DeckComment) => `${c.author}: “${c.text.replace(/\s+/g, ' ').slice(0, 40)}${c.text.length > 40 ? '…' : ''}”`
+    const before = new Map((old.comments.get(os.id) ?? []).map((c) => [c.id, c]))
+    for (const c of now.comments.get(ns.id) ?? []) {
+      const o = before.get(c.id)
+      if (!o) { lines.push({ kind: 'added', text: `Comment added: ${said(c)}` }); continue }
+      before.delete(c.id)
+      const what: string[] = []
+      if (o.text !== c.text) what.push('edited')
+      const n = c.replies.length - o.replies.length
+      if (n > 0) what.push(`${n} new repl${n > 1 ? 'ies' : 'y'}`)
+      if (n < 0) what.push(`${-n} repl${n < -1 ? 'ies' : 'y'} removed`)
+      if (o.resolved !== c.resolved) what.push(c.resolved ? 'resolved' : 'reopened')
+      if (what.length) lines.push({ kind: 'changed', text: `Comment (${c.author}): ${what.join(', ')}` })
+    }
+    for (const o of before.values()) lines.push({ kind: 'removed', text: `Comment removed: ${said(o)}` })
+  }
   // The same line for several shapes ("Text: text formatting") once, with a count.
   const counted = new Map<string, { line: SummaryLine; n: number }>()
   for (const l of lines) {
@@ -838,7 +859,8 @@ function slideChanges(old: DeckSide, now: DeckSide, os: SlideData, ns: SlideData
   const merged = [...counted.values()].map(({ line, n }) => (n > 1 ? { ...line, text: `${line.text} ×${n}` } : line))
   // Content first — text, data and notes changes, then shapes added and removed — then formatting, then position.
   const rank = (l: SummaryLine) =>
-    l.kind === 'added' ? 1 : l.kind === 'removed' ? 2
+    l.text.startsWith('Comment') ? 2.5
+    : l.kind === 'added' ? 1 : l.kind === 'removed' ? 2
       : /moved|resized/.test(l.text) && !/word|value|cell|series|replaced|label/.test(l.text) ? 4
         : /formatting|fill\/line|: shape|: frame|: link|: contents|^Background/.test(l.text) && !/word|value|cell|series|replaced|label/.test(l.text) ? 3
           : 0

@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   AlignCenterHorizontal, AlignCenterVertical, AlignEndHorizontal, AlignEndVertical,
-  AlignStartHorizontal, AlignStartVertical, ExternalLink, Eye, EyeOff, Loader2, Redo2, Type, Undo2, Sparkles, X,
+  AlignStartHorizontal, AlignStartVertical, ExternalLink, Eye, EyeOff, Loader2, MessageSquareText, Redo2, Type, Undo2, Sparkles, X,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { useDecks, deckKey } from './deckStore'
@@ -26,6 +26,7 @@ import { useChat } from '../store/chatStore'
 import { api } from '../api/client'
 import { compareForAgent, useCompare } from './compareStore'
 import { BaseSlideView, CompareBar, DiffOverlay, SlideFrame, useCompareDiff, type SlideMark } from './CompareView'
+import { CommentMarkers, useDeckComments } from './CommentsView'
 
 /** Width of the "what changed" column beside the thumbnails while comparing. */
 const SUMMARY_W = 168
@@ -50,6 +51,9 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   const actions = useRef<SlideActions>({ addTextBox() {}, align() {}, arrange() {}, setFont() {}, setSize() {}, stepSize() {}, setColor() {}, holdSelection() {}, releaseSelection() {} })
   const [fmt, setFmt] = useState<FormatState | null>(null)
   const editOff = useEditMode() === 'off'
+  // PowerPoint review comments: counted always (toolbar, thumbnails), shown on the slide when toggled on.
+  const comments = useDeckComments(session?.pres)
+  const [showComments, setShowComments] = useState(false)
   const compare = useCompare((s) => s.compares[key])
   useCompareDiff(session, compare)
 
@@ -105,11 +109,13 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
           banner={<>From — slide {diffRow?.oldIndex != null ? diffRow.oldIndex + 1 : '–'} of <b>{baseName}</b>{compare.baseInfo?.detail ? ` (${compare.baseInfo.detail})` : ''}, read-only. Switch to <b>To</b> to edit.</>} />
     : null
   const ratio = basePres ? pres.width / basePres.width : 1
+  const slideComments = (current && comments.get(current.id)) ?? []
   // The slide itself: new, or moved (with marks on, a frame around it says so).
   const slideMark: SlideMark | undefined = !compare?.marks || !diffRow ? undefined
     : diffRow.status === 'added' ? { kind: 'added', label: 'Added slide' }
       : diffRow.movedFrom ? { kind: 'moved', label: `Moved to slide ${(diffRow.newIndex ?? 0) + 1} from ${diffRow.movedFrom}` }
         : undefined
+  const diffMarks = !!(compare?.marks && diffRow && (diffRow.shapes.length || slideMark))
 
   const changedNums = session.externallyChanged
     .map((sid) => pres.slides.findIndex((s) => session.sldIds.get(s.id) === sid) + 1)
@@ -156,6 +162,18 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
         <div className="ml-auto flex shrink-0 items-center gap-2 whitespace-nowrap text-xs text-ink-3">
           {/* Notes for the agent — not an editing tool, so they sit apart from the edit tools. */}
           <NoteToolButton active={noteMode} onToggle={() => setNoteMode(!noteMode)} />
+          {comments.size > 0 && (
+            <button
+              className={clsx('tool-btn', showComments && 'bg-sky-100 text-sky-800 hover:bg-sky-100')}
+              aria-pressed={showComments}
+              title={`${showComments ? 'Hide' : 'Show'} the deck's review comments (${[...comments.values()].reduce((n, c) => n + c.length, 0)} in all) — this slide has ${slideComments.length || 'none'}`}
+              onClick={() => setShowComments(!showComments)}
+            >
+              <MessageSquareText size={15} />
+              <span className="tb-label">Comments</span>
+              {slideComments.length > 0 && <span className={clsx('rounded-full px-1.5 text-[10px] font-semibold leading-4', showComments ? 'bg-sky-600 text-white' : 'bg-sky-100 text-sky-800')}>{slideComments.length}</span>}
+            </button>
+          )}
           <button className="icon-btn" onClick={() => setShowResolved(!showResolved)} title={showResolved ? 'Hide resolved notes' : 'Show resolved notes'}>
             {showResolved ? <Eye size={15} /> : <EyeOff size={15} />}
           </button>
@@ -185,6 +203,7 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
         <SlideRail
           session={session}
           width={railShown + (compare ? SUMMARY_W : 0)}
+          comments={comments}
           compare={compare ? {
             diff: compare.diff, basePres, removed: compare.removed, summaryW: SUMMARY_W,
             onShowRemoved: (id) => useCompare.getState().showRemoved(key, id),
@@ -211,10 +230,11 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
                 showResolved={showResolved}
                 registerActions={(a) => (actions.current = a)}
                 onFormat={setFmt}
-                overlay={compare?.marks && diffRow && (diffRow.shapes.length || slideMark) ? (scale) => (
+                overlay={(diffMarks || (showComments && slideComments.length > 0)) ? (scale) => (
                   <>
-                    {diffRow.shapes.length > 0 && <DiffOverlay shapes={diffRow.shapes} scale={scale} side="after" focus={compare.hover} ratio={ratio} />}
-                    {slideMark && <SlideFrame mark={slideMark} />}
+                    {diffMarks && diffRow.shapes.length > 0 && <DiffOverlay shapes={diffRow.shapes} scale={scale} side="after" focus={compare.hover} ratio={ratio} />}
+                    {diffMarks && slideMark && <SlideFrame mark={slideMark} />}
+                    {showComments && current && slideComments.length > 0 && <CommentMarkers comments={slideComments} slide={current} scale={scale} slideW={pres.width} />}
                   </>
                 ) : undefined}
               />

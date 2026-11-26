@@ -6,7 +6,7 @@
  */
 
 import { memo, useEffect, useRef, useState } from 'react'
-import { Copy, CopyPlus, ClipboardPaste, Trash2 } from 'lucide-react'
+import { Copy, CopyPlus, ClipboardPaste, MessageSquareText, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
 import { copyNodes, materializeSlide, type PresentationData, type SlideData } from '@diceui/pptx-core'
 import { useDecks, type DeckSession } from './deckStore'
@@ -19,6 +19,7 @@ import { requestEdit, useEditMode } from '../store/editGuard'
 import { useInnerWidth } from '../components/useInnerWidth'
 import type { DeckDiff, SlideDiff, SummaryLine } from './deckDiff'
 import { DiffSummary, ThumbWordMarks } from './CompareView'
+import type { DeckComment } from './comments'
 
 const Thumb = memo(function Thumb(p: { deckKey: string; pres: PresentationData; slide: SlideData; version: number; width: number }) {
   return <SlideRender deckKey={p.deckKey} pres={p.pres} slide={p.slide} version={p.version} width={p.width} thumbnail />
@@ -39,7 +40,7 @@ export interface RailCompare {
   onHover(slideIndex: number, ids: string[] | null): void
 }
 
-export function SlideRail({ session, width, compare }: { session: DeckSession; width: number; compare?: RailCompare }) {
+export function SlideRail({ session, width, compare, comments }: { session: DeckSession; width: number; compare?: RailCompare; comments?: Map<string, DeckComment[]> }) {
   const { apply, setSlide } = useDecks()
   const editOff = useEditMode() === 'off'
   const pres = session.pres!
@@ -364,6 +365,12 @@ export function SlideRail({ session, width, compare }: { session: DeckSession; w
                     </div>
                   )}
                   {changed && <div className="absolute left-1 top-1 h-2.5 w-2.5 rounded-full bg-violet-500 ring-2 ring-white" title="Changed by the agent" />}
+                  {/* Review comments on the slide (shown on the slide with the toolbar's Comments toggle). */}
+                  {(comments?.get(slide.id)?.length ?? 0) > 0 && (
+                    <div className="absolute bottom-1 right-1 flex items-center gap-0.5 rounded-full bg-sky-600 px-1 text-[9px] font-bold leading-[14px] text-white shadow" title={`${comments!.get(slide.id)!.length} review comment(s)`}>
+                      <MessageSquareText size={9} /> {comments!.get(slide.id)!.length}
+                    </div>
+                  )}
                 </div>
                 {compare && (
                   <div style={{ width: summaryW - 8 }} className="shrink-0">

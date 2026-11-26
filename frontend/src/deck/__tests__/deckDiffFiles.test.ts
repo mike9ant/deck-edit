@@ -6,6 +6,7 @@ import { diffDecks, describeDiff, type DeckSide } from '../deckDiff'
 import { slideIdsFromXml } from '../deckModel'
 import { uniqueShapeIds } from '../packageHygiene'
 import { readNotes } from '../speakerNotes'
+import { readDeckComments } from '../comments'
 
 const A = process.env.DECKEDIT_DIFF_A, B = process.env.DECKEDIT_DIFF_B
 
@@ -17,7 +18,7 @@ async function side(path: string): Promise<DeckSide> {
   materializeAllSlides(pres)
   const notes = new Map<string, string>()
   for (const s of pres.slides) notes.set(s.id, await readNotes(pres, s).catch(() => ''))
-  return { pres, sldIds: slideIdsFromXml(files.presentation, files.presentationRels), notes }
+  return { pres, sldIds: slideIdsFromXml(files.presentation, files.presentationRels), notes, comments: await readDeckComments(pres) }
 }
 
 describe.skipIf(!A || !B)('deck diff on two given decks', () => {

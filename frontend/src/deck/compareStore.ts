@@ -16,6 +16,7 @@ import { deckKey, type DeckSession } from './deckStore'
 import { slideIdsFromXml } from './deckModel'
 import { uniqueShapeIds } from './packageHygiene'
 import { readNotes } from './speakerNotes'
+import { readDeckComments } from './comments'
 import { describeDiff, fingerprintPictures, type DeckDiff, type DeckSide } from './deckDiff'
 import { useDecks } from './deckStore'
 import type { ServerEvent } from '../api/types'
@@ -101,7 +102,7 @@ async function readSide(bytes: ArrayBuffer): Promise<{ side: DeckSide; by?: stri
   await fingerprintPictures(pres)
   const sldIds = slideIdsFromXml(files.presentation, files.presentationRels)
   const by = savedBy(await files.sourcePackage?.readText('docProps/core.xml'))
-  return { side: { pres, sldIds, notes: await notesOf(pres) }, by }
+  return { side: { pres, sldIds, notes: await notesOf(pres), comments: await readDeckComments(pres) }, by }
 }
 
 /** The live deck as the diff reads it (ids and notes as they are now, edits included). */
@@ -111,7 +112,7 @@ export async function liveSide(session: DeckSession): Promise<DeckSide> {
   await fingerprintPictures(pres) // (only new pictures: the rest are remembered)
   const pkg = pres.sourcePackage
   const sldIds = pkg ? slideIdsFromXml(await pkg.readText('ppt/presentation.xml'), await pkg.readText('ppt/_rels/presentation.xml.rels')) : session.sldIds
-  return { pres, sldIds, notes: await notesOf(pres) }
+  return { pres, sldIds, notes: await notesOf(pres), comments: await readDeckComments(pres) }
 }
 
 /** What the compare bar says about the live deck. */
