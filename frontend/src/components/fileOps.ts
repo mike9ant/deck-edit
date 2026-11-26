@@ -94,12 +94,3 @@ export function planMove(paths: string[], dir: string): [string, string][] {
     .filter((p) => parentOf(p) !== dir && dir !== p && !dir.startsWith(`${p}/`))
     .map((p) => [p, joinPath(dir, baseName(p))])
 }
-
-/** "Acme — Board Review Deck.pptx" → head + tail, so a narrow row can show "Acme — Bo…Deck.pptx". */
-export function splitForMiddleEllipsis(name: string): [string, string] {
-  const dot = name.lastIndexOf('.')
-  const ext = dot > 0 ? name.slice(dot) : ''
-  const keep = Math.min(name.length, ext.length + 6)
-  if (name.length <= 14) return [name, '']
-  return [name.slice(0, name.length - keep), name.slice(name.length - keep)]
-}

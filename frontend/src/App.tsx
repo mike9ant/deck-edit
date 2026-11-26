@@ -4,7 +4,7 @@
  * and the wiring of server push events into the stores.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, FolderPlus, PanelLeftOpen, Pin, Presentation, X } from 'lucide-react'
 import { TabStrip } from './components/TabStrip'
 import { EditNotice } from './components/EditNotice'
@@ -168,6 +168,8 @@ export default function App() {
  */
 function DocTabs() {
   const { tabs, kept, activePath, projectId, openFile, closeTab, keepTab } = useApp()
+  // The open tabs' names: each is shortened to keep what sets it apart from the others.
+  const names = useMemo(() => tabs.map((t) => t.split('/').pop() ?? t), [tabs])
   if (!tabs.length) return null
   return (
     <div className="flex h-9 shrink-0 items-end border-b border-hair bg-paper">
@@ -187,7 +189,7 @@ function DocTabs() {
           title={preview ? `${t}\nPreview — opening another file replaces this tab. Pin it (or double-click) to keep it open; it also stays once you or the agent change the file.` : t}
           data-preview={preview || undefined}
         >
-          <MiddleEllipsis name={t.split('/').pop() ?? t} className={clsx(preview && 'italic')} />
+          <MiddleEllipsis name={t.split('/').pop() ?? t} siblings={names} className={clsx(preview && 'italic')} />
           <NoteCountBadge path={t} />
           {/* A preview tab can be kept with one click — the next file then opens in a new tab. */}
           {preview && (

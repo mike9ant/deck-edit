@@ -370,7 +370,7 @@ export function FileTree() {
           {!projectId && <div className="px-3 text-ink-3">No project selected.</div>}
           {treeError && <div className="px-3 text-red-700">{treeError}</div>}
           {projectId && !treeError && tree.length === 0 && <div className="px-3 text-ink-3">This folder is empty — drop files here.</div>}
-          {tree.map((n) => <Row key={n.path} node={n} depth={0} />)}
+          {tree.map((n) => <Row key={n.path} node={n} depth={0} siblings={namesOf(tree)} />)}
         </div>
       </TreeCtx.Provider>
       {ghost && (
@@ -474,7 +474,16 @@ function RenameBox({ node }: { node: TreeNode }) {
   )
 }
 
-function Row({ node, depth }: { node: TreeNode; depth: number }) {
+/** A folder's children's names, one array per children list (MiddleEllipsis caches by it). */
+const childNames = new WeakMap<TreeNode[], string[]>()
+function namesOf(nodes: TreeNode[]): string[] {
+  let names = childNames.get(nodes)
+  if (!names) childNames.set(nodes, (names = nodes.map((n) => n.name)))
+  return names
+}
+
+/** `siblings`: the names in its folder — names are shortened to keep what sets them apart. */
+function Row({ node, depth, siblings }: { node: TreeNode; depth: number; siblings: readonly string[] }) {
   const c = useContext(TreeCtx)
   const isDir = node.kind === 'dir'
   const isOpen = isDir && (c.open.has(node.path) || [...c.justAdded].some((p) => p.startsWith(`${node.path}/`)))
@@ -508,7 +517,7 @@ function Row({ node, depth }: { node: TreeNode; depth: number }) {
         </span>
       )}
       <span className="shrink-0">{isDir ? <Folder size={14} className="text-sky-700" /> : icon(node.path)}</span>
-      {isEditing ? <RenameBox node={node} /> : <span data-name className="flex min-w-0"><MiddleEllipsis name={node.name} /></span>}
+      {isEditing ? <RenameBox node={node} /> : <span data-name className="flex min-w-0"><MiddleEllipsis name={node.name} siblings={siblings} /></span>}
       {!isDir && !isEditing && <NoteCountBadge path={node.path} />}
     </div>
   )
@@ -516,7 +525,7 @@ function Row({ node, depth }: { node: TreeNode; depth: number }) {
   return (
     <div data-drop-dir={node.path} className={clsx(target && 'bg-accent-soft/70 ring-2 ring-inset ring-accent/40')}>
       {row}
-      {isOpen && node.children?.map((ch) => <Row key={ch.path} node={ch} depth={depth + 1} />)}
+      {isOpen && node.children?.map((ch) => <Row key={ch.path} node={ch} depth={depth + 1} siblings={namesOf(node.children!)} />)}
     </div>
   )
 }
