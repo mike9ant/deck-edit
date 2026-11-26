@@ -157,6 +157,8 @@ export type ServerEvent =
   | { type: 'turn'; chatId: string; turnId: string; projectId: string; status: Turn['status']; changes?: FileChange[] }
   | { type: 'chatUpdated'; chatId: string }
   | { type: 'screenshot'; requestId: string; projectId: string; deck: string; slideIndex: number; showNotes?: boolean }
+  /** The agent's review_changes: list / decide the open comparison's review items. */
+  | { type: 'review'; requestId: string; projectId: string; deck: string; action: string; decision: string; keys: string[]; slides: number[]; kinds: string[] }
   /** The agent's compare_decks: open the comparison and post its summary back. */
   | { type: 'compare'; requestId: string; projectId: string; deck: string; base: { kind: 'file'; path: string } | { kind: 'snapshot'; snapshotId: string; path: string; label: string } }
 

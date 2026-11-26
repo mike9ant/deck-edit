@@ -824,7 +824,7 @@ function ToolGroup({ events, running }: { events: TurnEvent[]; running: boolean 
 }
 
 const toolLabel = (t: string) =>
-  ({ Bash: 'Ran', Read: 'Read', Write: 'Wrote', Edit: 'Edited', MultiEdit: 'Edited', Grep: 'Searched', Glob: 'Listed', backup: 'Backup', list_notes: 'Notes', resolve_note: 'Resolved note', add_note: 'Added note', screenshot_slide: 'Looked at', compare_decks: 'Compared', get_user_view: 'Checked view', WebSearch: 'Searched web', WebFetch: 'Fetched', Task: 'Agent' } as Record<string, string>)[t] ?? t
+  ({ Bash: 'Ran', Read: 'Read', Write: 'Wrote', Edit: 'Edited', MultiEdit: 'Edited', Grep: 'Searched', Glob: 'Listed', backup: 'Backup', list_notes: 'Notes', resolve_note: 'Resolved note', add_note: 'Added note', screenshot_slide: 'Looked at', compare_decks: 'Compared', review_changes: 'Review', get_user_view: 'Checked view', WebSearch: 'Searched web', WebFetch: 'Fetched', Task: 'Agent' } as Record<string, string>)[t] ?? t
 
 function EventView({ e, resolved, onAnswer, onOpen }: { e: TurnEvent; resolved: Map<string, string>; onAnswer: (rid: string, d: 'allow' | 'allowAlways' | 'deny') => Promise<void>; onOpen(p: string): void }) {
   switch (e.kind) {

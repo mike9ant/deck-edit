@@ -7,8 +7,8 @@
  * agent is told about like any other. The panel's open state and height persist.
  */
 
-import { useEffect, useRef, useState } from 'react'
-import { BotMessageSquare, ChevronDown, ChevronRight, Loader2, StickyNote } from 'lucide-react'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import { BotMessageSquare, ChevronDown, ChevronRight, ListChecks, Loader2, StickyNote } from 'lucide-react'
 import clsx from 'clsx'
 import type { SlideData } from '@diceui/pptx-core'
 import { useDecks, type DeckSession } from './deckStore'
@@ -23,8 +23,9 @@ import { actNowPrompt } from '../notes/NotePins'
 import { setQuoteHighlight } from '../notes/quoteHighlight'
 import { domRangeOf } from '../viewers/textRanges'
 import { useCompare } from './compareStore'
-import { paragraphOps, wordDiff } from './deckDiff'
-import { OpsText, WordCounts } from './CompareView'
+import { paragraphOps, wordDiff, type Op } from './deckDiff'
+import { rowKey, type Decision } from './review'
+import { WordCounts } from './CompareView'
 
 const LS_OPEN = 'deckedit-notes-open'
 const LS_HEIGHT = 'deckedit-notes-height'
@@ -50,7 +51,12 @@ export function NotesPane({ session }: { session: DeckSession }) {
   const undoRedoRef = useRef<(redo: boolean) => Promise<void>>(async () => {})
   const slideNo = session.slideIndex + 1
   // Comparing with another version: this slide's notes then (if they changed), shown as a diff.
-  const notesDiff = useCompare((s) => s.compares[session.key]?.diff?.rows.find((r) => r.newSlide === slide?.id)?.notes)
+  const notesRow = useCompare((s) => s.compares[session.key]?.diff?.rows.find((r) => r.newSlide === slide?.id))
+  const notesDiff = notesRow?.notes
+  // Reviewing the comparison: this slide's notes change can be accepted / rejected here too.
+  const reviewing = useCompare((s) => !!s.compares[session.key]?.review)
+  const notesKey = notesRow ? `${rowKey(notesRow)}|notes` : ''
+  const notesDecision = useCompare((s) => (notesKey ? s.compares[session.key]?.review?.decisions[notesKey] : undefined))
   const [showDiff, setShowDiff] = useState(true)
 
   const [rendered, setRendered] = useState(0)
@@ -315,6 +321,28 @@ export function NotesPane({ session }: { session: DeckSession }) {
           {!open && <span className="ml-2 truncate text-ink-3">{preview}</span>}
           {saving && <Loader2 size={12} className="ml-auto shrink-0 animate-spin text-ink-3" />}
         </button>
+        {notesDiff && (
+          reviewing ? (
+            <span className="mr-2 flex shrink-0 items-center gap-1 text-[11px]">
+              <button
+                className={clsx('rounded border px-1.5 py-px', notesDecision === 'accept' ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-emerald-300 bg-white text-emerald-700 hover:bg-emerald-50')}
+                title={notesDecision === 'accept' ? 'Accepted — click to undecide' : 'Accept these notes (the To version)'}
+                onClick={() => useCompare.getState().decide(session.key, [notesKey], notesDecision === 'accept' ? null : 'accept')}
+              >✓ Accept notes</button>
+              <button
+                className={clsx('rounded border px-1.5 py-px', notesDecision === 'reject' ? 'border-ink-3 bg-ink-3 text-white' : 'border-hair bg-white text-ink-2 hover:bg-paper')}
+                title={notesDecision === 'reject' ? 'Not accepted — click to undecide' : 'Keep the From version of the notes'}
+                onClick={() => useCompare.getState().decide(session.key, [notesKey], notesDecision === 'reject' ? null : 'reject')}
+              >✗</button>
+            </span>
+          ) : (
+            <button
+              className="mr-2 flex shrink-0 items-center gap-1 rounded border border-hair bg-white px-1.5 py-px text-[11px] text-ink-2 hover:bg-paper"
+              title="Review the comparison's changes (accept or reject each, then apply them)"
+              onClick={() => void useCompare.getState().startReview(session.key)}
+            ><ListChecks size={11} /> Review</button>
+          )
+        )}
         {open && notesDiff && (
           <span className="mr-2 shrink-0 text-[11px]" title="Words removed and added in these notes, compared with the other version">
             <WordCounts {...wordDiff(notesDiff.old, notesDiff.new)} />
@@ -383,35 +411,58 @@ export function NotesPane({ session }: { session: DeckSession }) {
             onKeyDown={onKeyDown}
             onPaste={onPaste}
           />
-          {notesDiff && showDiff && <NotesDiffView before={notesDiff.old} after={notesDiff.new} onEdit={() => setShowDiff(false)} />}
+          {notesDiff && showDiff && <NotesDiffView before={notesDiff.old} after={notesDiff.new} onEdit={() => setShowDiff(false)} decision={reviewing ? notesDecision : undefined} />}
         </div>
       )}
     </div>
   )
 }
 
-/** The notes' change in place: kept text as is, removed text struck through in red, new text in green. */
-function NotesDiffView({ before, after, onEdit }: { before: string; after: string; onEdit(): void }) {
+/**
+ * The notes' change in place. Undecided (or not reviewing): kept text as is, removed text struck
+ * through in red, new text in green. In a review, as the decision would leave them — accepted: the
+ * new notes, their new words green; not accepted: the old notes, the words that come back on a
+ * light red dashed background (kept, not struck).
+ */
+function NotesDiffView({ before, after, onEdit, decision }: { before: string; after: string; onEdit(): void; decision?: Decision }) {
   const paras = paragraphOps(before, after)
+  const ADD = 'rounded-sm bg-emerald-100 text-emerald-900'
+  const RESTORED = 'rounded-sm bg-red-50 outline-dashed outline-1 outline-red-300'
+  const runs = (ops: Op[]) =>
+    ops
+      .filter((o) => (decision === 'accept' ? o.k !== 'del' : decision === 'reject' ? o.k !== 'add' : true))
+      .map((o, i) => (
+        <Fragment key={i}>
+          {i > 0 && ' '}
+          <span className={o.k === 'same' ? undefined : decision === 'accept' ? ADD : decision === 'reject' ? RESTORED : o.k === 'del' ? 'text-red-600 line-through decoration-red-500/80' : 'rounded-sm bg-emerald-100 px-px font-medium text-emerald-800'}>{o.t}</span>
+        </Fragment>
+      ))
   return (
     <div
-      className="absolute inset-0 overflow-auto bg-white px-4 py-2 text-[13px] leading-relaxed text-ink"
-      data-notes-diff=""
+      className={clsx(
+        'absolute inset-0 overflow-auto bg-white px-4 py-2 text-[13px] leading-relaxed text-ink',
+        decision === 'accept' && 'border-l-4 border-emerald-500',
+        decision === 'reject' && 'border-l-4 border-ink-3/40',
+      )}
+      data-notes-diff={decision ?? ''}
       onDoubleClick={onEdit}
       title="Double-click to edit the notes"
     >
-      {paras.map((p, i) => (
-        <p
-          key={i}
-          className={clsx(
-            'min-h-[1.2em] whitespace-pre-wrap break-words',
-            p.k === 'del' && 'text-red-600 line-through decoration-red-500/80',
-            p.k === 'add' && 'bg-emerald-50 text-emerald-800',
-          )}
-        >
-          {p.k === 'edit' ? <OpsText ops={p.ops} /> : p.ops.map((o) => o.t).join(' ')}
-        </p>
-      ))}
+      {decision && (
+        <div className={clsx('mb-1 text-[11px] font-medium', decision === 'accept' ? 'text-emerald-700' : 'text-ink-3')}>
+          {decision === 'accept' ? '✓ Accepted — the new notes' : '↺ Not accepted — the notes stay as they were'}
+        </div>
+      )}
+      {paras.map((p, i) => {
+        // A whole paragraph removed or added: dropped when the decision leaves it out.
+        if ((decision === 'accept' && p.k === 'del') || (decision === 'reject' && p.k === 'add')) return null
+        const whole = decision === 'accept' ? ADD : decision === 'reject' ? RESTORED : p.k === 'del' ? 'text-red-600 line-through decoration-red-500/80' : 'bg-emerald-50 text-emerald-800'
+        return (
+          <p key={i} className="min-h-[1.2em] whitespace-pre-wrap break-words">
+            {p.k === 'edit' ? runs(p.ops) : p.k === 'same' ? p.ops.map((o) => o.t).join(' ') : <span className={whole}>{p.ops.map((o) => o.t).join(' ')}</span>}
+          </p>
+        )
+      })}
     </div>
   )
 }

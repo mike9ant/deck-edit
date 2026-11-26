@@ -99,7 +99,7 @@ async fn mcp(
 /// Mark the tools that only read as `readOnlyHint` — Claude Code's plan mode
 /// blocks MCP tools it can't tell are read-only.
 fn with_annotations(mut tools: Value) -> Value {
-    const READ_ONLY: [&str; 6] = ["list_notes", "get_user_view", "screenshot_slide", "search_conversations", "read_conversation", "compare_decks"];
+    const READ_ONLY: [&str; 7] = ["list_notes", "get_user_view", "screenshot_slide", "search_conversations", "read_conversation", "compare_decks", "review_changes"];
     if let Some(arr) = tools.as_array_mut() {
         for t in arr {
             let name = t.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
@@ -192,6 +192,22 @@ fn tool_defs() -> Value {
                     "since": { "type": "string", "enum": ["turn_start", "chat_start"], "description": "Instead of `base`: compare with the deck as it was before this turn (default), or before this chat's first turn." }
                 },
                 "required": ["deck"]
+            }
+        },
+        {
+            "name": "review_changes",
+            "description": "Work on the review of an open comparison (see compare_decks): the user goes through the To deck's changes and accepts or rejects each — accepted changes are applied to the From deck (or a new copy) when the user presses Apply. Actions: `start` (turn review mode on), `list` (every reviewable change with its key, slide, what changed and its status), `decide` (accept / reject / clear changes chosen by `keys`, and/or `slides` (To slide numbers; removed slides: their From number), and/or `kinds`). You can't apply — the user does. Use it when the user asks you to accept or reject changes (\"accept Constantine's text edits on slides 2–5\").",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "deck": { "type": "string", "description": "The deck open in the comparison (the To deck), relative to the project folder." },
+                    "action": { "type": "string", "enum": ["start", "list", "decide"] },
+                    "decision": { "type": "string", "enum": ["accept", "reject", "clear"], "description": "For decide." },
+                    "keys": { "type": "array", "items": { "type": "string" }, "description": "Item keys from list." },
+                    "slides": { "type": "array", "items": { "type": "integer" }, "description": "Slide numbers (all of a slide's changes)." },
+                    "kinds": { "type": "array", "items": { "type": "string", "enum": ["slide-added", "slide-removed", "slide-moved", "shape", "notes", "comment", "props"] }, "description": "Only changes of these kinds." }
+                },
+                "required": ["deck", "action"]
             }
         },
         {
@@ -486,6 +502,29 @@ async fn call_tool(state: &AppState, chat_id: &str, name: &str, args: &Value) ->
                 _ => {
                     state.screenshots.lock().unwrap().remove(&rid);
                     text_result("Timed out waiting for the app to compare the decks.".into(), true)
+                }
+            }
+        }
+        "review_changes" => {
+            if state.events.receiver_count() == 0 {
+                return text_result("The app isn't open in a browser, so the review can't be reached right now.".into(), true);
+            }
+            let rid = uuid::Uuid::new_v4().to_string();
+            let (tx, rx) = oneshot::channel();
+            state.screenshots.lock().unwrap().insert(rid.clone(), tx);
+            state.publish(json!({
+                "type": "review", "requestId": rid, "projectId": pid, "deck": s("deck"), "action": s("action"),
+                "decision": s("decision"), "keys": args.get("keys").cloned().unwrap_or(json!([])),
+                "slides": args.get("slides").cloned().unwrap_or(json!([])), "kinds": args.get("kinds").cloned().unwrap_or(json!([])),
+            }));
+            match tokio::time::timeout(Duration::from_secs(60), rx).await {
+                Ok(Ok(text)) => match text.strip_prefix("error:") {
+                    Some(e) => text_result(e.trim().to_string(), true),
+                    None => text_result(text, false),
+                },
+                _ => {
+                    state.screenshots.lock().unwrap().remove(&rid);
+                    text_result("Timed out waiting for the app.".into(), true)
                 }
             }
         }

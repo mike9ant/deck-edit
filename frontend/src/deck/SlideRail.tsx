@@ -18,6 +18,7 @@ import { useApp } from '../store/appStore'
 import { requestEdit, useEditMode } from '../store/editGuard'
 import { useInnerWidth } from '../components/useInnerWidth'
 import type { DeckDiff, SlideDiff, SummaryLine } from './deckDiff'
+import { lineItems, rowItems, rowState, type Decision, type Decisions } from './review'
 import { DiffSummary, ThumbWordMarks } from './CompareView'
 import type { DeckComment } from './comments'
 
@@ -38,6 +39,8 @@ export interface RailCompare {
   onPick(slideIndex: number, line: SummaryLine | null): void
   /** A summary line under the pointer: mark its shapes (null: none). */
   onHover(slideIndex: number, ids: string[] | null): void
+  /** Reviewing: the decisions, and deciding items (the rail is read-only meanwhile). */
+  review?: { decisions: Decisions; decide(keys: string[], d: Decision | null): void; header: React.ReactNode }
 }
 
 export function SlideRail({ session, width, compare, comments }: { session: DeckSession; width: number; compare?: RailCompare; comments?: Map<string, DeckComment[]> }) {
@@ -71,6 +74,33 @@ export function SlideRail({ session, width, compare, comments }: { session: Deck
     }
   }
   const maxLines = Math.max(2, Math.floor((thumbH + 2) / 13))
+  // Reviewing: each summary line's (and slide's) items, their state, and deciding them.
+  const review = compare?.review
+  const reviewOf = (r: SlideDiff) => review && ((l: SummaryLine | { moved: true }) => {
+    const items = lineItems(r, l)
+    if (!items.length) return undefined
+    return { state: rowState(items, review.decisions), decide: (d: Decision | null) => review.decide(items.map((i) => i.key), d) }
+  })
+  /** Accept / reject the whole slide: on hover, at the bottom of its summary. */
+  const slideButtons = (r: SlideDiff) => {
+    if (!review) return null
+    const items = rowItems(r)
+    if (!items.length) return null
+    const st = rowState(items, review.decisions)
+    const keys = items.map((i) => i.key)
+    return (
+      <div className="mt-0.5 hidden items-center gap-1 text-[10px] group-hover:flex" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+        <button className={clsx('rounded border px-1 leading-[13px]', st === 'accept' ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-emerald-300 bg-white text-emerald-700 hover:bg-emerald-50')} title="Accept every change on this slide" onClick={() => review.decide(keys, st === 'accept' ? null : 'accept')}>✓ Slide</button>
+        <button className={clsx('rounded border px-1 leading-[13px]', st === 'reject' ? 'border-ink-3 bg-ink-3 text-white' : 'border-hair bg-white text-ink-3 hover:bg-paper')} title="Accept none of this slide's changes" onClick={() => review.decide(keys, st === 'reject' ? null : 'reject')}>✗</button>
+      </div>
+    )
+  }
+  /** A reviewed slide's thumbnail: accepted — a green ring; not accepted — greyed. */
+  const thumbTone = (r: SlideDiff | undefined) => {
+    if (!review || !r) return undefined
+    const st = rowState(rowItems(r), review.decisions)
+    return st === 'accept' ? 'accept' : st === 'reject' ? 'reject' : undefined
+  }
   const removedRows = (after: string) =>
     compare?.basePres && (removedAfter.get(after) ?? []).map((r) => {
       const old = compare.basePres!.slides.find((x) => x.id === r.oldSlide)
@@ -84,14 +114,15 @@ export function SlideRail({ session, width, compare, comments }: { session: Deck
           onClick={() => compare.onShowRemoved(on ? null : r.oldSlide!)}
         >
           <div className="w-5 shrink-0 pt-0.5 text-right text-[11px] tabular-nums text-red-400">–</div>
-          <div className={clsx('relative overflow-hidden rounded-[3px] ring-offset-1', on ? 'ring-2 ring-red-500' : 'ring-1 ring-red-300 group-hover:ring-red-400')}>
+          <div className={clsx('relative overflow-hidden rounded-[3px] ring-offset-1', on ? 'ring-2 ring-red-500' : 'ring-1 ring-red-300 group-hover:ring-red-400', thumbTone(r) === 'accept' && 'outline outline-2 outline-emerald-500', thumbTone(r) === 'reject' && 'opacity-50')}>
             <div className="opacity-40 grayscale">
               <SlideRender deckKey={`${key}#base`} pres={compare.basePres!} slide={old} version={0} width={thumbW} thumbnail />
             </div>
             <div className="absolute inset-0 bg-red-500/10" />
           </div>
           <div style={{ width: summaryW - 8 }} className="shrink-0">
-            <DiffSummary row={r} maxLines={maxLines} />
+            <DiffSummary row={r} maxLines={maxLines} reviewOf={reviewOf(r)} />
+            {slideButtons(r)}
           </div>
         </div>
       )
@@ -244,7 +275,7 @@ export function SlideRail({ session, width, compare, comments }: { session: Deck
    * pictures instead, and the drop never reaches the rail. A press that moves 5 px becomes a drag.
    */
   const startDrag = (e: React.PointerEvent, ids: string[]) => {
-    if (e.button !== 0) return
+    if (e.button !== 0 || compare?.review) return // (read-only while reviewing)
     // A drag that ended over another row got no click, so its "swallow the next click" is stale.
     suppressClick.current = false
     drag.current = { ids, x: e.clientX, y: e.clientY, active: false }
@@ -297,6 +328,8 @@ export function SlideRail({ session, width, compare, comments }: { session: Deck
     const mod = e.metaKey || e.ctrlKey
     if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { e.preventDefault(); setPicked([]); setSlide(key, session.slideIndex + 1) }
     else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { e.preventDefault(); setPicked([]); setSlide(key, session.slideIndex - 1) }
+    // Read-only while reviewing: moving through slides and copying only.
+    if (compare?.review && !(/^Arrow/.test(e.key) || (mod && e.key === 'c'))) return
     if (mod && e.key === 'd') { e.preventDefault(); void duplicate() }
     else if (mod && e.key === 'c') { e.preventDefault(); void copy() }
     else if (mod && e.key === 'v') { e.preventDefault(); void paste() }
@@ -307,6 +340,7 @@ export function SlideRail({ session, width, compare, comments }: { session: Deck
     // Keeps its width (the thumbnails are sized from it), so they never hang out of the rail.
     <div className="flex h-full min-h-0 shrink-0 flex-col bg-paper" style={{ width }}>
       <div ref={listRef} tabIndex={0} onKeyDown={onKeyDown} className="min-h-0 flex-1 select-none overflow-y-auto px-2 py-2 outline-none [scrollbar-gutter:stable]">
+        {review?.header}
         {compare?.diff && compare.diff.deck.length > 0 && (
           <div className="mb-1.5 rounded border border-amber-200 bg-amber-50 px-1.5 py-1 text-[10px] leading-[13px] text-amber-900" title="Changes to the whole deck">
             {compare.diff.deck.join(' · ')}
@@ -352,6 +386,10 @@ export function SlideRail({ session, width, compare, comments }: { session: Deck
                   className={clsx(
                     'relative overflow-hidden rounded-[3px] ring-offset-1',
                     isCurrent && !compare?.removed ? 'ring-2 ring-accent' : isPicked ? 'ring-2 ring-accent/50' : 'ring-1 ring-hair group-hover:ring-ink-3',
+                    thumbTone(diffRow) === 'accept' && 'outline outline-2 outline-offset-1 outline-emerald-500',
+                    thumbTone(diffRow) === 'reject' && 'opacity-45 grayscale',
+                    // Reviewing: a slide with nothing to decide steps back (half faded, colors kept).
+                    review && diffRow?.status === 'same' && 'opacity-50',
                   )}
                 >
                   {diffRow && diffRow.status !== 'same' && (
@@ -374,7 +412,8 @@ export function SlideRail({ session, width, compare, comments }: { session: Deck
                 </div>
                 {compare && (
                   <div style={{ width: summaryW - 8 }} className="shrink-0">
-                    {compare.diff ? <DiffSummary row={diffRow} maxLines={maxLines} onPick={(l) => compare.onPick(i, l)} onHover={(ids) => compare.onHover(i, ids)} /> : null}
+                    {compare.diff ? <DiffSummary row={diffRow} maxLines={maxLines} onPick={(l) => compare.onPick(i, l)} onHover={(ids) => compare.onHover(i, ids)} reviewOf={diffRow && reviewOf(diffRow)} /> : null}
+                    {diffRow && slideButtons(diffRow)}
                   </div>
                 )}
               </div>
@@ -390,7 +429,7 @@ export function SlideRail({ session, width, compare, comments }: { session: Deck
         </div>
       )}
       <div className="flex items-center justify-center gap-0.5 border-t border-hair px-1 py-1">
-        {editOff ? (
+        {editOff || compare?.review ? (
           <button className="icon-btn" title="Copy slides (⌘C) — paste into another deck" onClick={() => void copy()}><Copy size={15} /></button>
         ) : (
           <>

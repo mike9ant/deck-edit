@@ -85,6 +85,12 @@ export interface SlideDiff {
   shapes: ShapeDiff[]
   /** The speaker notes before and after, when they changed. */
   notes?: { old: string; new: string }
+  /** Every pair of shapes (old id, new id) — changed or not (for placing shapes when merging). */
+  pairs?: [string, string][]
+  /** Comment threads added, removed or changed (by id). */
+  comments?: { kind: ChangeKind; id: string }[]
+  /** The slide's own properties changed: layout, background, hidden. */
+  props?: boolean
 }
 
 export interface DeckDiff {
@@ -777,13 +783,15 @@ function themeOf(pres: PresentationData) {
 const lineText = (what: string, detail: string) => (what === 'Text' ? detail : `${what}: ${detail}`)
 
 /** What changed between the slides of a matched pair: summary lines and the shapes to mark. */
-function slideChanges(old: DeckSide, now: DeckSide, os: SlideData, ns: SlideData): { lines: SummaryLine[]; shapes: ShapeDiff[]; notes?: { old: string; new: string } } {
+function slideChanges(old: DeckSide, now: DeckSide, os: SlideData, ns: SlideData): { lines: SummaryLine[]; shapes: ShapeDiff[]; notes?: { old: string; new: string }; pairs: [string, string][]; comments: { kind: ChangeKind; id: string }[]; props: boolean } {
+  const commentChanges: { kind: ChangeKind; id: string }[] = []
   const lines: SummaryLine[] = []
   const shapes: ShapeDiff[] = []
   const oc = { pres: old.pres, slide: os }, nc = { pres: now.pres, slide: ns }
   if (layoutName(old.pres, os) !== layoutName(now.pres, ns)) lines.push({ kind: 'changed', text: `Layout: ${layoutName(now.pres, ns)}` })
   if (norm(el(os.background)) !== norm(el(ns.background))) lines.push({ kind: 'changed', text: 'Background' })
   if (!!os.hidden !== !!ns.hidden) lines.push({ kind: 'changed', text: ns.hidden ? 'Hidden' : 'Shown again' })
+  const props = lines.length > 0
   const pairs = pairShapes(os.nodes, ns.nodes, oc, nc)
   const pairedO = new Set(pairs.map(([o]) => o)), pairedN = new Set(pairs.map(([, n]) => n))
   const onlyMoved: ShapeDiff[] = []
@@ -834,7 +842,7 @@ function slideChanges(old: DeckSide, now: DeckSide, os: SlideData, ns: SlideData
     const before = new Map((old.comments.get(os.id) ?? []).map((c) => [c.id, c]))
     for (const c of now.comments.get(ns.id) ?? []) {
       const o = before.get(c.id)
-      if (!o) { lines.push({ kind: 'added', text: `Comment added: ${said(c)}` }); continue }
+      if (!o) { lines.push({ kind: 'added', text: `Comment added: ${said(c)}`, ids: [c.id] }); commentChanges.push({ kind: 'added', id: c.id }); continue }
       before.delete(c.id)
       const what: string[] = []
       if (o.text !== c.text) what.push('edited')
@@ -842,9 +850,9 @@ function slideChanges(old: DeckSide, now: DeckSide, os: SlideData, ns: SlideData
       if (n > 0) what.push(`${n} new repl${n > 1 ? 'ies' : 'y'}`)
       if (n < 0) what.push(`${-n} repl${n < -1 ? 'ies' : 'y'} removed`)
       if (o.resolved !== c.resolved) what.push(c.resolved ? 'resolved' : 'reopened')
-      if (what.length) lines.push({ kind: 'changed', text: `Comment (${c.author}): ${what.join(', ')}` })
+      if (what.length) { lines.push({ kind: 'changed', text: `Comment (${c.author}): ${what.join(', ')}`, ids: [c.id] }); commentChanges.push({ kind: 'changed', id: c.id }) }
     }
-    for (const o of before.values()) lines.push({ kind: 'removed', text: `Comment removed: ${said(o)}` })
+    for (const o of before.values()) { lines.push({ kind: 'removed', text: `Comment removed: ${said(o)}`, ids: [o.id] }); commentChanges.push({ kind: 'removed', id: o.id }) }
   }
   // The same line for several shapes ("Text: text formatting") once, with a count.
   const counted = new Map<string, { line: SummaryLine; n: number }>()
@@ -865,7 +873,7 @@ function slideChanges(old: DeckSide, now: DeckSide, os: SlideData, ns: SlideData
         : /formatting|fill\/line|: shape|: frame|: link|: contents|^Background/.test(l.text) && !/word|value|cell|series|replaced|label/.test(l.text) ? 3
           : 0
   merged.sort((a, b) => rank(a) - rank(b))
-  return { lines: merged, shapes, notes }
+  return { lines: merged, shapes, notes, pairs: pairs.map(([o, n]) => [o.id, n.id]), comments: commentChanges, props }
 }
 
 /** An id pair "looks alike" at this likeness (the share of words, pictures and charts the slides have in common). */
@@ -930,11 +938,11 @@ export function diffDecks(old: DeckSide, now: DeckSide): DeckDiff {
       rows.push({ status: 'added', newIndex: i, oldIndex: null, newSlide: ns.id, movedFrom: null, lines: [{ kind: 'added', text: 'New slide' }], shapes: [], key: [i, 0, 0] })
       return
     }
-    const { lines, shapes, notes } = slideChanges(old, now, oSlides[j], ns)
+    const { lines, shapes, notes, pairs, comments, props } = slideChanges(old, now, oSlides[j], ns)
     const movedFrom = moved.has(i) ? j + 1 : null
     rows.push({
       status: lines.length || shapes.length || movedFrom ? 'changed' : 'same',
-      newIndex: i, oldIndex: j, newSlide: ns.id, oldSlide: oSlides[j].id, movedFrom, lines, shapes, notes, key: [i, 0, 0],
+      newIndex: i, oldIndex: j, newSlide: ns.id, oldSlide: oSlides[j].id, movedFrom, lines, shapes, notes, pairs, comments, props, key: [i, 0, 0],
     })
   })
   // A removed slide goes where it was: after the new place of the old slide before it.

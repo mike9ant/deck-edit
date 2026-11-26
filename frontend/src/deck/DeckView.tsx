@@ -27,6 +27,51 @@ import { api } from '../api/client'
 import { compareForAgent, useCompare } from './compareStore'
 import { BaseSlideView, CompareBar, DiffOverlay, SlideFrame, useCompareDiff, type SlideMark } from './CompareView'
 import { CommentMarkers, useDeckComments } from './CommentsView'
+import { AppliedNote, ReviewHeader } from './ReviewView'
+import { reviewItems, rowItems, rowKey, rowState, shapeKey, type Decision, type Decisions } from './review'
+import type { SlideDiff } from './deckDiff'
+import type { PresentationData } from '@diceui/pptx-core'
+
+/** A render version per review preview (each rebuild is a new presentation, so its slides render anew). */
+const previewVersions = new WeakMap<PresentationData, number>()
+let previewCounter = 1_000_000
+const previewVersion = (p: PresentationData) => previewVersions.get(p) ?? (previewVersions.set(p, ++previewCounter), previewCounter)
+
+/** Accept / reject a whole slide (all its changes), in a banner. */
+function SlideDecision({ row, decisions, decide, labels }: { row: SlideDiff; decisions: Decisions; decide(keys: string[], d: Decision | null): void; labels: [string, string] }) {
+  const items = rowItems(row)
+  if (!items.length) return null
+  const st = rowState(items, decisions)
+  const keys = items.map((i) => i.key)
+  // When the speaker notes changed too: accept the slide with its notes, or without them.
+  const notes = items.filter((i) => i.kind === 'notes')
+  const rest = items.filter((i) => i.kind !== 'notes')
+  const withoutNotes = notes.length > 0 && rest.length > 0 && rowState(rest, decisions) === 'accept' && notes.every((i) => decisions[i.key] !== 'accept')
+  const on = 'border-emerald-600 bg-emerald-600 text-white'
+  const off = 'border-emerald-300 bg-white text-emerald-700 hover:bg-emerald-50'
+  return (
+    <span className="ml-2 inline-flex flex-wrap items-center gap-1">
+      {notes.length > 0 && rest.length > 0 ? (
+        <>
+          <button className={clsx('rounded border px-1.5 py-px', st === 'accept' ? on : off)} title="Accept every change on this slide, and its speaker notes" onClick={() => decide(keys, st === 'accept' ? null : 'accept')}>✓ {labels[0]} + notes</button>
+          <button
+            className={clsx('rounded border px-1.5 py-px', withoutNotes ? on : off)}
+            title="Accept the slide's changes but not its speaker notes (they stay as in From)"
+            onClick={() => {
+              if (withoutNotes) return decide(rest.map((i) => i.key), null)
+              decide(rest.map((i) => i.key), 'accept')
+              if (notes.some((i) => decisions[i.key] === 'accept')) decide(notes.map((i) => i.key), null)
+            }}
+          >✓ {labels[0]} − notes</button>
+        </>
+      ) : (
+        <button className={clsx('rounded border px-1.5 py-px', st === 'accept' ? on : off)} onClick={() => decide(keys, st === 'accept' ? null : 'accept')}>✓ {labels[0]}</button>
+      )}
+      <button className={clsx('rounded border px-1.5 py-px', st === 'reject' ? 'border-ink-3 bg-ink-3 text-white' : 'border-hair bg-white text-ink-2 hover:bg-paper')} onClick={() => decide(keys, st === 'reject' ? null : 'reject')}>✗ {labels[1]}</button>
+      {st === 'mixed' && !withoutNotes && <span className="text-ink-3">(some accepted)</span>}
+    </span>
+  )
+}
 
 /** Width of the "what changed" column beside the thumbnails while comparing. */
 const SUMMARY_W = 168
@@ -100,15 +145,53 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   const basePres = compare?.baseSide?.pres ?? null
   const removedRow = compare?.removed ? compare.diff?.rows.find((r) => r.oldSlide === compare.removed) : undefined
   const baseName = compare?.baseInfo?.name ?? compare?.base.path.split('/').pop() ?? ''
+  const review = compare?.review ?? null
+  const decide = (keys: string[], d: Decision | null) => useCompare.getState().decide(key, keys, d)
   const baseView = compare && basePres && (compare.removed || compare.view === 'before')
     ? compare.removed
       ? <BaseSlideView deckKey={key} pres={basePres} slideId={compare.removed} shapes={[]} marks={false}
           frame={{ kind: 'removed', label: `Removed slide (was slide ${(removedRow?.oldIndex ?? 0) + 1})` }}
-          banner={<>Removed slide — slide {(removedRow?.oldIndex ?? 0) + 1} of <b>{baseName}</b>{compare.baseInfo?.detail ? ` (${compare.baseInfo.detail})` : ''}, read-only</>} />
+          banner={<>Removed slide — slide {(removedRow?.oldIndex ?? 0) + 1} of <b>{baseName}</b>{compare.baseInfo?.detail ? ` (${compare.baseInfo.detail})` : ''}, read-only{review && removedRow && <SlideDecision row={removedRow} decisions={review.decisions} decide={decide} labels={['Remove it', 'Keep it']} />}</>} />
       : <BaseSlideView deckKey={key} pres={basePres} slideId={diffRow?.oldSlide ?? null} shapes={diffRow?.shapes ?? []} marks={compare.marks}
           banner={<>From — slide {diffRow?.oldIndex != null ? diffRow.oldIndex + 1 : '–'} of <b>{baseName}</b>{compare.baseInfo?.detail ? ` (${compare.baseInfo.detail})` : ''}, read-only. Switch to <b>To</b> to edit.</>} />
     : null
   const ratio = basePres ? pres.width / basePres.width : 1
+  // Reviewing: the slide shows what Apply would make of it — To with the rejected changes put back
+  // (the preview), read-only — with each change's decision on its tag.
+  const reviewFrame: SlideMark | undefined = review && diffRow
+    ? diffRow.status === 'added'
+      ? review.decisions[`${rowKey(diffRow)}|slide-added`] === 'reject' ? { kind: 'removed', label: 'New slide — not added' } : { kind: 'added', label: review.decisions[`${rowKey(diffRow)}|slide-added`] === 'accept' ? '✓ New slide — accepted' : 'Added slide' }
+      : diffRow.movedFrom ? { kind: 'moved', label: review.decisions[`${rowKey(diffRow)}|slide-moved`] === 'accept' ? `✓ Moved to slide ${(diffRow.newIndex ?? 0) + 1} from ${diffRow.movedFrom}` : review.decisions[`${rowKey(diffRow)}|slide-moved`] === 'reject' ? `Stays at slide ${diffRow.movedFrom} (move not accepted)` : `Moved to slide ${(diffRow.newIndex ?? 0) + 1} from ${diffRow.movedFrom}` }
+        : undefined
+    : undefined
+  const reviewView = review && !baseView && current ? (
+    <BaseSlideView
+      deckKey={`${key}#review`}
+      pres={review.preview ?? pres}
+      version={review.preview ? previewVersion(review.preview) : (session.slideVersions[current.id] ?? session.version)}
+      slideId={current.id}
+      shapes={[]}
+      marks={false}
+      tone="violet"
+      frame={reviewFrame}
+      banner={<>
+        <b>Reviewing</b> — accept (✓) or reject (✗) each change, or the whole slide; the slide shows the result (rejected changes put back). Read-only.
+        {review.building && <Loader2 size={11} className="ml-1 inline animate-spin" />}
+        {review.error && <span className="ml-1 text-red-700">{review.error}</span>}
+        {diffRow && <SlideDecision row={diffRow} decisions={review.decisions} decide={decide} labels={['Accept slide', 'Reject slide']} />}
+      </>}
+      overlay={(scale) => diffRow && diffRow.shapes.length > 0 ? (
+        <DiffOverlay
+          shapes={diffRow.shapes}
+          scale={scale}
+          side="after"
+          ratio={ratio}
+          focus={compare!.hover}
+          review={{ decisionOf: (s) => review.decisions[shapeKey(diffRow, s)], onDecide: (ss, d) => decide(ss.map((s) => shapeKey(diffRow, s)), d) }}
+        />
+      ) : null}
+    />
+  ) : null
   const slideComments = (current && comments.get(current.id)) ?? []
   // The slide itself: new, or moved (with marks on, a frame around it says so).
   const slideMark: SlideMark | undefined = !compare?.marks || !diffRow ? undefined
@@ -136,12 +219,13 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col" onKeyDown={onKeyDown}>
       {compare && <CompareBar compare={compare} session={session} />}
+      {compare?.review?.applied && <AppliedNote compare={compare} />}
       <div className="toolbar-fit flex h-10 shrink-0 items-center gap-1 border-b border-hair bg-panel px-2">
-        {editOff ? (
+        {editOff || compare?.review ? (
           <>
             <SelectToolButton active={!noteMode} onSelect={() => setNoteMode(false)} />
             <div className="mx-1 h-5 w-px bg-hair" />
-            <EditDisabledChip />
+            {compare?.review ? <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-800">Reviewing — read-only</span> : <EditDisabledChip />}
           </>
         ) : (
           <>
@@ -217,12 +301,13 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
             },
             // Hovering a line of the slide in view marks its shapes there.
             onHover: (i, ids) => useCompare.getState().update(key, { hover: ids && i === useDecks.getState().sessions[key]?.slideIndex ? ids : null }),
+            review: review && compare.diff ? { decisions: review.decisions, decide, header: <ReviewHeader compare={compare} items={reviewItems(compare.diff)} onDecide={decide} /> } : undefined,
           } : undefined}
         />
         <Splitter width={railShown} min={120} max={420} onChange={(w) => setWidth('rail', w)} />
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="relative flex min-h-0 flex-1 flex-col">
-            {baseView ?? (
+            {baseView ?? reviewView ?? (
               <SlideEditor
                 session={session}
                 noteMode={noteMode}

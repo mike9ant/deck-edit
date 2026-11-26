@@ -62,6 +62,10 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, (await res.text()) || res.statusText)
     return { bytes: await res.arrayBuffer(), etag: res.headers.get('x-etag') ?? '' }
   },
+  /** Back up the project folder now (before overwriting a file); returns the snapshot's id. */
+  createSnapshot: (pid: string) => json<{ id: string }>('POST', `/projects/${pid}/snapshots`, {}),
+  /** Put one file back as it was in a snapshot. */
+  restoreSnapshotFile: (pid: string, snapshotId: string, path: string) => json('POST', `/projects/${pid}/snapshots/${encodeURIComponent(snapshotId)}/restore`, { path }),
   /** A file as it was in a snapshot (before an agent turn), with its version token then. */
   async readSnapshotFile(pid: string, snapshotId: string, path: string): Promise<{ bytes: ArrayBuffer; etag: string }> {
     const res = await fetch(`/api/projects/${pid}/snapshots/${encodeURIComponent(snapshotId)}/file?${q(path)}`, { cache: 'no-store' })

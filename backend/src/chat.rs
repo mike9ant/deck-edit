@@ -411,6 +411,8 @@ pub fn routes() -> Router<AppState> {
         .route("/chats/{cid}/turns/{tid}/revert", post(revert))
         .route("/chats/{cid}/turns/{tid}/unrevert", post(unrevert))
         .route("/projects/{id}/snapshots/{sid}/file", get(snapshot_file))
+        .route("/projects/{id}/snapshots", post(create_snapshot))
+        .route("/projects/{id}/snapshots/{sid}/restore", post(restore_snapshot_file))
 }
 
 async fn list(State(state): State<AppState>, AxPath(id): AxPath<String>) -> Json<Vec<ChatSummary>> {
@@ -869,7 +871,7 @@ pub fn system_prompt(state: &AppState) -> String {
 How the app works:
 - The user sees the deck live: whenever a .pptx/.pdf file in the folder changes on disk, the app reloads it within a second. So edit decks IN PLACE and save to the same path — the user watches your changes appear. Save after each logical change (e.g. per slide) so progress shows up while you work.
 - The user also edits slides themselves in the app (text, moving/resizing boxes and images, reordering/duplicating slides, dropping in images). Their edits are saved straight into the file before your turn; each message lists them. Re-open the file at the start of every turn and never overwrite their edits with stale state.
-- The user pins notes on slides for you — either at a point, or by drawing freehand (circling or marking an area; the note then gives the area in % of the slide and the shapes it covers: focus your change there). Open notes are listed in the context block. Use the `deck` MCP tools: `list_notes`, `resolve_note` (always resolve a note you've addressed, with a one-line summary of what you did), `add_note` (leave a question/remark for the user on a slide), `get_user_view` (what the user is looking at now), `screenshot_slide` (renders a slide exactly as the app shows it — use it to check your visual result after significant layout changes) and `compare_decks` (opens the app's comparison of two versions of a deck, changes marked on the slides — another .pptx, or the deck before this turn/chat — and returns what changed per slide; use it when the user asks to compare decks or what changed).
+- The user pins notes on slides for you — either at a point, or by drawing freehand (circling or marking an area; the note then gives the area in % of the slide and the shapes it covers: focus your change there). Open notes are listed in the context block. Use the `deck` MCP tools: `list_notes`, `resolve_note` (always resolve a note you've addressed, with a one-line summary of what you did), `add_note` (leave a question/remark for the user on a slide), `get_user_view` (what the user is looking at now), `screenshot_slide` (renders a slide exactly as the app shows it — use it to check your visual result after significant layout changes) `review_changes` (in an open comparison's review: list the changes and accept / reject them for the user, who then applies them) and `compare_decks` (opens the app's comparison of two versions of a deck, changes marked on the slides — another .pptx, or the deck before this turn/chat — and returns what changed per slide; use it when the user asks to compare decks or what changed).
 - Before every turn the app snapshots the folder; the user can revert your whole turn with one click. You don't need to make your own backups.
 
 Editing PowerPoint files:
@@ -1342,6 +1344,37 @@ async fn unrevert(
 #[derive(Deserialize)]
 struct PathQuery {
     path: String,
+}
+
+/// Back up the project folder now — before the app overwrites a file (applying a review). Stored
+/// like a turn's backup (`<data>/backups/<project>/<snapshot>`).
+async fn create_snapshot(State(state): State<AppState>, AxPath(id): AxPath<String>) -> Result<Json<Value>> {
+    let root = state.projects.folder(&id)?;
+    let (dd, pid) = (state.data_dir.clone(), id.clone());
+    let m = tokio::task::spawn_blocking(move || backups::create(&dd, &pid, &root))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
+    Ok(Json(json!({ "id": m.id })))
+}
+
+#[derive(Deserialize)]
+struct RestoreBody {
+    path: String,
+}
+
+/// Put one file back as it was in a snapshot (undoing an overwrite).
+async fn restore_snapshot_file(
+    State(state): State<AppState>,
+    AxPath((id, sid)): AxPath<(String, String)>,
+    Json(b): Json<RestoreBody>,
+) -> Result<Json<Value>> {
+    let root = state.projects.folder(&id)?;
+    let (dd, pid) = (state.data_dir.clone(), id.clone());
+    let only: std::collections::HashSet<String> = [b.path].into_iter().collect();
+    let safety = tokio::task::spawn_blocking(move || backups::restore(&dd, &pid, &sid, &root, Some(&only)))
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))??;
+    Ok(Json(json!({ "ok": true, "safetySnapshot": safety })))
 }
 
 /// A file as it was in a snapshot (the "before" of a turn).

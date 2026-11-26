@@ -10,14 +10,17 @@
  */
 
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ArrowRight, ArrowLeftRight, GitCompareArrows, History, Loader2, X } from 'lucide-react'
+import { ArrowRight, ArrowLeftRight, Check, GitCompareArrows, History, ListChecks, Loader2, X } from 'lucide-react'
 import clsx from 'clsx'
 import { MiddleEllipsis } from '../components/MiddleEllipsis'
 import type { PresentationData } from '@diceui/pptx-core'
 import { useDecks, type DeckSession } from './deckStore'
 import { SlideRender } from './SlideRender'
 import { diffDecks, lcsKeep, type Box, type ChangeKind, type Op, type ShapeDiff, type SlideDiff, type SummaryLine } from './deckDiff'
-import { liveInfo, liveSide, useCompare, type Compare, type SideInfo } from './compareStore'
+import { liveInfo, liveSide, reviewUnsaved, useCompare, type Compare, type SideInfo } from './compareStore'
+import { reviewItems, type Decision } from './review'
+import { ApplyDialog } from './ReviewView'
+import { askConfirm } from '../components/confirmDialog'
 
 export const KIND_COLORS: Record<ChangeKind | 'moved', { dot: string; box: string; tag: string; text: string }> = {
   added: { dot: 'bg-emerald-500', box: 'border-emerald-500 bg-emerald-400/15', tag: 'bg-emerald-600', text: 'text-emerald-800' },
@@ -85,6 +88,7 @@ function SideChip({ label, info, tone, backup }: { label: string; info: SideInfo
 /** The line over the deck while comparing: what is compared with what, the totals, and the controls. */
 export function CompareBar({ compare, session }: { compare: Compare; session: DeckSession }) {
   const { swap, close, setView, update } = useCompare()
+  const [applying, setApplying] = useState(false)
   const [now, setNow] = useState<SideInfo | null>(null)
   useEffect(() => {
     let live = true
@@ -112,7 +116,14 @@ export function CompareBar({ compare, session }: { compare: Compare; session: De
         <ArrowRight size={14} className="shrink-0 text-ink-3" />
         <SideChip label="To" info={now} tone="after" />
         {compare.base.kind === 'file' && (
-          <button className="icon-btn h-6 w-6 shrink-0" title="Swap — show the other file, compared with this one" onClick={() => swap(session.key)}>
+          <button
+            className="icon-btn h-6 w-6 shrink-0"
+            title="Swap — show the other file, compared with this one"
+            onClick={async () => {
+              if (reviewUnsaved(compare) && !(await askConfirm(`Swap the sides? Your ${reviewUnsaved(compare)} accepted change(s) haven't been applied and will be lost.`, 'Swap'))) return
+              swap(session.key)
+            }}
+          >
             <ArrowLeftRight size={13} />
           </button>
         )}
@@ -160,11 +171,38 @@ export function CompareBar({ compare, session }: { compare: Compare; session: De
             </button>
           ))}
         </div>
-        <button className="flex items-center gap-1 rounded border border-hair bg-white px-1.5 py-0.5 text-ink-2 hover:bg-paper" title="Stop comparing — back to the file" onClick={() => close(session.key)}>
+        {/* Review: go through To's changes, accept or not, and apply the accepted ones to From. */}
+        <button
+          className={clsx('flex items-center gap-1 rounded border px-1.5 py-0.5', compare.review ? 'border-violet-400 bg-violet-600 text-white' : 'border-hair bg-white text-ink-2 hover:bg-paper')}
+          aria-pressed={!!compare.review}
+          title={compare.review ? 'Leave the review' : 'Review the To deck\'s changes: accept or reject each, then apply the accepted ones to the From deck (or a new copy)'}
+          disabled={!compare.diff}
+          onClick={async () => {
+            if (!compare.review) return void useCompare.getState().startReview(session.key)
+            if (reviewUnsaved(compare) && !(await askConfirm(`Leave the review? Your ${reviewUnsaved(compare)} accepted change(s) haven't been applied and will be lost.`, 'Leave review'))) return
+            useCompare.getState().stopReview(session.key)
+          }}
+        >
+          <ListChecks size={12} /> Review
+        </button>
+        {compare.review && (
+          <button className="flex items-center gap-1 rounded border border-violet-400 bg-white px-1.5 py-0.5 font-medium text-violet-800 hover:bg-violet-50" title="Apply the accepted changes to the From deck (or a new copy)" onClick={() => setApplying(true)}>
+            <Check size={12} /> Apply…
+          </button>
+        )}
+        <button
+          className="flex items-center gap-1 rounded border border-hair bg-white px-1.5 py-0.5 text-ink-2 hover:bg-paper"
+          title="Stop comparing — back to the file"
+          onClick={async () => {
+            if (reviewUnsaved(compare) && !(await askConfirm(`Close the comparison? Your ${reviewUnsaved(compare)} accepted change(s) haven't been applied and will be lost.`, 'Close'))) return
+            close(session.key)
+          }}
+        >
           <X size={12} /> Close
         </button>
       </div>
       </div>
+      {applying && compare.review && <ApplyDialog compare={compare} items={compare.diff ? reviewItems(compare.diff) : []} onClose={() => setApplying(false)} />}
     </div>
   )
 }
@@ -234,15 +272,30 @@ function changedWordRects(el: Element, other: string): DOMRect[] {
 }
 
 /** On the slide a changed shape's tag says only what changed — the shape itself is right there. */
-type Rect = { x: number; y: number; w: number; h: number }
+type Tone = 'add' | 'del' | 'restored'
+type Rect = { x: number; y: number; w: number; h: number; tone?: Tone }
+/** Words to mark in one rendered shape: those not in `other` (the text on the other side). */
+type WordSpec = { id: string; other: string; tone: Tone }
+
+/** What to mark in each changed shape: the added words (side 'after') or the removed ones ('before'). */
+const wordSpecs = (shapes: ShapeDiff[], side: 'before' | 'after'): WordSpec[] =>
+  shapes.filter((s) => s.kind === 'changed' && s.text).map((s) =>
+    side === 'after' ? { id: s.id, other: s.text!.old, tone: 'add' as const } : { id: s.oldId ?? s.id, other: s.text!.new, tone: 'del' as const })
+
+const TONE: Record<Tone, string> = {
+  add: 'bg-emerald-400/45 mix-blend-multiply',
+  del: 'bg-red-400/45 mix-blend-multiply',
+  // Words brought back (a rejected change): light red, dashed — not struck, they're kept.
+  restored: 'bg-red-200/50 outline-dashed outline-1 outline-red-400',
+}
 
 /**
- * Where the changed words of `shapes` are in the slide rendered next to `host` (in the same
- * parent), relative to `host`: the added words (side 'after') or the removed ones ('before').
- * Worked out after the slide renders, and again once its fonts have loaded (text moves).
+ * Where the changed words are in the slide rendered next to `host` (in the same parent),
+ * relative to `host`. Worked out after the slide renders, and again once its fonts have loaded.
  */
-function useWordMarks(host: React.RefObject<HTMLElement | null>, shapes: ShapeDiff[], side: 'before' | 'after', scale: number): Rect[] {
+function useWordMarks(host: React.RefObject<HTMLElement | null>, specs: WordSpec[], scale: number): Rect[] {
   const [rects, setRects] = useState<Rect[]>([])
+  const sig = JSON.stringify(specs)
   useLayoutEffect(() => {
     let live = true
     const find = () => {
@@ -250,13 +303,11 @@ function useWordMarks(host: React.RefObject<HTMLElement | null>, shapes: ShapeDi
       if (!live || !el || !slide) return
       const box = el.getBoundingClientRect()
       const out: Rect[] = []
-      for (const s of shapes) {
-        if (s.kind !== 'changed' || !s.text) continue
-        const id = side === 'after' ? s.id : s.oldId ?? s.id
-        const node = slide.querySelector(`[data-pptx-node-id="${CSS.escape(id)}"]`)
+      for (const sp of specs) {
+        const node = slide.querySelector(`[data-pptx-node-id="${CSS.escape(sp.id)}"]`)
         if (!node) continue
-        for (const r of changedWordRects(node, side === 'after' ? s.text.old : s.text.new)) {
-          if (r.width && r.height) out.push({ x: r.left - box.left, y: r.top - box.top, w: r.width, h: r.height })
+        for (const r of changedWordRects(node, sp.other)) {
+          if (r.width && r.height) out.push({ x: r.left - box.left, y: r.top - box.top, w: r.width, h: r.height, tone: sp.tone })
         }
       }
       setRects(out)
@@ -269,7 +320,8 @@ function useWordMarks(host: React.RefObject<HTMLElement | null>, shapes: ShapeDi
       cancelAnimationFrame(raf)
       clearTimeout(t)
     }
-  }, [host, shapes, side, scale])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [host, sig, scale])
   return rects
 }
 
@@ -279,7 +331,7 @@ function useWordMarks(host: React.RefObject<HTMLElement | null>, shapes: ShapeDi
  */
 export function ThumbWordMarks({ shapes, width }: { shapes: ShapeDiff[]; width: number }) {
   const host = useRef<HTMLDivElement>(null)
-  const words = useWordMarks(host, shapes, 'after', width)
+  const words = useWordMarks(host, wordSpecs(shapes, 'after'), width)
   return (
     <div ref={host} className="pointer-events-none absolute inset-0" aria-hidden>
       {words.map((r, i) => (
@@ -346,15 +398,50 @@ function Arrow({ x1, y1, x2, y2 }: Seg) {
   )
 }
 
+/** A shape's tag while reviewing: what changed (accepted / undecided) or what's kept (rejected). */
+function reviewTagText(s: ShapeDiff, d: Decision | undefined): string {
+  if (d === 'reject') return s.kind === 'added' ? `${s.what === 'Text' ? 'text' : s.what.toLowerCase()} not added` : s.kind === 'removed' ? 'kept' : 'kept as before'
+  return tagText(s)
+}
+
+/** A tag on the review preview: its change, then ✓ (accept) and ✗ (reject) — clicked again, undecided. */
+function ReviewTag({ s, of, text, decision, at, onDecide }: { s: ShapeDiff; of: ShapeDiff[]; text: string; decision: Decision | undefined; at: { x: number; y: number }; onDecide(s: ShapeDiff[], d: Decision | null): void }) {
+  const btn = 'flex h-[13px] w-[13px] items-center justify-center rounded-sm border text-[9px] leading-none'
+  return (
+    <div
+      className={clsx(
+        'pointer-events-auto absolute flex max-w-[320px] items-center gap-1 whitespace-nowrap rounded border bg-white px-1 text-[10px] font-medium leading-[13px] shadow',
+        decision === 'accept' ? 'border-emerald-500 text-emerald-800' : decision === 'reject' ? 'border-ink-3/60 text-ink-3' : 'border-amber-500 text-ink-2',
+      )}
+      style={{ left: at.x, top: at.y }}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      {decision === 'accept' && <span className="font-bold text-emerald-600">✓</span>}
+      {decision === 'reject' && <span className="text-ink-3">↺</span>}
+      <span className="min-w-0 truncate">{decision !== 'reject' && s.ops && of.length === 1 ? <OpsText ops={s.ops} /> : text}</span>
+      <button className={clsx(btn, decision === 'accept' ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-hair text-emerald-700 hover:bg-emerald-50')} title={decision === 'accept' ? 'Accepted — click to undecide' : 'Accept this change'} onClick={() => onDecide(of, decision === 'accept' ? null : 'accept')}>✓</button>
+      <button className={clsx(btn, decision === 'reject' ? 'border-ink-3 bg-ink-3 text-white' : 'border-hair text-ink-3 hover:bg-paper')} title={decision === 'reject' ? 'Not accepted — click to undecide' : 'Don\'t accept this change (keep the From version)'} onClick={() => onDecide(of, decision === 'reject' ? null : 'reject')}>✗</button>
+    </div>
+  )
+}
+
 /**
  * The changed shapes of one slide, tinted, each with a short tag above it. `side` 'after' marks
  * the live slide (added and changed shapes, and dashed outlines where removed ones were); 'before'
  * marks the base version (removed and changed shapes where they were). Never takes the pointer.
  */
-export function DiffOverlay({ shapes, scale, side, focus, ratio = 1 }: { shapes: ShapeDiff[]; scale: number; side: 'before' | 'after'; focus?: string[] | null; ratio?: number }) {
-  // The changed words themselves, found in the rendered slide: added ones green (after), removed red (before).
+export function DiffOverlay({ shapes, scale, side, focus, ratio = 1, review }: {
+  shapes: ShapeDiff[]; scale: number; side: 'before' | 'after'; focus?: string[] | null; ratio?: number
+  /** Reviewing (on the preview: To with the rejected changes put back): each shape's decision, and a way to change it. */
+  review?: { decisionOf(s: ShapeDiff): Decision | undefined; onDecide(s: ShapeDiff[], d: Decision | null): void }
+}) {
+  const dec = (s: ShapeDiff) => review?.decisionOf(s)
+  // The changed words themselves, found in the rendered slide: added ones green (after), removed red
+  // (before); in a review, the words a rejected change brings back, light red.
   const host = useRef<HTMLDivElement>(null)
-  const words = useWordMarks(host, shapes, side, scale)
+  const words = useWordMarks(host, review
+    ? shapes.filter((s) => s.kind === 'changed' && s.text).map((s) => (dec(s) === 'reject' ? { id: s.id, other: s.text!.new, tone: 'restored' as const } : { id: s.id, other: s.text!.old, tone: 'add' as const }))
+    : wordSpecs(shapes, side), scale)
   /** Room above the slide in the view (px): tags of shapes at the slide's top go there rather than over the text. */
   const [above, setAbove] = useState(0)
   /** The slide's height in the view (px): tags stay on the slide. */
@@ -385,7 +472,7 @@ export function DiffOverlay({ shapes, scale, side, focus, ratio = 1 }: { shapes:
   const grouped = { added: many('added'), removed: many('removed') }
   // The move / resize arrows (drawn on the live slide), worked out once: drawn below, and kept clear of the tags.
   const arrows = side !== 'after' ? [] : shown.flatMap(({ s }) =>
-    s.kind === 'changed' && s.oldBox && s.details.some((d) => /^(moved|resized|moved, resized)$/.test(d))
+    s.kind === 'changed' && dec(s) !== 'reject' && s.oldBox && s.details.some((d) => /^(moved|resized|moved, resized)$/.test(d))
       ? moveArrows({ ...s.oldBox, x: s.oldBox.x * ratio, y: s.oldBox.y * ratio, w: s.oldBox.w * ratio, h: s.oldBox.h * ratio }, s.box, scale).map((seg, j) => ({ seg, key: `a${s.id}${j}` }))
       : [])
   // Each arrow's footprint (its line and head, at least the length drawn), padded a little.
@@ -402,12 +489,12 @@ export function DiffOverlay({ shapes, scale, side, focus, ratio = 1 }: { shapes:
     if (group) {
       if (s !== group[0].s) return null
       const top = Math.min(...group.map((x) => x.r.y)), left = Math.min(...group.map((x) => x.r.x))
-      return place(`${group.length} shapes ${s.kind}`, { x: left, y: top })
+      return place(`${group.length} shapes ${s.kind}`, { x: left, y: top }, group.map((g) => g.s))
     }
-    return place(tagText(s), r)
+    return place(review ? reviewTagText(s, dec(s)) : tagText(s), r, [s])
   })
-  function place(text: string, r: { x: number; y: number }) {
-    const w = Math.min(260, 10 + text.length * 5.6)
+  function place(text: string, r: { x: number; y: number }, of: ShapeDiff[]) {
+    const w = Math.min(260, 10 + text.length * 5.6) + (review ? 40 : 0)
     let y = r.y - 16 >= -above ? r.y - 16 : r.y + 2
     let x = Math.max(0, r.x)
     // Clear of the other tags (down a line) and of the arrows (just past one, sideways).
@@ -419,16 +506,12 @@ export function DiffOverlay({ shapes, scale, side, focus, ratio = 1 }: { shapes:
     }
     if (y > height - 14) return null
     placed.push({ x, y, w })
-    return { text, x, y }
+    return { text, x, y, of }
   }
   return (
     <div ref={host} className="pointer-events-none absolute inset-0 z-[5]" data-diff-overlay={side}>
       {words.map((r, i) => (
-        <div
-          key={`w${i}`}
-          className={clsx('absolute rounded-[2px] mix-blend-multiply', side === 'after' ? 'bg-emerald-400/45' : 'bg-red-400/45')}
-          style={{ left: r.x - 1, top: r.y, width: r.w + 2, height: r.h }}
-        />
+        <div key={`w${i}`} className={clsx('absolute rounded-[2px]', TONE[r.tone ?? 'add'])} style={{ left: r.x - 1, top: r.y, width: r.w + 2, height: r.h }} />
       ))}
       {side === 'after' && (
         // How shapes moved or were resized: arrows from where they were to where they are.
@@ -439,13 +522,20 @@ export function DiffOverlay({ shapes, scale, side, focus, ratio = 1 }: { shapes:
       {shown.map(({ s, r }, i) => (
         <div
           key={`b${s.kind}${s.id}${i}`}
-          className={clsx('absolute rounded-[2px] border', KIND_COLORS[s.kind].box, focus?.includes(s.id) && 'animate-pulse shadow-[0_0_0_3px_rgba(245,158,11,0.55)]')}
+          className={clsx(
+            'absolute rounded-[2px] border',
+            // Reviewed: accepted — a green outline; rejected — a quiet grey one (no tint either way).
+            dec(s) === 'accept' ? 'border-emerald-500' : dec(s) === 'reject' ? 'border-dashed border-ink-3/70' : KIND_COLORS[s.kind].box,
+            focus?.includes(s.id) && 'animate-pulse shadow-[0_0_0_3px_rgba(245,158,11,0.55)]',
+          )}
           style={{ left: r.x - 2, top: r.y - 2, width: r.w + 4, height: r.h + 4, rotate: r.rotation ? `${r.rotation}deg` : undefined }}
         />
       ))}
       {shown.map(({ s }, i) => (
         // A text change shows its words (white tag, so the red and green read); other changes a colored tag.
-        !tags[i] ? null : s.ops ? (
+        !tags[i] ? null : review ? (
+          <ReviewTag key={`t${s.kind}${s.id}${i}`} s={s} of={tags[i]!.of} text={tags[i]!.text} decision={dec(s)} at={tags[i]!} onDecide={review.onDecide} />
+        ) : s.ops ? (
           <div
             key={`t${s.kind}${s.id}${i}`}
             className="absolute max-w-[320px] truncate whitespace-nowrap rounded border border-amber-500 bg-white px-1 text-[10px] font-medium leading-[13px] text-ink-2 shadow"
@@ -487,7 +577,14 @@ export function SlideFrame({ mark }: { mark: SlideMark }) {
 }
 
 /** A slide of the base deck, read-only and fitted to the view, with its changes marked. */
-export function BaseSlideView({ deckKey, pres, slideId, banner, shapes, marks, frame }: { deckKey: string; pres: PresentationData; slideId: string | null; banner: React.ReactNode; shapes: ShapeDiff[]; marks: boolean; frame?: SlideMark }) {
+export function BaseSlideView({ deckKey, pres, slideId, banner, shapes, marks, frame, version = 0, overlay, tone = 'red' }: {
+  deckKey: string; pres: PresentationData; slideId: string | null; banner: React.ReactNode; shapes: ShapeDiff[]; marks: boolean; frame?: SlideMark
+  /** Bumped when `pres` is rebuilt (a review preview), so the slide renders again. */
+  version?: number
+  /** Drawn over the slide instead of the From-side marks (a review's marks). */
+  overlay?: (scale: number) => React.ReactNode
+  tone?: 'red' | 'violet'
+}) {
   const wrap = useRef<HTMLDivElement>(null)
   const [box, setBox] = useState({ w: 800, h: 500 })
   useLayoutEffect(() => {
@@ -502,12 +599,12 @@ export function BaseSlideView({ deckKey, pres, slideId, banner, shapes, marks, f
   const scale = Math.max(0.1, Math.min((box.w - 48) / pres.width, (box.h - 48) / pres.height))
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="shrink-0 border-b border-red-200 bg-red-50 px-3 py-1 text-xs text-red-900">{banner}</div>
+      <div className={clsx('shrink-0 border-b px-3 py-1 text-xs', tone === 'violet' ? 'border-violet-200 bg-violet-50 text-violet-950' : 'border-red-200 bg-red-50 text-red-900')}>{banner}</div>
       <div ref={wrap} className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-[#e9e8e4]">
         {slide ? (
           <div className="relative shadow-lg" style={{ width: pres.width * scale, height: pres.height * scale }}>
-            <SlideRender deckKey={`${deckKey}#base`} pres={pres} slide={slide} version={0} width={pres.width * scale} />
-            {marks && <DiffOverlay shapes={shapes} scale={scale} side="before" />}
+            <SlideRender deckKey={`${deckKey}#base`} pres={pres} slide={slide} version={version} width={pres.width * scale} />
+            {overlay ? overlay(scale) : marks && <DiffOverlay shapes={shapes} scale={scale} side="before" />}
             {frame && <SlideFrame mark={frame} />}
           </div>
         ) : (
@@ -519,24 +616,36 @@ export function BaseSlideView({ deckKey, pres, slideId, banner, shapes, marks, f
 }
 
 /** A summary line with its color dot. */
-function Line({ kind, text, ops, what, counts, lines, onPick, onHover }: { kind: ChangeKind | 'moved'; text: string; ops?: Op[]; what?: string; counts?: { added: number; removed: number }; lines: 1 | 2 | 3; onPick?(): void; onHover?(on: boolean): void }) {
+/** A summary line's review: its items' state, and deciding them. */
+export interface LineReview { state: 'accept' | 'reject' | 'mixed' | 'open'; decide(d: Decision | null): void }
+
+function Line({ kind, text, ops, what, counts, lines, onPick, onHover, review }: { kind: ChangeKind | 'moved'; text: string; ops?: Op[]; what?: string; counts?: { added: number; removed: number }; lines: 1 | 2 | 3; onPick?(): void; onHover?(on: boolean): void; review?: LineReview }) {
   const tip = ops ? `${what ? `${what}: ` : ''}${ops.map((o) => (o.k === 'del' ? `[−${o.t}]` : o.k === 'add' ? `[+${o.t}]` : o.t)).join(' ')}` : text
   // One line cut short, or two or three lines wrapped (when the row has room for them).
   const fit = lines === 3 ? 'line-clamp-3 break-words' : lines === 2 ? 'line-clamp-2 break-words' : 'truncate'
   return (
     <div
-      className={clsx('flex min-w-0 items-start gap-1 rounded-sm', onPick && 'cursor-pointer hover:bg-black/5')}
+      className={clsx('group/line relative flex min-w-0 items-start gap-1 rounded-sm', onPick && 'cursor-pointer hover:bg-black/5', review?.state === 'reject' && 'opacity-35')}
       title={tip}
       onClick={onPick && ((e) => { e.stopPropagation(); onPick() })}
       onPointerDown={onPick && ((e) => e.stopPropagation()) /* not a slide drag */}
       onMouseEnter={onHover && (() => onHover(true))}
       onMouseLeave={onHover && (() => onHover(false))}
     >
-      <span className={clsx('mt-[4px] h-1.5 w-1.5 shrink-0 rounded-full', KIND_COLORS[kind].dot)} />
+      {review?.state === 'accept' ? <span className="-mt-px w-1.5 shrink-0 text-[10px] font-bold leading-[13px] text-emerald-600">✓</span>
+        : review?.state === 'reject' ? <span className="-mt-px w-1.5 shrink-0 text-[10px] leading-[13px] text-ink-3">↺</span>
+          : <span className={clsx('mt-[4px] h-1.5 w-1.5 shrink-0 rounded-full', KIND_COLORS[kind].dot)} />}
       {ops ? (
         <span className={clsx(fit, 'min-w-0 text-ink-2')}>{what && <><span className={KIND_COLORS[kind].text}>{what}</span>{counts && <> (<WordCounts {...counts} />)</>}<span className={KIND_COLORS[kind].text}>:</span> </>}<OpsText ops={ops} /></span>
       ) : (
         <span className={clsx(fit, 'min-w-0', KIND_COLORS[kind].text)}>{text}</span>
+      )}
+      {review && (
+        // Accept / reject this line's change(s): on hover, over the line's end.
+        <span className="absolute right-0 top-0 hidden items-center gap-0.5 rounded bg-paper pl-1 group-hover/line:flex" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+          <button className={clsx('rounded px-1 text-[10px] font-bold leading-[13px]', review.state === 'accept' ? 'bg-emerald-600 text-white' : 'text-emerald-700 hover:bg-emerald-100')} title={review.state === 'accept' ? 'Accepted — click to undecide' : 'Accept'} onClick={() => review.decide(review.state === 'accept' ? null : 'accept')}>✓</button>
+          <button className={clsx('rounded px-1 text-[10px] leading-[13px]', review.state === 'reject' ? 'bg-ink-3 text-white' : 'text-ink-3 hover:bg-black/5')} title={review.state === 'reject' ? 'Not accepted — click to undecide' : 'Don\'t accept (keep the From version)'} onClick={() => review.decide(review.state === 'reject' ? null : 'reject')}>✗</button>
+        </span>
       )}
     </div>
   )
@@ -547,8 +656,9 @@ function Line({ kind, text, ops, what, counts, lines, onPick, onHover }: { kind:
  * show words (text, notes) get a second line when the row has room. Clicking a line goes to its
  * shape (`onPick`); hovering one marks it on the slide (`onHover`).
  */
-export function DiffSummary({ row, maxLines, onPick, onHover }: { row: SlideDiff | undefined; maxLines: number; onPick?(l: SummaryLine | null): void; onHover?(ids: string[] | null): void }) {
-  if (!row || row.status === 'same') return <div className="pt-0.5 text-[10px] text-ink-3/60">—</div>
+export function DiffSummary({ row, maxLines, onPick, onHover, reviewOf }: { row: SlideDiff | undefined; maxLines: number; onPick?(l: SummaryLine | null): void; onHover?(ids: string[] | null): void; reviewOf?(l: SummaryLine | { moved: true }): LineReview | undefined }) {
+  // Unchanged: nothing to review — said so while reviewing (a dash otherwise).
+  if (!row || row.status === 'same') return <div className="pt-0.5 text-[10px] text-ink-3/70">{row && reviewOf ? 'No changes' : '—'}</div>
   const lines: (SummaryLine | { kind: 'moved'; text: string })[] = [
     ...(row.movedFrom ? [{ kind: 'moved' as const, text: `Moved from ${row.movedFrom}` }] : []),
     ...row.lines,
@@ -578,6 +688,7 @@ export function DiffSummary({ row, maxLines, onPick, onHover }: { row: SlideDiff
             lines={height[i]}
             onPick={onPick && (() => onPick(line))}
             onHover={onHover && line?.ids?.length ? (on) => onHover(on ? line.ids! : null) : undefined}
+            review={reviewOf?.(line ?? { moved: true })}
           />
         )
       })}

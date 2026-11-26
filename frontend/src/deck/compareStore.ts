@@ -18,6 +18,8 @@ import { uniqueShapeIds } from './packageHygiene'
 import { readNotes } from './speakerNotes'
 import { readDeckComments } from './comments'
 import { describeDiff, fingerprintPictures, type DeckDiff, type DeckSide } from './deckDiff'
+import { mergeDecks } from './mergeDecks'
+import { applyPlan, previewPlan, reviewItems, rowKey, type Decision, type Decisions } from './review'
 import { useDecks } from './deckStore'
 import type { ServerEvent } from '../api/types'
 
@@ -55,6 +57,44 @@ export interface Compare {
   marks: boolean
   /** Shapes to emphasize on the slide (the summary line under the pointer). */
   hover: string[] | null
+  /** The base deck's bytes (for building a merged deck). */
+  baseBytes: ArrayBuffer | null
+  /** Reviewing the To deck's changes (accept / reject each), null when not. */
+  review: ReviewState | null
+}
+
+/**
+ * A review: which of the To deck's changes are accepted, the preview (To with the rejected
+ * changes put back), and what Apply did. See review.ts.
+ */
+export interface ReviewState {
+  decisions: Decisions
+  /** The To deck's bytes when the review started (the deck is read-only while reviewing). */
+  toBytes: ArrayBuffer
+  /** To with the rejected changes put back (null: none rejected — To as it is). */
+  preview: PresentationData | null
+  building: boolean
+  error: string | null
+  /** Apply's result: where it wrote, the backup taken first (overwrite), and the accepted changes it applied (acceptedSig). */
+  applied: { at: number; path: string; overwrote: boolean; snapshotId?: string; decisions: string; before?: Decisions } | null
+}
+
+/**
+ * What Apply would write: the accepted changes, in a fixed order (rejected and undecided ones
+ * aren't applied — From keeps its version — so they don't count).
+ */
+export const acceptedSig = (d: Decisions) => JSON.stringify(Object.keys(d).filter((k) => d[k] === 'accept').sort())
+
+/**
+ * Accepted changes not yet applied (closing would lose them): none when nothing is accepted, or
+ * when the accepted ones are exactly what Apply last wrote — however the decisions were toggled.
+ */
+export function reviewUnsaved(c: Compare | undefined): number {
+  const r = c?.review
+  if (!r) return 0
+  const sig = acceptedSig(r.decisions)
+  if (sig === (r.applied?.decisions ?? '[]')) return 0
+  return Object.values(r.decisions).filter((d) => d === 'accept').length || 1
 }
 
 interface CompareStore {
@@ -70,7 +110,27 @@ interface CompareStore {
   setView(key: string, view: Compare['view']): void
   showRemoved(key: string, oldSlide: string | null): void
   update(key: string, p: Partial<Compare>): void
+  /** Review the To deck's changes (the deck is read-only meanwhile). */
+  startReview(key: string): Promise<void>
+  stopReview(key: string): void
+  /** Accept / reject items (null: undecided again). */
+  decide(key: string, items: string[], d: Decision | null): void
+  /** Write From with the accepted changes: over the From file (after a backup) or as a new file. Returns the path written. */
+  applyReview(key: string, to: { overwrite: true } | { newPath: string }): Promise<string>
+  /** Put the From file back as it was before Apply overwrote it. */
+  undoApply(key: string): Promise<void>
 }
+
+/** Read a deck for display only (a review preview). */
+async function readForView(bytes: Uint8Array | ArrayBuffer): Promise<PresentationData> {
+  const files = await readPptx(bytes instanceof Uint8Array ? (bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer) : bytes, { keepSourcePackage: true })
+  for (const [path, xml] of files.slides) files.slides.set(path, uniqueShapeIds(xml))
+  const pres = buildPresentation(files)
+  materializeAllSlides(pres)
+  return pres
+}
+
+const previewTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 /** Modified time (ms) from a version token (`<mtime ns>-<size>`). */
 export function mtimeOf(etag: string): number | undefined {
@@ -125,6 +185,107 @@ export async function liveInfo(session: DeckSession): Promise<SideInfo> {
 }
 
 const baseName = (p: string) => p.split('/').pop() ?? p
+
+/** Reload the deck at `path` if it's open in a tab (after the app itself rewrote the file). */
+async function reloadOpenDeck(pid: string, path: string) {
+  const k = deckKey(pid, path)
+  if (useDecks.getState().sessions[k]) await useDecks.getState().reload(k, true)
+}
+
+/** Read the From file again (it was just written), so the comparison is worked out anew. */
+async function reloadBase(key: string) {
+  const st = useCompare.getState()
+  const c = st.compares[key]
+  if (!c || c.base.kind !== 'file') return
+  const { bytes, etag } = await api.readFile(c.pid, c.base.path)
+  const { side, by } = await readSide(bytes)
+  const now = useCompare.getState().compares[key]
+  if (!now) return
+  // A new base: the diff (DeckView) and then the preview are worked out again.
+  useCompare.getState().update(key, { baseSide: side, baseBytes: bytes, diff: null, baseInfo: { ...(now.baseInfo ?? { name: baseName(c.base.path) }), mtime: mtimeOf(etag), by } })
+  clearTimeout(previewTimers.get(key))
+  previewTimers.set(key, setTimeout(() => void rebuildPreview(key), 600))
+}
+
+/** Rebuild a review's preview: the To deck with its rejected changes put back. */
+async function rebuildPreview(key: string) {
+  const st = useCompare.getState()
+  const c = st.compares[key]
+  const session = useDecks.getState().sessions[key]
+  if (!c?.review || !c.diff || !c.baseSide || !c.baseBytes || !session?.pres) return
+  const decisions = c.review.decisions
+  if (!Object.values(decisions).includes('reject')) {
+    st.update(key, { review: { ...c.review, preview: null, building: false, error: null } })
+    return
+  }
+  st.update(key, { review: { ...c.review, building: true } })
+  try {
+    const plan = previewPlan(c.diff, decisions, c.baseSide.pres, session.pres)
+    const pres = await readForView(await mergeDecks(c.review.toBytes, c.baseBytes, plan))
+    const now = useCompare.getState().compares[key]?.review
+    // A later click started another build: that one wins.
+    if (!now || now.decisions !== decisions) return
+    useCompare.getState().update(key, { review: { ...now, preview: pres, building: false, error: null } })
+  } catch (e) {
+    const now = useCompare.getState().compares[key]?.review
+    if (now) useCompare.getState().update(key, { review: { ...now, building: false, error: (e as Error).message } })
+  }
+}
+
+/**
+ * The agent's `review_changes`: start the review, list its items, or decide some (by key, slide
+ * number, kind). Answers with text for the agent.
+ */
+export async function handleReviewRequest(ev: Extract<ServerEvent, { type: 'review' }>) {
+  const reply = (text: string) => api.compareResult(ev.requestId, text).catch(() => {})
+  if (useApp.getState().projectId !== ev.projectId) {
+    setTimeout(() => void reply('error: The app is showing another project.'), 5000)
+    return
+  }
+  const key = deckKey(ev.projectId, ev.deck)
+  const st = useCompare.getState()
+  let c = st.compares[key]
+  if (!c?.diff) return reply(`error: ${ev.deck} isn't open in a comparison — open one first (compare_decks).`)
+  if (ev.action === 'start' || (ev.action === 'decide' && !c.review)) {
+    await st.startReview(key)
+    c = useCompare.getState().compares[key]
+    if (ev.action === 'start') return reply('Review mode is on: the user sees each change with accept / reject, and the slide shows the result.')
+  }
+  const rows = c.diff!.rows
+  const items = reviewItems(c.diff!)
+  const slideOf = (row: string) => {
+    const r = rows.find((x) => rowKey(x) === row)
+    return r?.newIndex != null ? r.newIndex + 1 : r?.oldIndex != null ? r.oldIndex + 1 : 0
+  }
+  const decisions = c.review?.decisions ?? {}
+  if (ev.action === 'decide') {
+    const kinds = new Set(ev.kinds)
+    const slides = new Set(ev.slides)
+    const keys = new Set(ev.keys)
+    const chosen = items.filter((i) => (!keys.size || keys.has(i.key)) && (!slides.size || slides.has(slideOf(i.row))) && (!kinds.size || kinds.has(i.kind)))
+    if (!keys.size && !slides.size && !kinds.size) return reply('error: Say which changes: keys, slides and/or kinds.')
+    const d = ev.decision === 'clear' ? null : ev.decision === 'reject' ? 'reject' : 'accept'
+    useCompare.getState().decide(key, chosen.map((i) => i.key), d)
+    return reply(`${d ?? 'cleared'}: ${chosen.length} change${chosen.length === 1 ? '' : 's'}. The user applies them with Apply.`)
+  }
+  // list
+  const label = (i: (typeof items)[number]) => {
+    const r = rows.find((x) => rowKey(x) === i.row)!
+    if (i.kind === 'slide-added') return 'new slide'
+    if (i.kind === 'slide-removed') return 'slide removed'
+    if (i.kind === 'slide-moved') return `slide moved (was ${r.movedFrom})`
+    if (i.kind === 'notes') return 'speaker notes changed'
+    if (i.kind === 'props') return 'layout / background changed'
+    if (i.kind === 'comment') return `comment ${i.comment!.kind}`
+    const s = i.shape!
+    return `${s.what} ${s.kind}${s.details.length ? `: ${s.details.join(', ')}` : ''}${s.text ? ` — “${s.text.old.slice(0, 60)}” → “${s.text.new.slice(0, 60)}”` : ''}`
+  }
+  const lines = items.map((i) => `- slide ${slideOf(i.row)} · ${label(i)} · ${decisions[i.key] ?? 'open'} · key: ${i.key}`)
+  return reply(`${items.length} reviewable changes (${c.review ? 'review mode on' : 'review mode off — start it to let the user see your decisions'}):\n${lines.join('\n')}`.slice(0, 20000))
+}
+
+/** The review's items (for the agent and the bulk choices). */
+export const itemsOf = (c: Compare) => (c.diff ? reviewItems(c.diff) : [])
 
 /**
  * The comparison open on a deck, for the agent: what's compared with what, which view shows, and
@@ -201,7 +362,7 @@ export const useCompare = create<CompareStore>((set, get) => {
       set({
         compares: {
           ...get().compares,
-          [key]: { pid, path, base, loading: true, error: null, baseSide: null, baseInfo: null, diff: null, view: 'after', removed: null, marks: true, hover: null },
+          [key]: { pid, path, base, loading: true, error: null, baseSide: null, baseInfo: null, diff: null, view: 'after', removed: null, marks: true, hover: null, baseBytes: null, review: null },
         },
       })
       app.openFile(path)
@@ -211,7 +372,7 @@ export const useCompare = create<CompareStore>((set, get) => {
         const { side, by } = await readSide(bytes)
         const info: SideInfo = { name: baseName(base.path), detail: base.kind === 'snapshot' ? base.label : undefined, mtime: mtimeOf(etag), by }
         if (get().compares[key]?.base !== base) return // replaced meanwhile
-        patch(key, { loading: false, baseSide: side, baseInfo: info })
+        patch(key, { loading: false, baseSide: side, baseInfo: info, baseBytes: bytes })
       } catch (e) {
         patch(key, { loading: false, error: `Couldn't read ${baseName(base.path)}: ${(e as Error).message}` })
       }
@@ -245,6 +406,12 @@ export const useCompare = create<CompareStore>((set, get) => {
 
     setDiff(key, diff) {
       patch(key, { diff })
+      // A review with rejected changes: its preview follows the new comparison.
+      const r = get().compares[key]?.review
+      if (r && Object.values(r.decisions).includes('reject')) {
+        clearTimeout(previewTimers.get(key))
+        previewTimers.set(key, setTimeout(() => void rebuildPreview(key), 250))
+      }
     },
     setView(key, view) {
       patch(key, { view, removed: null })
@@ -254,6 +421,82 @@ export const useCompare = create<CompareStore>((set, get) => {
     },
     update(key, p) {
       patch(key, p)
+    },
+
+    async startReview(key) {
+      const c = get().compares[key]
+      if (!c || c.review) return
+      await useDecks.getState().saveNow(key)
+      const { bytes } = await api.readFile(c.pid, c.path)
+      patch(key, { view: 'after', removed: null, marks: true, review: { decisions: {}, toBytes: bytes, preview: null, building: false, error: null, applied: null } })
+    },
+
+    stopReview(key) {
+      patch(key, { review: null })
+    },
+
+    decide(key, items, d) {
+      const c = get().compares[key]
+      if (!c?.review) return
+      const decisions = { ...c.review.decisions }
+      for (const k of items) {
+        if (d) decisions[k] = d
+        else delete decisions[k]
+      }
+      patch(key, { review: { ...c.review, decisions } })
+      // The preview (rejected changes put back) is rebuilt once the clicking settles.
+      clearTimeout(previewTimers.get(key))
+      previewTimers.set(key, setTimeout(() => void rebuildPreview(key), 250))
+    },
+
+    async applyReview(key, to) {
+      const c = get().compares[key]
+      const session = useDecks.getState().sessions[key]
+      if (!c?.review || !c.diff || !c.baseSide || !c.baseBytes || !session?.pres) throw new Error('The comparison isn\'t ready.')
+      const plan = applyPlan(c.diff, c.review.decisions, c.baseSide.pres, session.pres)
+      const bytes = await mergeDecks(c.baseBytes, c.review.toBytes, plan)
+      let path: string
+      let snapshotId: string | undefined
+      if ('overwrite' in to) {
+        if (c.base.kind !== 'file') throw new Error('A backup can\'t be overwritten — save the result as a new deck.')
+        path = c.base.path
+        snapshotId = (await api.createSnapshot(c.pid)).id
+        await api.writeFile(c.pid, path, bytes)
+      } else {
+        path = to.newPath
+        await api.writeFile(c.pid, path, bytes)
+      }
+      // A tab with that file open reloads: the app ignores change notices for its own writes
+      // (they're normally its own saves), so it wouldn't on its own — and would show the old deck.
+      await reloadOpenDeck(c.pid, path)
+      const r = get().compares[key]?.review
+      if (r) {
+        if ('overwrite' in to) {
+          // From now has the accepted changes: they're no longer differences, so they leave the
+          // list (the comparison is worked out again against the updated file); the rest keep
+          // their decisions. Undo apply brings the old decisions back.
+          const kept = Object.fromEntries(Object.entries(r.decisions).filter(([, d]) => d !== 'accept')) as Decisions
+          patch(key, { review: { ...r, decisions: kept, preview: null, applied: { at: Date.now(), path, overwrote: true, snapshotId, decisions: acceptedSig(kept), before: r.decisions } } })
+          await reloadBase(key)
+        } else {
+          patch(key, { review: { ...r, applied: { at: Date.now(), path, overwrote: false, snapshotId, decisions: acceptedSig(r.decisions) } } })
+        }
+      }
+      void useApp.getState().refreshTree()
+      return path
+    },
+
+    async undoApply(key) {
+      const c = get().compares[key]
+      const a = c?.review?.applied
+      if (!c || !a?.snapshotId) return
+      await api.restoreSnapshotFile(c.pid, a.snapshotId, a.path)
+      await reloadOpenDeck(c.pid, a.path)
+      // The file is as it was: compare with it again, with the decisions made before Apply.
+      patch(key, { review: { ...c.review!, decisions: a.before ?? c.review!.decisions, preview: null, applied: null } })
+      if (a.overwrote) await reloadBase(key)
+      clearTimeout(previewTimers.get(key))
+      previewTimers.set(key, setTimeout(() => void rebuildPreview(key), 250))
     },
   }
 })

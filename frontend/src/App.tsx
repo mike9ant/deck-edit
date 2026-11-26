@@ -28,7 +28,8 @@ import { onServerEvent } from './api/events'
 import { handleDeckFileEvent } from './deck/deckStore'
 import { handlePdfFileEvent } from './pdf/pdfStore'
 import { handleScreenshot } from './screenshot'
-import { handleCompareRequest } from './deck/compareStore'
+import { handleCompareRequest, handleReviewRequest, reviewUnsaved, useCompare } from './deck/compareStore'
+import { askConfirm } from './components/confirmDialog'
 import { markChangedOnFileEvent } from './store/tabKeeping'
 
 export default function App() {
@@ -72,6 +73,9 @@ export default function App() {
             break
           case 'compare':
             void handleCompareRequest(ev)
+            break
+          case 'review':
+            void handleReviewRequest(ev)
             break
           case 'hello':
           case 'resync':
@@ -177,7 +181,13 @@ function DocTabs() {
             </button>
           )}
           {/* Its space is kept while hidden: showing it on hover mustn't shift the tab's other buttons. */}
-          <button className={clsx('shrink-0 text-ink-3 hover:text-ink group-hover:visible', t === activePath ? 'visible' : 'invisible')} title="Close" onClick={(e) => { e.stopPropagation(); closeTab(t) }}><X size={12} /></button>
+          <button className={clsx('shrink-0 text-ink-3 hover:text-ink group-hover:visible', t === activePath ? 'visible' : 'invisible')} title="Close" onClick={async (e) => {
+            e.stopPropagation()
+            // A review with decisions not yet applied would be lost: ask first.
+            const pending = projectId ? reviewUnsaved(useCompare.getState().compares[`${projectId}:${t}`]) : 0
+            if (pending && !(await askConfirm(`Close ${t.split('/').pop()}? Your ${pending} accepted change(s) haven't been applied and will be lost.`, 'Close'))) return
+            closeTab(t)
+          }}><X size={12} /></button>
         </div>
         )
       })}
