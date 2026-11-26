@@ -221,7 +221,9 @@ function agentMenuActions(projectId: string | null, showPanel: () => void): Reco
   const chat = useChat.getState()
   const active = chat.activeId ? chat.chats[chat.activeId] : undefined
   const running = active?.turns.find((t) => t.status === 'running')
-  const revertable = !running ? [...(active?.turns ?? [])].reverse().find((t) => t.changes.length > 0 && t.snapshotId && !t.reverted) : undefined
+  // The latest turn that changed files and isn't reverted — revertable while its backup is still kept.
+  const last = !running ? [...(active?.turns ?? [])].reverse().find((t) => t.changes.length > 0 && !t.reverted) : undefined
+  const revertable = last?.snapshotId && !last.backupGone ? last : undefined
   return {
     'new-chat': { enabled: !!projectId, run: () => { showPanel(); void useChat.getState().newChat() } },
     'stop-agent': { enabled: !!running, run: () => active && void useChat.getState().stop(active.id) },

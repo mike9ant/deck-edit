@@ -10,7 +10,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { BotMessageSquare, ChevronDown, ChevronRight, ListChecks, Loader2, StickyNote } from 'lucide-react'
 import clsx from 'clsx'
-import type { SlideData } from '@diceui/pptx-core'
+import type { PresentationData, SlideData } from '@diceui/pptx-core'
 import { useDecks, type DeckSession } from './deckStore'
 import { readNotesParagraphs, writeNotes } from './speakerNotes'
 import { buildParagraphs, notesText, parseParagraphs, renderNotes, styleRange, type StyleProp, type StyledParagraph } from './notesRich'
@@ -60,6 +60,16 @@ export function NotesPane({ session }: { session: DeckSession }) {
   const notesKey = notesRow ? `${rowKey(notesRow)}|notes` : ''
   const notesDecision = useCompare((s) => (notesKey ? s.compares[session.key]?.review?.decisions[notesKey] : undefined))
   const [showDiff, setShowDiff] = useState(true)
+  // Comparing, with a removed slide (only in From) in view: its notes, read-only, instead of these.
+  const removedId = useCompare((s) => s.compares[session.key]?.removed ?? null)
+  const basePres = useCompare((s) => s.compares[session.key]?.baseSide?.pres ?? null)
+  const removedNo = useCompare((s) => {
+    const c = s.compares[session.key]
+    const r = c?.removed ? c.diff?.rows.find((x) => x.oldSlide === c.removed) : undefined
+    return r?.oldIndex != null ? r.oldIndex + 1 : null
+  })
+  const removedSlide = removedId && basePres ? basePres.slides.find((x) => x.id === removedId) : undefined
+  const [removedText, setRemovedText] = useState('')
   // Find (⌘F) stepping to a match in this slide's notes: the panel opens (and shows the editable notes) to show it.
   const findInNotes = useFind((s) => {
     const m = s.deck === session.key ? s.matches[s.current] : undefined
@@ -322,7 +332,8 @@ export function NotesPane({ session }: { session: DeckSession }) {
     el.addEventListener('pointerup', up)
   }
 
-  const preview = text.trim() ? short(text, 110) : 'No speaker notes'
+  const shownText = removedSlide ? removedText : text
+  const preview = shownText.trim() ? short(shownText, 110) : 'No speaker notes'
 
   return (
     <div className="shrink-0 border-t border-hair bg-panel" data-notes-pane="">
@@ -331,11 +342,11 @@ export function NotesPane({ session }: { session: DeckSession }) {
         <button className="flex min-w-0 flex-1 items-center gap-1.5 px-3 py-1.5 text-left text-xs text-ink-2" onClick={toggle}>
           {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
           <span className="shrink-0 font-medium">Speaker notes</span>
-          <span className="shrink-0 text-ink-3">· slide {slideNo}</span>
+          <span className="shrink-0 text-ink-3">{removedSlide ? `· removed slide${removedNo ? ` (was slide ${removedNo})` : ''} — read-only` : `· slide ${slideNo}`}</span>
           {!open && <span className="ml-2 truncate text-ink-3">{preview}</span>}
           {saving && <Loader2 size={12} className="ml-auto shrink-0 animate-spin text-ink-3" />}
         </button>
-        {notesDiff && (
+        {notesDiff && !removedSlide && (
           reviewing ? (
             <span className="mr-2 flex shrink-0 items-center gap-1 text-[11px]">
               <button
@@ -357,12 +368,12 @@ export function NotesPane({ session }: { session: DeckSession }) {
             ><ListChecks size={11} /> Review</button>
           )
         )}
-        {open && notesDiff && (
+        {open && notesDiff && !removedSlide && (
           <span className="mr-2 shrink-0 text-[11px]" title="Words removed and added in these notes, compared with the other version">
             <WordCounts {...wordDiff(notesDiff.old, notesDiff.new)} />
           </span>
         )}
-        {open && notesDiff && (
+        {open && notesDiff && !removedSlide && (
           <div className="mr-1 flex shrink-0 overflow-hidden rounded border border-hair bg-white text-[11px]" role="group" aria-label="Speaker notes view">
             {([['diff', 'Changes'], ['edit', 'Edit']] as const).map(([v, label]) => (
               <button
@@ -376,7 +387,7 @@ export function NotesPane({ session }: { session: DeckSession }) {
             ))}
           </div>
         )}
-        {open && (
+        {open && !removedSlide && (
           <div className="flex shrink-0 items-center gap-0.5">
             <button
               className="tool-btn h-6"
@@ -411,7 +422,7 @@ export function NotesPane({ session }: { session: DeckSession }) {
       </div>
       {open && (
         <div className="relative bg-white" style={{ height }}>
-          {!text.trim() && <div className="pointer-events-none absolute left-4 top-2 text-[13px] text-ink-3">Click to add speaker notes</div>}
+          {!text.trim() && !removedSlide && <div className="pointer-events-none absolute left-4 top-2 text-[13px] text-ink-3">Click to add speaker notes</div>}
           <div
             ref={editor}
             data-notes-editor=""
@@ -425,9 +436,38 @@ export function NotesPane({ session }: { session: DeckSession }) {
             onKeyDown={onKeyDown}
             onPaste={onPaste}
           />
-          {notesDiff && showDiff && <NotesDiffView before={notesDiff.old} after={notesDiff.new} onEdit={() => setShowDiff(false)} decision={reviewing ? notesDecision : undefined} />}
+          {removedSlide && basePres && <RemovedSlideNotes pres={basePres} slide={removedSlide} onText={setRemovedText} />}
+          {notesDiff && showDiff && !removedSlide && <NotesDiffView before={notesDiff.old} after={notesDiff.new} onEdit={() => setShowDiff(false)} decision={reviewing ? notesDecision : undefined} />}
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * A removed slide's notes (it's only in the From deck), formatted like the editor's, read-only —
+ * over the editor, which stays mounted (and keeps any typing) underneath.
+ */
+function RemovedSlideNotes({ pres, slide, onText }: { pres: PresentationData; slide: SlideData; onText(t: string): void }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [empty, setEmpty] = useState(false)
+  useEffect(() => {
+    let live = true
+    void readNotesParagraphs(pres, slide).then((ps) => {
+      if (!live || !ref.current) return
+      renderNotes(ref.current, ps)
+      const t = notesText(ps)
+      setEmpty(!t.trim())
+      onText(t)
+    })
+    return () => {
+      live = false
+    }
+  }, [pres, slide]) // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div className="absolute inset-0 overflow-auto bg-red-50/40 px-4 py-2 text-[13px] leading-relaxed text-ink" data-notes-removed="">
+      <div ref={ref} className="whitespace-pre-wrap break-words" />
+      {empty && <div className="text-ink-3">No speaker notes</div>}
     </div>
   )
 }

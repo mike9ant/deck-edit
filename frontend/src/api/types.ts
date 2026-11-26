@@ -95,6 +95,10 @@ export interface Turn {
   snapshotId?: string
   changes: FileChange[]
   reverted?: string
+  /** The backup taken before this turn was pruned (only the latest are kept): no Revert / Compare. */
+  backupGone?: boolean
+  /** The backup a revert of this turn took was pruned: no Undo revert. */
+  revertBackupGone?: boolean
   /** Only present when the turn was billed to an API key (a subscription turn costs nothing extra). */
   costUsd?: number
   usage?: TokenUsage

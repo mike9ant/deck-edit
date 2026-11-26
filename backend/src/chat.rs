@@ -412,6 +412,7 @@ pub fn routes() -> Router<AppState> {
         .route("/chats/{cid}/turns/{tid}/unrevert", post(unrevert))
         .route("/projects/{id}/snapshots/{sid}/file", get(snapshot_file))
         .route("/projects/{id}/snapshots", post(create_snapshot))
+        .route("/projects/{id}/snapshots/{sid}", get(snapshot_exists))
         .route("/projects/{id}/snapshots/{sid}/restore", post(restore_snapshot_file))
 }
 
@@ -474,6 +475,16 @@ async fn get_chat(State(state): State<AppState>, AxPath(cid): AxPath<String>) ->
     let chat = state.chats.get(&cid).ok_or_else(|| AppError::NotFound("chat not found".into()))?;
     let mut v = serde_json::to_value(&chat)?;
     v["runningTurnId"] = json!(state.chats.running_turn(&cid));
+    // Turns whose backup was pruned (only the latest few are kept): their Revert / Compare can't work,
+    // nor Undo revert once the revert's own backup is gone — the transcript greys those out.
+    for (i, t) in chat.turns.iter().enumerate() {
+        if t.snapshot_id.as_deref().is_some_and(|s| !backups::exists(&state.data_dir, &chat.project_id, s)) {
+            v["turns"][i]["backupGone"] = json!(true);
+        }
+        if t.reverted.as_deref().is_some_and(|s| !backups::exists(&state.data_dir, &chat.project_id, s)) {
+            v["turns"][i]["revertBackupGone"] = json!(true);
+        }
+    }
     Ok(Json(v))
 }
 
@@ -1348,6 +1359,11 @@ struct PathQuery {
 
 /// Back up the project folder now — before the app overwrites a file (applying a review). Stored
 /// like a turn's backup (`<data>/backups/<project>/<snapshot>`).
+/// Whether a snapshot is still kept (e.g. the backup an applied review would be undone from).
+async fn snapshot_exists(State(state): State<AppState>, AxPath((id, sid)): AxPath<(String, String)>) -> Result<Json<Value>> {
+    Ok(Json(json!({ "exists": backups::exists(&state.data_dir, &id, &sid) })))
+}
+
 async fn create_snapshot(State(state): State<AppState>, AxPath(id): AxPath<String>) -> Result<Json<Value>> {
     let root = state.projects.folder(&id)?;
     let (dd, pid) = (state.data_dir.clone(), id.clone());

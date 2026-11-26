@@ -64,6 +64,7 @@ export const api = {
   },
   /** Back up the project folder now (before overwriting a file); returns the snapshot's id. */
   createSnapshot: (pid: string) => json<{ id: string }>('POST', `/projects/${pid}/snapshots`, {}),
+  snapshotExists: (pid: string, snapshotId: string) => json<{ exists: boolean }>('GET', `/projects/${pid}/snapshots/${encodeURIComponent(snapshotId)}`),
   /** Put one file back as it was in a snapshot. */
   restoreSnapshotFile: (pid: string, snapshotId: string, path: string) => json('POST', `/projects/${pid}/snapshots/${encodeURIComponent(snapshotId)}/restore`, { path }),
   /** A file as it was in a snapshot (before an agent turn), with its version token then. */

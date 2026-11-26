@@ -501,6 +501,9 @@ function contextSummary(t: Turn) {
  * One turn. Memoized: while the agent streams, only the turn being written re-renders (not every
  * earlier message's Markdown on every token). The chat object counts only through its turns.
  */
+/** Why a turn's Revert / Compare / Undo revert is greyed out (backend/src/backups.rs KEEP). */
+const BACKUP_GONE = 'The backup for this is no longer kept — only the project\'s 40 most recent backups are (one is taken before every agent turn)'
+
 const TurnView = memo(TurnViewInner, (a, b) => a.turn === b.turn && a.draft === b.draft && a.isLast === b.isLast && a.chat.id === b.chat.id && a.chat.turns === b.chat.turns)
 
 function TurnViewInner({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; draft?: string; isLast: boolean }) {
@@ -516,7 +519,7 @@ function TurnViewInner({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; 
   const ctx = contextSummary(turn)
   const later = chat.turns.slice(chat.turns.indexOf(turn) + 1).some((t) => t.changes.length && !t.reverted)
   // Decks this turn changed that can be compared with how they were before it (its backup).
-  const comparable = (c: FileChange) => !!turn.snapshotId && !turn.reverted && c.restorable && (c.kind === 'modified' || c.kind === 'moved') && /\.pptx$/i.test(c.path)
+  const comparable = (c: FileChange) => !!turn.snapshotId && !turn.reverted && !turn.backupGone && c.restorable && (c.kind === 'modified' || c.kind === 'moved') && /\.pptx$/i.test(c.path)
   const compareDeck = (c: FileChange) => {
     const pid = useApp.getState().projectId
     if (!pid || !turn.snapshotId) return
@@ -618,8 +621,9 @@ function TurnViewInner({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; 
             <span className="ml-auto" />
             {turn.snapshotId && !turn.reverted && (
               <button
-                className="flex items-center gap-1 rounded border border-hair bg-white px-2 py-0.5 hover:border-red-300 hover:text-red-700"
-                title="Restore these files to how they were before this turn (a backup of the current state is kept)"
+                className="flex items-center gap-1 rounded border border-hair bg-white px-2 py-0.5 enabled:hover:border-red-300 enabled:hover:text-red-700 disabled:cursor-default disabled:opacity-45"
+                disabled={turn.backupGone}
+                title={turn.backupGone ? BACKUP_GONE : 'Restore these files to how they were before this turn (a backup of the current state is kept)'}
                 onClick={async () => {
                   if (later && !(await askConfirm('Later turns also changed files. Reverting restores the folder to before this turn, undoing those too. Continue?', 'Revert'))) return
                   void revert(chat.id, turn.id)
@@ -629,7 +633,12 @@ function TurnViewInner({ chat, turn, draft, isLast }: { chat: Chat; turn: Turn; 
               </button>
             )}
             {turn.reverted && (
-              <button className="flex items-center gap-1 rounded border border-hair bg-white px-2 py-0.5 hover:bg-paper" onClick={() => void unrevert(chat.id, turn.id)}>
+              <button
+                className="flex items-center gap-1 rounded border border-hair bg-white px-2 py-0.5 enabled:hover:bg-paper disabled:cursor-default disabled:opacity-45"
+                disabled={turn.revertBackupGone}
+                title={turn.revertBackupGone ? BACKUP_GONE : 'Put the files back as they were before the revert'}
+                onClick={() => void unrevert(chat.id, turn.id)}
+              >
                 Undo revert
               </button>
             )}

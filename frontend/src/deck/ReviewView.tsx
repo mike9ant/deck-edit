@@ -10,6 +10,7 @@ import clsx from 'clsx'
 import { BULK, reviewCounts, type Decision, type ReviewItem } from './review'
 import { reviewUnsaved, useCompare, type Compare } from './compareStore'
 import { useApp } from '../store/appStore'
+import { api } from '../api/client'
 
 /** Above the thumbnails while reviewing: how far along, and choices for many items at once. */
 export function ReviewHeader({ compare, items, onDecide }: { compare: Compare; items: ReviewItem[]; onDecide(keys: string[], d: Decision | null): void }) {
@@ -144,11 +145,33 @@ export function ApplyDialog({ compare, items, onClose }: { compare: Compare; ite
   )
 }
 
+const BACKUP_GONE = "The backup taken before Apply is no longer kept — only the project's 40 most recent backups are (one is taken before every agent turn)"
+
+/** Whether a backup is still kept (asked now, every 30 s and when the window comes back into focus). */
+function useBackupKept(pid: string, snapshotId: string | undefined): boolean {
+  const [kept, setKept] = useState(true)
+  useEffect(() => {
+    if (!snapshotId) return
+    let live = true
+    const check = () => void api.snapshotExists(pid, snapshotId).then((r) => live && setKept(r.exists)).catch(() => {})
+    check()
+    const t = setInterval(check, 30_000)
+    window.addEventListener('focus', check)
+    return () => {
+      live = false
+      clearInterval(t)
+      window.removeEventListener('focus', check)
+    }
+  }, [pid, snapshotId])
+  return kept
+}
+
 /** After Apply: where it went, and the way back. */
 export function AppliedNote({ compare }: { compare: Compare }) {
   const a = compare.review?.applied
   const { undoApply, open } = useCompare()
   const [hidden, setHidden] = useState<number | null>(null)
+  const kept = useBackupKept(compare.pid, a?.snapshotId)
   if (!a || hidden === a.at) return null
   const name = a.path.split('/').pop()
   const stale = reviewUnsaved(compare) > 0
@@ -158,8 +181,8 @@ export function AppliedNote({ compare }: { compare: Compare }) {
       <button className="underline decoration-emerald-400 hover:text-emerald-700" onClick={() => useApp.getState().openFile(a.path)}>Open</button>
       {a.snapshotId && (
         <>
-          <button className="underline decoration-emerald-400 hover:text-emerald-700" onClick={() => void open(compare.pid, a.path, { kind: 'snapshot', snapshotId: a.snapshotId!, path: a.path, label: 'before the review was applied' })}>Compare with before</button>
-          <button className="flex items-center gap-0.5 underline decoration-emerald-400 hover:text-emerald-700" onClick={() => void undoApply(`${compare.pid}:${compare.path}`)}><RotateCcw size={11} /> Undo apply</button>
+          <button className="underline decoration-emerald-400 enabled:hover:text-emerald-700 disabled:cursor-default disabled:no-underline disabled:opacity-50" disabled={!kept} title={kept ? undefined : BACKUP_GONE} onClick={() => void open(compare.pid, a.path, { kind: 'snapshot', snapshotId: a.snapshotId!, path: a.path, label: 'before the review was applied' })}>Compare with before</button>
+          <button className="flex items-center gap-0.5 underline decoration-emerald-400 enabled:hover:text-emerald-700 disabled:cursor-default disabled:no-underline disabled:opacity-50" disabled={!kept} title={kept ? undefined : BACKUP_GONE} onClick={() => void undoApply(`${compare.pid}:${compare.path}`)}><RotateCcw size={11} /> Undo apply</button>
         </>
       )}
       <button className="icon-btn ml-auto h-5 w-5" title="Dismiss" onClick={() => setHidden(a.at)}><X size={12} /></button>

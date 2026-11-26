@@ -74,6 +74,11 @@ fn snapshot_dir(data_dir: &Path, project_id: &str, id: &str) -> PathBuf {
     snapshots_dir(data_dir, project_id).join(id)
 }
 
+/// Whether a snapshot is still kept (only the latest `KEEP` are; older ones are pruned).
+pub fn exists(data_dir: &Path, project_id: &str, id: &str) -> bool {
+    !id.contains('/') && !id.contains("..") && snapshot_dir(data_dir, project_id, id).join("manifest.json").is_file()
+}
+
 fn stat(path: &Path) -> Option<(u64, u128)> {
     let md = std::fs::metadata(path).ok()?;
     let mtime = md.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_nanos();
@@ -447,6 +452,21 @@ mod tests {
         restore(data.path(), "p", &m2.id, root.path(), None).unwrap();
         assert_eq!(std::fs::read(root.path().join("big.pptx")).unwrap().len(), 100_000);
         assert_eq!(std::fs::read(f(&m2, "big.pptx")).unwrap().len(), 100_000);
+    }
+
+    /// Only the latest `KEEP` snapshots stay; `exists` tells a pruned one (whose turn can then no
+    /// longer be reverted or compared) from a kept one, and refuses path-like ids.
+    #[test]
+    fn exists_reports_pruned_snapshots() {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.md"), b"x").unwrap();
+        let ids: Vec<String> = (0..=KEEP).map(|_| create(data.path(), "p", root.path()).unwrap().id).collect();
+        assert!(!exists(data.path(), "p", &ids[0]), "the oldest was pruned");
+        assert!(exists(data.path(), "p", &ids[1]));
+        assert!(exists(data.path(), "p", &ids[KEEP]));
+        assert!(!exists(data.path(), "p", "../p"));
+        assert!(!exists(data.path(), "other", &ids[KEEP]));
     }
 
     /// A turn that reorganizes the folder (moves files into new folders,
