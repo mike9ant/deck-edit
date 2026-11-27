@@ -10,7 +10,7 @@ import {
   AlignStartHorizontal, AlignStartVertical, ExternalLink, Eye, EyeOff, Loader2, MessageSquareText, Redo2, Type, Undo2, Sparkles, X,
 } from 'lucide-react'
 import clsx from 'clsx'
-import { useDecks, deckKey } from './deckStore'
+import { useDecks, deckKey, flushDeck, flushDeckSaves } from './deckStore'
 import { SlideRail } from './SlideRail'
 import { SlideEditor, type AlignKind, type FormatState, type NodeOrder, type SlideActions } from './SlideEditor'
 import { FormatTools } from './FormatTools'
@@ -143,7 +143,7 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
         },
       },
       'close-compare': { enabled: !!compare, run: async () => { if (await leaveReview('Close the comparison', 'Close')) useCompare.getState().close(key) } },
-      'open-powerpoint': { enabled: !!pres, run: () => void api.openExternal(pid, path) },
+      'open-powerpoint': { enabled: !!pres, run: () => void flushDeck(key).then(() => api.openExternal(pid, path)) },
     }
   })
 
@@ -308,8 +308,14 @@ export function DeckView({ pid, path }: { pid: string; path: string }) {
             {showResolved ? <Eye size={15} /> : <EyeOff size={15} />}
           </button>
           <div className="h-5 w-px bg-hair" />
-          {session.saving ? <span className="flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Saving…</span> : session.dirty ? <span>Unsaved…</span> : changed ? <span>Saved</span> : null}
-          <button className="tool-btn" title="Open this deck in PowerPoint" onClick={() => void api.openExternal(pid, path)}><ExternalLink size={14} /> <span className="tb-label">PowerPoint</span></button>
+          {session.saving ? <span className="flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> Saving…</span> : session.dirty ? (
+            <button
+              className="rounded px-1 hover:bg-paper hover:text-ink"
+              title="Save now (⌘S) — edits are written to the file about 10 seconds after the last one, or as soon as the agent needs them"
+              onClick={() => void flushDeckSaves()}
+            >Unsaved…</button>
+          ) : changed ? <span>Saved</span> : null}
+          <button className="tool-btn" title="Open this deck in PowerPoint" onClick={() => void flushDeck(key).then(() => api.openExternal(pid, path))}><ExternalLink size={14} /> <span className="tb-label">PowerPoint</span></button>
         </div>
       </div>
       {busy && (

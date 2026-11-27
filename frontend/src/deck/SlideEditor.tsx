@@ -16,10 +16,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { EditOperation, NodeOrder, SlideData, SlideNode } from '@diceui/pptx-core'
 import { copyNodes } from '@diceui/pptx-core'
-import { useDecks, type DeckSession } from './deckStore'
+import { registerPendingCommit, useDecks, type DeckSession } from './deckStore'
 import { ALIGN_LABEL, alignPositions, type AlignKind } from './align'
 import { SlideRender, type SlideRenderHandle } from './SlideRender'
 import { beginEditing, domPointAt, paragraphsText, readParagraphs, readParagraphsAt, textBodyChanged, textContainer, type TextPoint } from './textEdit'
+import { setTyping } from './liveTyping'
 import { nodeText, short } from './deckModel'
 import { getClipboard, setClipboard } from './clipboard'
 import { fitSize, prepareImage } from './images'
@@ -229,6 +230,18 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
     beginEditing(container, at)
     setEditing({ nodeId, container, before: nodeText(n) })
   }
+
+  // Comparing: the text box's change shows as you type (before it's committed on leaving the box).
+  useEffect(() => {
+    if (!editing) return
+    const { container, nodeId } = editing
+    const onInput = () => setTyping(key, { slide: slide.id, node: nodeId, text: paragraphsText(readParagraphs(container)) })
+    container.addEventListener('input', onInput)
+    return () => {
+      container.removeEventListener('input', onInput)
+      setTyping(key, null)
+    }
+  }, [editing, key, slide.id])
 
   // ── reading text (editing off): select and copy, nothing more ──────────
   const startReading = (nodeId: string, at?: { x: number; y: number }) => {
@@ -629,6 +642,25 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
         : `Slide ${slideNo}: edited the text of "${n ? label(n) : nodeId}": "${short(before, 80)}" → "${short(after, 120)}"`,
     )
   }, [editing, slide.id, slideNo])
+
+  // Saving (⌘S, or any flush) while typing in a box: the typing becomes an edit, and you stay in the
+  // box with the same selection (as the ⌘B toggle does, via `reselect`).
+  const commitKeepEditing = useRef<() => Promise<void>>(async () => {})
+  commitKeepEditing.current = async () => {
+    if (!editing || document.activeElement !== stageRef.current && !editing.container.contains(document.activeElement)) return
+    const { container, nodeId, before } = editing
+    if (!textBodyChanged(readParagraphs(container), before)) return
+    const sel = window.getSelection()
+    if (sel?.anchorNode && sel.focusNode && container.contains(sel.anchorNode) && container.contains(sel.focusNode)) {
+      const [a, b] = readParagraphsAt(container, [[sel.anchorNode, sel.anchorOffset], [sel.focusNode, sel.focusOffset]]).positions
+      if (a && b) {
+        const forward = a.p < b.p || (a.p === b.p && a.o <= b.o)
+        reselect.current = { nodeId, start: forward ? a : b, end: forward ? b : a }
+      }
+    }
+    await commitEditing()
+  }
+  useEffect(() => registerPendingCommit(() => commitKeepEditing.current()), [])
 
   // ── pointer interaction ─────────────────────────────────────────────────
   const snapTargets = (exclude: Set<string>) => {

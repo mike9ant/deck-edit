@@ -12,7 +12,8 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use tauri::menu::{AboutMetadataBuilder, CheckMenuItem, CheckMenuItemBuilder, Menu, MenuBuilder, MenuItem, MenuItemBuilder, SubmenuBuilder};
 use tauri::webview::NewWindowResponse;
@@ -76,6 +77,7 @@ const SETTINGS: PageItemSpec = ("settings", "Settings…", Some("CmdOrCtrl+Comma
 const FILE: &[PageItemSpec] = &[
     ("new-project", "New Project…", Some("CmdOrCtrl+Shift+N"), false),
     ("-", "", None, false),
+    ("save", "Save", Some("CmdOrCtrl+S"), false),
     ("close-tab", "Close Tab", Some("CmdOrCtrl+W"), false),
 ];
 const FILE_END: &[PageItemSpec] = &[("-", "", None, false), ("reveal", "Reveal in Finder", Some("Alt+CmdOrCtrl+R"), false)];
@@ -267,12 +269,62 @@ fn app_menu(app: &tauri::AppHandle<Wry>) -> tauri::Result<Menu<Wry>> {
     MenuBuilder::new(app).items(&[&app_menu, &file, &edit, &view, &deck, &agent, &window]).build()
 }
 
+/// The page has written its decks (or had nothing to write) since the window / app was asked to close.
+static FLUSHED: AtomicBool = AtomicBool::new(false);
+/// A flush is under way (a second close / quit request meanwhile just waits for it).
+static FLUSHING: AtomicBool = AtomicBool::new(false);
+
+/// Before the window closes or the app quits: the page writes the decks' unsaved edits (they're
+/// written ~10 s after an edit otherwise — `window.__deckeditFlush`, frontend deckStore.ts). Waits
+/// for it up to 5 s, then `then()` (closes / quits again, this time letting it happen).
+fn flush_page_then(window: tauri::WebviewWindow<Wry>, then: impl FnOnce() + Send + 'static) {
+    if FLUSHING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let _ = window.eval("window.__deckeditFlushed = false; Promise.resolve(window.__deckeditFlush?.()).finally(() => { window.__deckeditFlushed = true })");
+    std::thread::spawn(move || {
+        let done = Arc::new(AtomicBool::new(false));
+        for _ in 0..50 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            if done.load(Ordering::SeqCst) {
+                break;
+            }
+            let d = done.clone();
+            let asked = window.eval_with_callback("window.__deckeditFlushed !== false", move |r| {
+                if r.trim() == "true" {
+                    d.store(true, Ordering::SeqCst);
+                }
+            });
+            if asked.is_err() {
+                break; // the page is gone
+            }
+        }
+        FLUSHED.store(true, Ordering::SeqCst);
+        then();
+    });
+}
+
 fn main() {
     // The login shell's PATH (an app opened from the Finder gets a bare one): see login_path.rs.
     deck_edit::login_path::adopt_at_startup();
     tauri::Builder::default()
         .menu(app_menu)
         .on_menu_event(on_menu)
+        .on_window_event(|window, event| {
+            // Closing the window: the decks' edits are written first.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if FLUSHED.load(Ordering::SeqCst) {
+                    return;
+                }
+                api.prevent_close();
+                if let Some(w) = window.app_handle().get_webview_window(window.label()) {
+                    let again = w.clone();
+                    flush_page_then(w, move || {
+                        let _ = again.close();
+                    });
+                }
+            }
+        })
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_focus();
@@ -330,6 +382,20 @@ fn main() {
             });
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running the Deck Edit app");
+        .build(tauri::generate_context!())
+        .expect("error while building the Deck Edit app")
+        .run(|app, event| {
+            // Quitting (⌘Q): the decks' edits are written first.
+            if let tauri::RunEvent::ExitRequested { code: None, api, .. } = &event {
+                if FLUSHED.load(Ordering::SeqCst) {
+                    return;
+                }
+                api.prevent_exit();
+                let app = app.clone();
+                match app.get_webview_window("main") {
+                    Some(w) => flush_page_then(w, move || app.exit(0)),
+                    None => app.exit(0),
+                }
+            }
+        });
 }

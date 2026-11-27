@@ -15,12 +15,12 @@ import { useApp } from '../store/appStore'
 import { deckKey, type DeckSession } from './deckStore'
 import { slideIdsFromXml } from './deckModel'
 import { uniqueShapeIds } from './packageHygiene'
-import { readNotes } from './speakerNotes'
+import { readNotes, readNotesCached } from './speakerNotes'
 import { readDeckComments } from './comments'
 import { describeDiff, fingerprintPictures, type DeckDiff, type DeckSide } from './deckDiff'
 import { mergeDecks } from './mergeDecks'
 import { applyPlan, previewPlan, reviewItems, rowKey, type Decision, type Decisions } from './review'
-import { useDecks } from './deckStore'
+import { flushDeckSaves, useDecks } from './deckStore'
 import type { ServerEvent } from '../api/types'
 
 /** The version a deck is compared with. */
@@ -145,10 +145,10 @@ export function savedBy(coreXml: string | undefined): string | undefined {
   return get('cp:lastModifiedBy') || get('dc:creator') || undefined
 }
 
-/** Speaker notes of every slide, by slide part. */
-async function notesOf(pres: PresentationData): Promise<Map<string, string>> {
+/** Speaker notes of every slide, by slide part (`cached`: kept until a slide's notes are written). */
+async function notesOf(pres: PresentationData, cached = false): Promise<Map<string, string>> {
   const out = new Map<string, string>()
-  for (const s of pres.slides) out.set(s.id, await readNotes(pres, s).catch(() => ''))
+  for (const s of pres.slides) out.set(s.id, await (cached ? readNotesCached : readNotes)(pres, s).catch(() => ''))
   return out
 }
 
@@ -165,14 +165,17 @@ async function readSide(bytes: ArrayBuffer): Promise<{ side: DeckSide; by?: stri
   return { side: { pres, sldIds, notes: await notesOf(pres), comments: await readDeckComments(pres) }, by }
 }
 
-/** The live deck as the diff reads it (ids and notes as they are now, edits included). */
-export async function liveSide(session: DeckSession): Promise<DeckSide> {
+/**
+ * The live deck as the diff reads it (ids and notes as they are now, edits included). `cached`:
+ * notes read before and not written since are reused (a quick re-diff while editing).
+ */
+export async function liveSide(session: DeckSession, cached = false): Promise<DeckSide> {
   const pres = session.pres!
   materializeAllSlides(pres)
   await fingerprintPictures(pres) // (only new pictures: the rest are remembered)
   const pkg = pres.sourcePackage
   const sldIds = pkg ? slideIdsFromXml(await pkg.readText('ppt/presentation.xml'), await pkg.readText('ppt/_rels/presentation.xml.rels')) : session.sldIds
-  return { pres, sldIds, notes: await notesOf(pres), comments: await readDeckComments(pres) }
+  return { pres, sldIds, notes: await notesOf(pres, cached), comments: await readDeckComments(pres) }
 }
 
 /** What the compare bar says about the live deck. */
@@ -379,6 +382,7 @@ export const useCompare = create<CompareStore>((set, get) => {
     },
 
     async openFiles(pid, a, b) {
+      await flushDeckSaves() // (both are read from disk: an open deck's edits first)
       // The newer file is the one shown ("after"); recent changes read best that way round.
       let shown = b, other = a
       try {

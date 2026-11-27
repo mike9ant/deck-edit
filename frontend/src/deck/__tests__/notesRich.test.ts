@@ -129,4 +129,22 @@ describe('formatted speaker notes', () => {
     expect(out[0].getElementsByTagNameNS(A, 't')[0].textContent).toBe('Fresh note')
     expect(attr(out[0], 'r/rPr', 'sz')).toBe('1400')
   })
+
+  it('⌘B on typed text (no run of its own) bolds only the selection, not the text after it', () => {
+    const base = body(`<a:p><a:r><a:rPr/><a:t>Semiconductors were fabricated and te</a:t></a:r></a:p>`)
+    // As the editor reads it: the original run, then text typed after it (outside any run).
+    const edited: StyledParagraph[] = [{ sourceParagraphIndex: 0, runs: [
+      { text: 'Semiconductors were fabricated and te', sourceRun: [0, 0] },
+      { text: 'sted; now billions of transistors are verified.' },
+    ] }]
+    const start = 'Semiconductors were fabricated and te'.length
+    styleRange(base, edited, { p: 0, o: start }, { p: 0, o: start + 'sted; now billions '.length }, 'b')
+    const [p] = parseParagraphs(buildParagraphs(base, edited))
+    const runs = [...p.children].filter((c) => c.localName === 'r').map((r) => [r.textContent, r.firstElementChild?.getAttribute('b')])
+    expect(runs).toEqual([
+      ['Semiconductors were fabricated and te', null],
+      ['sted; now billions ', '1'],
+      ['of transistors are verified.', null],
+    ])
+  })
 })

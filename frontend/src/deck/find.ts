@@ -100,7 +100,7 @@ export function rangesIn(root: Element, re: RegExp): Range[] {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
   while (walker.nextNode()) {
     const node = walker.currentNode as Text
-    if (node.parentElement?.closest('[data-pptx-bullet]')) continue
+    if (node.parentElement?.closest('[data-pptx-bullet], [data-text-ghost]')) continue
     const p = node.parentElement?.closest('[data-pptx-p], p, div') ?? null
     if (p !== para && text) text += '\n'
     para = p

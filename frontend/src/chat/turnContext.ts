@@ -6,7 +6,7 @@
 
 import type { TurnContext } from '../api/types'
 import { docKind, useApp } from '../store/appStore'
-import { deckKey, useDecks } from '../deck/deckStore'
+import { deckKey, flushDeckSaves, useDecks } from '../deck/deckStore'
 import { nodeText } from '../deck/deckModel'
 import { compareForAgent } from '../deck/compareStore'
 import { pdfKey, usePdfs } from '../pdf/pdfStore'
@@ -16,8 +16,9 @@ import { flushTextSaves, textEditLines } from '../viewers/textEdits'
 export async function buildTurnContext(consume: boolean): Promise<TurnContext> {
   const { projectId } = useApp.getState()
   if (!projectId) return {}
-  // Text edits: write pending autosaves first so the agent reads the latest.
+  // Write pending edits first (text files; decks, with typing in progress) so the agent reads the latest.
   await flushTextSaves()
+  await flushDeckSaves()
   const ctx = await viewContext(projectId, consume)
   const { tabs, activePath } = useApp.getState()
   const others = tabs.filter((t) => t !== activePath)

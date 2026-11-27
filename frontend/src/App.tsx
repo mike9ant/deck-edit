@@ -25,13 +25,14 @@ import { useNotes } from './store/notesStore'
 import { useAgent } from './store/agentStore'
 import { useFileVersions } from './store/fileVersions'
 import { onServerEvent } from './api/events'
-import { handleDeckFileEvent } from './deck/deckStore'
+import { decksUnsaved, flushDeck, flushDeckSaves, handleDeckFileEvent } from './deck/deckStore'
 import { handlePdfFileEvent } from './pdf/pdfStore'
 import { handleScreenshot } from './screenshot'
 import { handleCompareRequest, handleReviewRequest, reviewUnsaved, useCompare } from './deck/compareStore'
 import { askConfirm } from './components/confirmDialog'
 import { markChangedOnFileEvent } from './store/tabKeeping'
 import { useMenuActions, type MenuAction } from './desktopMenu'
+import { flushTextSaves } from './viewers/textEdits'
 import { api } from './api/client'
 
 export default function App() {
@@ -41,6 +42,7 @@ export default function App() {
 
   // The desktop app's menu bar: File and View items about the window's panels and the open file.
   useMenuActions(() => ({
+    save: { enabled: !!projectId, run: saveEverything },
     'close-tab': { enabled: !!(projectId && activePath), run: () => projectId && activePath && void closeTabAsking(projectId, activePath) },
     reveal: { enabled: !!projectId, run: () => projectId && void api.reveal(projectId, activePath ?? '') },
     'toggle-files': { enabled: !!projectId, checked: !!projectId && !filesCollapsed, run: () => setFilesCollapsed(!filesCollapsed) },
@@ -102,6 +104,37 @@ export default function App() {
       }),
     [],
   )
+
+  // ⌘S (and File → Save): write everything with unsaved edits now — decks (typing in progress too)
+  // and text files. (Otherwise ~10 s after the last edit, or when the file is needed.)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== 's') return
+      e.preventDefault()
+      saveEverything()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+
+  // Leaving the app (another app, the window hidden or closed): write the decks' edits now.
+  useEffect(() => {
+    const flush = () => void flushDeckSaves()
+    const onHidden = () => document.visibilityState === 'hidden' && flush()
+    const onUnload = (e: BeforeUnloadEvent) => {
+      if (!decksUnsaved()) return
+      flush()
+      e.preventDefault() // a browser asks before leaving (the desktop app waits for the flush itself)
+    }
+    window.addEventListener('blur', flush)
+    document.addEventListener('visibilitychange', onHidden)
+    window.addEventListener('beforeunload', onUnload)
+    return () => {
+      window.removeEventListener('blur', flush)
+      document.removeEventListener('visibilitychange', onHidden)
+      window.removeEventListener('beforeunload', onUnload)
+    }
+  }, [])
 
   // While a mouse drag is selecting text, floating note badges and buttons ignore the pointer: one
   // passed over mid-drag would pull the selection to it (they come after the text in the page).
@@ -243,11 +276,18 @@ function agentMenuActions(projectId: string | null, showPanel: () => void): Reco
   }
 }
 
+/** Write every deck with unsaved edits (and pending text-file saves) now. */
+function saveEverything() {
+  void flushTextSaves()
+  void flushDeckSaves()
+}
+
 /** Close a tab — asking first when a review in it has accepted changes not yet applied (they'd be lost). */
 async function closeTabAsking(pid: string, path: string) {
   const pending = reviewUnsaved(useCompare.getState().compares[`${pid}:${path}`])
   if (pending && !(await askConfirm(`Close ${path.split('/').pop()}? Your ${pending} accepted change(s) haven't been applied and will be lost.`, 'Close'))) return
   useApp.getState().closeTab(path)
+  if (docKind(path) === 'pptx') void flushDeck(`${pid}:${path}`)
 }
 
 function DocArea({ pid }: { pid: string }) {

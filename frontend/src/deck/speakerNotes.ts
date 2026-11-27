@@ -123,6 +123,33 @@ export async function readNotes(pres: PresentationData, slide: SlideData): Promi
   return (await readNotesParagraphs(pres, slide)).map(paragraphText).join('\n')
 }
 
+/**
+ * Per deck, per slide: how many times its notes were written here (writeNotes and its undo).
+ * Reading a part means unpacking it from the deck's zip, so the notes text is kept until then.
+ */
+const notesWrites = new WeakMap<PresentationData, Map<string, number>>()
+const notesTexts = new WeakMap<PresentationData, Map<string, { writes: number; text: string }>>()
+function bumpNotes(pres: PresentationData, slideId: string) {
+  let m = notesWrites.get(pres)
+  if (!m) notesWrites.set(pres, (m = new Map()))
+  m.set(slideId, (m.get(slideId) ?? 0) + 1)
+}
+
+/**
+ * readNotes, remembered until the slide's notes are written again in this deck (a deck reloaded
+ * from disk is a new deck: read afresh). For the comparison, which reads every slide's notes.
+ */
+export async function readNotesCached(pres: PresentationData, slide: SlideData): Promise<string> {
+  const writes = notesWrites.get(pres)?.get(slide.id) ?? 0
+  let m = notesTexts.get(pres)
+  if (!m) notesTexts.set(pres, (m = new Map()))
+  const hit = m.get(slide.id)
+  if (hit && hit.writes === writes) return hit.text
+  const text = await readNotes(pres, slide)
+  m.set(slide.id, { writes, text })
+  return text
+}
+
 /** Notes content to write: plain text (one paragraph per line), or `a:p` elements serialized as XML. */
 export type NotesContent = string | { paragraphs: string[] }
 
@@ -179,6 +206,18 @@ function newNotesXml(content: NotesContent): string {
  * notesRich.ts). Returns an undo function that restores every part it touched exactly.
  */
 export async function writeNotes(pres: PresentationData, slide: SlideData, content: NotesContent): Promise<() => void> {
+  try {
+    const undo = await writeNotesParts(pres, slide, content)
+    return () => {
+      undo()
+      bumpNotes(pres, slide.id)
+    }
+  } finally {
+    bumpNotes(pres, slide.id)
+  }
+}
+
+async function writeNotesParts(pres: PresentationData, slide: SlideData, content: NotesContent): Promise<() => void> {
   const pkg = pkgOf(pres)
   const part = await notesPart(pres, slide)
   const restore: (() => void)[] = []

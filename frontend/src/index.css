@@ -130,6 +130,11 @@ body { margin: 0; -webkit-font-smoothing: antialiased; }
   background-color: rgb(251 146 60);
 }
 
+/* Speaker notes typed in the Changes view (deck/NotesPane.tsx): words that are new vs the other version. */
+::highlight(notes-added) {
+  background-color: rgb(167 243 208 / 0.8);
+}
+
 /* A slide's text selection kept visible while a toolbar field (the font size) has the focus. */
 ::highlight(held-selection) {
   background-color: rgb(61 99 221 / 0.28);

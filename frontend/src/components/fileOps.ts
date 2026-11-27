@@ -8,7 +8,7 @@
 
 import { api } from '../api/client'
 import { useApp } from '../store/appStore'
-import { useDecks } from '../deck/deckStore'
+import { flushDeck, useDecks } from '../deck/deckStore'
 import { flushTextSaves } from '../viewers/textEdits'
 import { agentBusy } from '../chat/sendToAgent'
 
@@ -20,7 +20,7 @@ async function settle(pid: string, paths: string[]) {
   const decks = useDecks.getState()
   for (const s of Object.values(decks.sessions)) {
     if (s.pid !== pid || !under(s.path, paths)) continue
-    await decks.saveNow(s.key)
+    await flushDeck(s.key)
     decks.close(s.key)
   }
 }

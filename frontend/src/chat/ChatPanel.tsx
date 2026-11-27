@@ -24,7 +24,7 @@ import { useChat } from '../store/chatStore'
 import { useApp } from '../store/appStore'
 import { notePlaceLabel, noteNumber, notesForChat, otherChatsNotes, useNotes } from '../store/notesStore'
 import { useAgent } from '../store/agentStore'
-import { useDecks } from '../deck/deckStore'
+import { flushDeckSaves, useDecks } from '../deck/deckStore'
 import { usePdfs } from '../pdf/pdfStore'
 import type { CacheCheck, Chat, FileChange, Note, Posture, Turn, TurnEvent } from '../api/types'
 import { useCompare } from '../deck/compareStore'
@@ -1137,6 +1137,8 @@ function ComposerInner({ chat }: { chat: Chat }) {
         placeholder={running ? 'The agent is working…' : 'Ask the agent to change the deck…  (Enter to send, Shift+Enter for a new line)'}
         value={text}
         onChange={(e) => setText(e.target.value)}
+        // About to write to the agent: get the decks' edits to disk (the agent reads the files).
+        onFocus={() => void flushDeckSaves()}
         onPaste={(e) => {
           // Pasted screenshots/images attach to the message (text pastes normally).
           const files = Array.from(e.clipboardData?.files ?? [])

@@ -238,6 +238,9 @@ export function buildParagraphs(base: Element[], edited: StyledParagraph[]): str
         continue
       }
       const rPr = tpl ? asRPr(tpl) : el('rPr')
+      // Text typed outside any run takes its neighbour's formatting as it was — not a toggle just
+      // applied to that neighbour (⌘B on a selection would run on to the end of the paragraph).
+      const plain = rPr.cloneNode(true) as Element
       for (const [prop, on] of Object.entries(run.set ?? {})) rPr.setAttribute(prop, prop === 'u' ? (on ? 'sng' : 'none') : on ? '1' : '0')
       const r = el('r')
       r.appendChild(rPr)
@@ -245,7 +248,7 @@ export function buildParagraphs(base: Element[], edited: StyledParagraph[]): str
       t.textContent = run.text
       r.appendChild(t)
       p.appendChild(r)
-      last = rPr
+      last = plain
     }
     const end = child(src, 'endParaRPr')
     if (end) p.appendChild(doc.importNode(end, true))

@@ -123,7 +123,12 @@ export const deckKey = (pid: string, path: string) => `${pid}:${path}`
 
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const fontHandles = new Map<string, ReturnType<typeof loadEmbeddedFonts>>()
-const SAVE_DEBOUNCE_MS = 600
+/**
+ * Edits are written to the file this long after the last one — and at once whenever the file must be
+ * current: before an agent turn, when the chat box gets the focus, when the app loses it, before
+ * opening the deck elsewhere or comparing with it, moving it, closing it (`flushDeckSaves`).
+ */
+const SAVE_DEBOUNCE_MS = 10_000
 
 /** Set by the chat store: is an agent turn running in this project (edits are held, not saved)? */
 export let isProjectBusy: (pid: string) => boolean = () => false
@@ -668,3 +673,57 @@ export async function flushHeldEdits(pid: string) {
   }
 }
 
+
+/** Typing not yet handed to a deck (speaker notes being typed): committed first by `flushDeckSaves`. */
+const pendingCommits = new Set<() => Promise<unknown>>()
+export function registerPendingCommit(commit: () => Promise<unknown>): () => void {
+  pendingCommits.add(commit)
+  return () => {
+    pendingCommits.delete(commit)
+  }
+}
+
+/** Write deck `key` now if it has unsaved edits (after a save in progress), and wait until it's written. */
+export async function flushDeck(key: string): Promise<void> {
+  for (let i = 0; i < 400; i++) {
+    const s = useDecks.getState().sessions[key]
+    // (While the agent works, edits are held, not written: they're saved when its turn ends.)
+    if (!s?.pres || isProjectBusy(s.pid)) return
+    if (s.saving) {
+      await new Promise((r) => setTimeout(r, 25))
+      continue
+    }
+    if (!s.dirty) return
+    await useDecks.getState().saveNow(key)
+  }
+}
+
+/**
+ * Edits being applied (a text box committed as it loses the focus to the chat box, say): a flush
+ * waits for them, so they're in what's written.
+ */
+const inflightEdits = new Set<Promise<unknown>>()
+for (const name of ['apply', 'applyCustom', 'transaction'] as const) {
+  const run = useDecks.getState()[name] as (...args: unknown[]) => Promise<unknown>
+  useDecks.setState({
+    [name]: (...args: unknown[]) => {
+      const p = run(...args)
+      inflightEdits.add(p)
+      void p.finally(() => inflightEdits.delete(p))
+      return p
+    },
+  } as Partial<DeckStore>)
+}
+
+/** Commit typing in progress, then write every deck with unsaved edits; resolves once they're written. */
+export async function flushDeckSaves(): Promise<void> {
+  await Promise.all([...pendingCommits].map((commit) => commit().catch(() => {})))
+  await Promise.all([...inflightEdits].map((p) => p.catch(() => {})))
+  await Promise.all(Object.keys(useDecks.getState().sessions).map(flushDeck))
+}
+
+/** Whether any deck has edits not yet written. */
+export const decksUnsaved = () => Object.values(useDecks.getState().sessions).some((s) => s.dirty || s.saving)
+
+// The desktop app flushes before its window closes or it quits (desktop/src/main.rs).
+;(globalThis as { __deckeditFlush?: () => Promise<void> }).__deckeditFlush = flushDeckSaves

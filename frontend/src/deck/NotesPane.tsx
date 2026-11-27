@@ -11,10 +11,10 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import { BotMessageSquare, ChevronDown, ChevronRight, ListChecks, Loader2, StickyNote } from 'lucide-react'
 import clsx from 'clsx'
 import type { PresentationData, SlideData } from '@diceui/pptx-core'
-import { useDecks, type DeckSession } from './deckStore'
+import { registerPendingCommit, useDecks, type DeckSession } from './deckStore'
 import { readNotesParagraphs, writeNotes } from './speakerNotes'
 import { buildParagraphs, notesText, parseParagraphs, renderNotes, styleRange, type StyleProp, type StyledParagraph } from './notesRich'
-import { domPointAt, paragraphsText, readParagraphs, readParagraphsAt, watchBullets } from './textEdit'
+import { domPointAt, paragraphsText, readParagraphs, readParagraphsAt, watchBullets, type TextPoint } from './textEdit'
 import { short } from './deckModel'
 import { useNotes } from '../store/notesStore'
 import { requestEdit, useEditMode } from '../store/editGuard'
@@ -26,11 +26,18 @@ import { useCompare } from './compareStore'
 import { paragraphOps, wordDiff, type Op } from './deckDiff'
 import { rowKey, type Decision } from './review'
 import { WordCounts } from './CompareView'
+import { clearNotesChangeMarks, markNotesChanges } from './notesChangeMarks'
 import { useFind } from './find'
 import { useMenuActions } from '../desktopMenu'
+import { setTyping } from './liveTyping'
 
 const LS_OPEN = 'deckedit-notes-open'
 const LS_HEIGHT = 'deckedit-notes-height'
+/**
+ * Typing becomes a deck edit (one undo step) after this long without a keystroke — and at once when
+ * you leave the notes, go to another slide, undo, or the decks are flushed. (Writing the file is
+ * separate: deckStore `SAVE_DEBOUNCE_MS`.)
+ */
 const SAVE_MS = 900
 const STYLE_KEYS: Record<string, StyleProp> = { b: 'b', i: 'i', u: 'u' }
 
@@ -59,7 +66,11 @@ export function NotesPane({ session }: { session: DeckSession }) {
   const reviewing = useCompare((s) => !!s.compares[session.key]?.review)
   const notesKey = notesRow ? `${rowKey(notesRow)}|notes` : ''
   const notesDecision = useCompare((s) => (notesKey ? s.compares[session.key]?.review?.decisions[notesKey] : undefined))
-  const [showDiff, setShowDiff] = useState(true)
+  /**
+   * With a comparison's change to these notes: the change read-only ('changes'), editing with it
+   * marked ('marked': removed text struck through, new text highlighted), or plain editing ('edit').
+   */
+  const [view, setView] = useState<'changes' | 'marked' | 'edit'>('changes')
   // Comparing, with a removed slide (only in From) in view: its notes, read-only, instead of these.
   const removedId = useCompare((s) => s.compares[session.key]?.removed ?? null)
   const basePres = useCompare((s) => s.compares[session.key]?.baseSide?.pres ?? null)
@@ -78,7 +89,7 @@ export function NotesPane({ session }: { session: DeckSession }) {
   useEffect(() => {
     if (!findInNotes || !slide || !findInNotes.startsWith(`${slide.id}#`)) return
     setOpen(true)
-    setShowDiff(false)
+    setView('edit')
   }, [findInNotes, slide?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [rendered, setRendered] = useState(0)
@@ -122,7 +133,14 @@ export function NotesPane({ session }: { session: DeckSession }) {
     ;(r.startContainer.parentElement as HTMLElement | null)?.scrollIntoView({ block: 'nearest' })
   }
 
-  const commit = async (sid: string, xml: string[], value: string) => {
+  /** The notes edit being made (a flush waits for it: leaving the notes starts one just before). */
+  const committing = useRef<Promise<unknown>>(Promise.resolve())
+  const commit = (sid: string, xml: string[], value: string) => {
+    const p = commitNow(sid, xml, value)
+    committing.current = p
+    return p
+  }
+  const commitNow = async (sid: string, xml: string[], value: string) => {
     setSaving(true)
     const no = pres.slides.findIndex((s) => s.id === sid) + 1
     const before = savedText.current
@@ -141,6 +159,8 @@ export function NotesPane({ session }: { session: DeckSession }) {
       [sid],
     )
     if (ok) savedText.current = value
+    // The typed text is in the deck now: the comparison reads it there (no stale preview later).
+    if (ok && !dirty.current) setTyping(session.key, null)
     setSaving(false)
   }
 
@@ -158,6 +178,14 @@ export function NotesPane({ session }: { session: DeckSession }) {
     await commit(sid, buildParagraphs(base.current, edited), value)
   }
 
+  // Typing not yet made an edit is made one when the decks are flushed (before an agent turn…).
+  const saveRef = useRef(save)
+  saveRef.current = save
+  useEffect(() => registerPendingCommit(async () => {
+    await saveRef.current()
+    await committing.current
+  }), [])
+
   // Load the notes when the slide changes or the deck reloads — but never
   // overwrite what's being typed.
   useEffect(() => {
@@ -172,6 +200,7 @@ export function NotesPane({ session }: { session: DeckSession }) {
       savedText.current = notesText(ps)
       setText(savedText.current)
       render()
+      setTyping(session.key, null)
     })
     return () => {
       live = false
@@ -200,13 +229,19 @@ export function NotesPane({ session }: { session: DeckSession }) {
     return () => el?.removeEventListener('beforeinput', onHistory)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
-  useEffect(() => () => void save(), []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => {
+    void save()
+    setTyping(session.key, null)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const onInput = () => {
     const el = editor.current
     if (!el) return
     dirty.current = true
-    setText(paragraphsText(readParagraphs(el)))
+    const typed = paragraphsText(readParagraphs(el))
+    setText(typed)
+    // Comparing: the notes' change shows as you type (before the save).
+    if (shown.current) setTyping(session.key, { slide: shown.current, text: typed })
     clearTimeout(timer.current)
     timer.current = setTimeout(() => void save(), SAVE_MS)
   }
@@ -263,22 +298,34 @@ export function NotesPane({ session }: { session: DeckSession }) {
   const undoRedo = async (redo: boolean) => {
     const el = editor.current
     if (!el) return
-    const sel = window.getSelection()
-    const caret = sel?.anchorNode && el.contains(sel.anchorNode) ? readParagraphsAt(el, [[sel.anchorNode, sel.anchorOffset]]).positions[0] : null
-    if (dirty.current) await save()
     const decks = useDecks.getState()
+    const before = decks.sessions[session.key]
+    // Nothing typed since the last save, and nothing to undo / redo: nothing happens (no re-render).
+    if (!dirty.current && !(redo ? before?.redo.length : before?.undo.length)) return
+    if (dirty.current) await save()
+    const oldText = paragraphsText(readParagraphs(el))
+    const xml = (els: Element[]) => els.map((e) => new XMLSerializer().serializeToString(e)).join('')
+    const notesNow = async () => {
+      const p = useDecks.getState().sessions[session.key]?.pres
+      const sl = p?.slides.find((x) => x.id === shown.current)
+      return p && sl ? readNotesParagraphs(p, sl) : null
+    }
+    const was = await notesNow()
     if (redo) await decks.redo(session.key)
     else decks.undo(session.key)
-    const p = useDecks.getState().sessions[session.key]?.pres
-    const sl = p?.slides.find((x) => x.id === shown.current)
-    if (!p || !sl) return
-    const ps = await readNotesParagraphs(p, sl)
+    const ps = await notesNow()
+    if (!ps) return
+    // The step undone was elsewhere (a slide edit): the notes are as they were — leave them be.
+    if (was && xml(ps) === xml(was)) return
     base.current = ps
     savedText.current = notesText(ps)
     setText(savedText.current)
     render()
+    setTyping(session.key, null)
     el.focus()
-    const at = (caret && domPointAt(el, caret)) ?? domPointAt(el, { p: Math.max(0, ps.length - 1), o: Number.MAX_SAFE_INTEGER })
+    // The caret goes where the change undone (redone) was — the end of the text that came back, or
+    // where text went — as text editors do.
+    const at = domPointAt(el, changeEnd(oldText, savedText.current))
     if (at) window.getSelection()?.collapse(...at)
   }
 
@@ -332,6 +379,47 @@ export function NotesPane({ session }: { session: DeckSession }) {
     el.addEventListener('pointerup', up)
   }
 
+  // While reviewing, the notes show the decision's result: no editing with marks.
+  const shownView = reviewing && view === 'marked' ? 'changes' : view
+
+  /** Typing in the Changes view: edit with the change marked, at that spot, starting with that key. */
+  const typeFromChanges = (at: TextPoint | null, key: string) => {
+    setView('marked')
+    requestAnimationFrame(() => {
+      const el = editor.current
+      if (!el) return
+      el.focus()
+      const sel = window.getSelection()
+      const point = (at && domPointAt(el, at)) ?? domPointAt(el, { p: Math.max(0, el.children.length - 1), o: Number.MAX_SAFE_INTEGER })
+      if (point) sel?.collapse(...point)
+      if (key.length === 1) document.execCommand('insertText', false, key)
+      else if (key === 'Enter') document.execCommand('insertParagraph')
+      else if (key === 'Backspace') document.execCommand('delete')
+      else if (key === 'Delete') document.execCommand('forwardDelete')
+    })
+  }
+
+  // Edit + marks: the change marked in the editor, the way the Changes view shows it — at once
+  // when the notes (re)render, and after a pause while typing.
+  const otherNotes = notesRow?.notes?.old ?? null
+  const marking = shownView === 'marked' && otherNotes != null && !removedSlide
+  const markedAt = useRef<{ text: string; rendered: number } | null>(null)
+  useEffect(() => {
+    const el = editor.current
+    if (!marking || !el) {
+      clearNotesChangeMarks(el)
+      markedAt.current = null
+      return
+    }
+    const typing = markedAt.current && markedAt.current.rendered === rendered && markedAt.current.text !== text
+    const t = setTimeout(() => {
+      markNotesChanges(el, otherNotes!)
+      markedAt.current = { text, rendered }
+    }, typing ? 250 : 0)
+    return () => clearTimeout(t)
+  }, [marking, otherNotes, text, rendered]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => clearNotesChangeMarks(editor.current), [])
+
   const shownText = removedSlide ? removedText : text
   const preview = shownText.trim() ? short(shownText, 110) : 'No speaker notes'
 
@@ -375,14 +463,18 @@ export function NotesPane({ session }: { session: DeckSession }) {
         )}
         {open && notesDiff && !removedSlide && (
           <div className="mr-1 flex shrink-0 overflow-hidden rounded border border-hair bg-white text-[11px]" role="group" aria-label="Speaker notes view">
-            {([['diff', 'Changes'], ['edit', 'Edit']] as const).map(([v, label]) => (
+            {(reviewing ? (['changes', 'edit'] as const) : (['changes', 'marked', 'edit'] as const)).map((v) => (
               <button
                 key={v}
-                className={clsx('px-1.5 py-px', (v === 'diff') === showDiff ? 'bg-ink text-white' : 'text-ink-2 hover:bg-paper')}
-                title={v === 'diff' ? 'How these notes changed: removed text struck through, new text in green' : 'Edit the notes as they are now'}
-                onClick={() => setShowDiff(v === 'diff')}
+                className={clsx('px-1.5 py-px', v === shownView ? 'bg-ink text-white' : 'text-ink-2 hover:bg-paper')}
+                title={{
+                  changes: 'How these notes changed: removed text struck through, new text in green. Read-only — start typing in it to edit with the changes marked',
+                  marked: 'Edit with the changes marked: removed text struck through (not editable, not kept), new text highlighted',
+                  edit: 'Edit the notes as they are now, without marks',
+                }[v]}
+                onClick={() => setView(v)}
               >
-                {label}
+                {{ changes: 'Changes', marked: 'Edit + marks', edit: 'Edit' }[v]}
               </button>
             ))}
           </div>
@@ -432,16 +524,37 @@ export function NotesPane({ session }: { session: DeckSession }) {
             spellCheck={false}
             title="Speaker notes — ⌘B / ⌘I / ⌘U for bold, italic, underline"
             onInput={onInput}
-            onBlur={() => void save()}
+            // Editing while the view is Changes (the notes only start to differ as you type): with marks,
+            // so the Changes view doesn't cover the editor mid-word.
+            onFocus={() => view === 'changes' && setView(reviewing ? 'edit' : 'marked')}
+            onBlur={() => void save().finally(() => setTyping(session.key, null))}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
           />
           {removedSlide && basePres && <RemovedSlideNotes pres={basePres} slide={removedSlide} onText={setRemovedText} />}
-          {notesDiff && showDiff && !removedSlide && <NotesDiffView before={notesDiff.old} after={notesDiff.new} onEdit={() => setShowDiff(false)} decision={reviewing ? notesDecision : undefined} />}
+          {notesDiff && shownView === 'changes' && !removedSlide && (
+            <NotesDiffView
+              before={notesDiff.old}
+              after={notesDiff.new}
+              decision={reviewing ? notesDecision : undefined}
+              onType={!reviewing && !editOff && slide ? typeFromChanges : undefined}
+            />
+          )}
         </div>
       )}
     </div>
   )
+}
+
+/** Where a change from `a` to `b` ends in `b`, as a paragraph + offset (paragraphs: "\n"-separated). */
+function changeEnd(a: string, b: string): TextPoint {
+  let start = 0
+  while (start < a.length && start < b.length && a[start] === b[start]) start++
+  let end = 0
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++
+  const at = b.length - end
+  const before = b.slice(0, at).split('\n')
+  return { p: before.length - 1, o: before[before.length - 1].length }
 }
 
 /**
@@ -478,29 +591,81 @@ function RemovedSlideNotes({ pres, slide, onText }: { pres: PresentationData; sl
  * new notes, their new words green; not accepted: the old notes, the words that come back on a
  * light red dashed background (kept, not struck).
  */
-function NotesDiffView({ before, after, onEdit, decision }: { before: string; after: string; onEdit(): void; decision?: Decision }) {
+function NotesDiffView({ before, after, decision, onType }: { before: string; after: string; decision?: Decision; onType?: (at: TextPoint | null, key: string) => void }) {
   const paras = paragraphOps(before, after)
+  const afterParas = after.split('\n')
   const ADD = 'rounded-sm bg-emerald-100 text-emerald-900'
   const RESTORED = 'rounded-sm bg-red-50 outline-dashed outline-1 outline-red-300'
-  const runs = (ops: Op[]) =>
-    ops
-      .filter((o) => (decision === 'accept' ? o.k !== 'del' : decision === 'reject' ? o.k !== 'add' : true))
-      .map((o, i) => (
+  // Every piece of text knows where it is in the new notes — its paragraph (data-np) and its first
+  // word (data-nw) or character (data-o) — so typing here starts editing at that spot.
+  const runs = (ops: Op[], np: number) => {
+    let nw = 0
+    return ops.map((o) => {
+      const at = nw
+      if (o.k !== 'del') nw += o.t.split(' ').length
+      return { o, at }
+    })
+      .filter(({ o }) => (decision === 'accept' ? o.k !== 'del' : decision === 'reject' ? o.k !== 'add' : true))
+      .map(({ o, at }, i) => (
         <Fragment key={i}>
           {i > 0 && ' '}
-          <span className={o.k === 'same' ? undefined : decision === 'accept' ? ADD : decision === 'reject' ? RESTORED : o.k === 'del' ? 'text-red-600 line-through decoration-red-500/80' : 'rounded-sm bg-emerald-100 px-px font-medium text-emerald-800'}>{o.t}</span>
+          <span data-np={np} data-nw={at} data-k={o.k} className={o.k === 'same' ? undefined : decision === 'accept' ? ADD : decision === 'reject' ? RESTORED : o.k === 'del' ? 'text-red-600 line-through decoration-red-500/80' : 'rounded-sm bg-emerald-100 px-px font-medium text-emerald-800'}>{o.t}</span>
         </Fragment>
       ))
+  }
+
+  /** Where the caret (or the click) is, as a position in the new notes. */
+  const caretAt = (): TextPoint | null => {
+    const sel = window.getSelection()
+    let node = sel?.focusNode ?? null
+    let offset = sel?.focusOffset ?? 0
+    if (!node) return null
+    let host = (node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element))?.closest<HTMLElement>('[data-np]') ?? null
+    if (!host) {
+      // Between two pieces (the space between them): the start of the next one.
+      for (let n = node.nextSibling; n && !host; n = n.nextSibling) if (n instanceof HTMLElement && n.dataset.np != null) host = n
+      if (!host) return null
+      node = host
+      offset = 0
+    }
+    const np = Number(host.dataset.np)
+    if (np >= afterParas.length) {
+      const last = Math.max(0, afterParas.length - 1)
+      return { p: last, o: afterParas[last]?.length ?? 0 }
+    }
+    const text = afterParas[np]
+    const r = document.createRange()
+    r.setStart(host, 0)
+    r.setEnd(node, offset)
+    const within = r.toString().length
+    if (host.dataset.o != null) return { p: np, o: host.dataset.k === 'del' ? 0 : Math.min(within, text.length) }
+    const words = [...text.matchAll(/\S+/g)].map((m) => ({ s: m.index!, e: m.index! + m[0].length }))
+    const nw = Number(host.dataset.nw)
+    if (host.dataset.k === 'del') return { p: np, o: words[nw]?.s ?? text.length }
+    const head = (host.textContent ?? '').slice(0, within) // (a run's words are joined with single spaces)
+    const w = words[nw + (head.match(/ /g)?.length ?? 0)]
+    return w ? { p: np, o: Math.min(w.s + within - (head.lastIndexOf(' ') + 1), w.e) } : { p: np, o: text.length }
+  }
+
+  let np = 0
   return (
     <div
       className={clsx(
-        'absolute inset-0 overflow-auto bg-white px-4 py-2 text-[13px] leading-relaxed text-ink',
+        'absolute inset-0 select-text overflow-auto bg-white px-4 py-2 text-[13px] leading-relaxed text-ink outline-none',
         decision === 'accept' && 'border-l-4 border-emerald-500',
         decision === 'reject' && 'border-l-4 border-ink-3/40',
       )}
       data-notes-diff={decision ?? ''}
-      onDoubleClick={onEdit}
-      title="Double-click to edit the notes"
+      tabIndex={onType ? 0 : undefined}
+      // Read-only: clicking or selecting doesn't edit; typing does — "Edit + marks", at the caret.
+      onKeyDown={onType ? (e) => {
+        if (e.metaKey || e.ctrlKey || e.altKey) return
+        if (e.key.length !== 1 && !['Enter', 'Backspace', 'Delete'].includes(e.key)) return
+        e.preventDefault()
+        e.stopPropagation()
+        onType(caretAt(), e.key)
+      } : undefined}
+      title={onType ? 'Read-only — start typing to edit here with the changes marked (or pick Edit + marks / Edit)' : undefined}
     >
       {decision && (
         <div className={clsx('mb-1 text-[11px] font-medium', decision === 'accept' ? 'text-emerald-700' : 'text-ink-3')}>
@@ -508,12 +673,15 @@ function NotesDiffView({ before, after, onEdit, decision }: { before: string; af
         </div>
       )}
       {paras.map((p, i) => {
+        const at = p.k === 'del' ? np : np++
         // A whole paragraph removed or added: dropped when the decision leaves it out.
         if ((decision === 'accept' && p.k === 'del') || (decision === 'reject' && p.k === 'add')) return null
         const whole = decision === 'accept' ? ADD : decision === 'reject' ? RESTORED : p.k === 'del' ? 'text-red-600 line-through decoration-red-500/80' : 'bg-emerald-50 text-emerald-800'
         return (
           <p key={i} className="min-h-[1.2em] whitespace-pre-wrap break-words">
-            {p.k === 'edit' ? runs(p.ops) : p.k === 'same' ? p.ops.map((o) => o.t).join(' ') : <span className={whole}>{p.ops.map((o) => o.t).join(' ')}</span>}
+            {p.k === 'edit' ? runs(p.ops, at)
+              : p.k === 'same' ? <span data-np={at} data-o={0}>{p.ops.map((o) => o.t).join(' ')}</span>
+                : <span data-np={at} data-o={0} data-k={p.k} className={whole}>{p.ops.map((o) => o.t).join(' ')}</span>}
           </p>
         )
       })}

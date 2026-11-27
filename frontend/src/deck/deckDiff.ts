@@ -301,8 +301,14 @@ export function compactOps(ops: Op[], max = 16): Op[] | undefined {
  * removed and added ones, and paragraphs edited only in part (with their word diff). A paragraph
  * rewritten from scratch shows as the old one removed and the new one added, not word salad.
  */
-export function paragraphOps(a: string, b: string): { k: 'same' | 'add' | 'del' | 'edit'; ops: Op[] }[] {
-  const pa = a.split('\n'), pb = b.split('\n')
+export function paragraphOps(a: string, b: string): ParagraphOp[] {
+  return paragraphOpsOf(a.split('\n'), b.split('\n'))
+}
+
+export type ParagraphOp = { k: 'same' | 'add' | 'del' | 'edit'; ops: Op[] }
+
+/** paragraphOps for texts already split into paragraphs (e.g. an editor's paragraphs). */
+export function paragraphOpsOf(pa: string[], pb: string[]): ParagraphOp[] {
   const ka = lcsKeep(pa.map((p) => p.trim()), pb.map((p) => p.trim())) ?? pa.map(() => false)
   const kb = lcsKeep(pb.map((p) => p.trim()), pa.map((p) => p.trim())) ?? pb.map(() => false)
   const out: { k: 'same' | 'add' | 'del' | 'edit'; ops: Op[] }[] = []
@@ -782,6 +788,25 @@ function themeOf(pres: PresentationData) {
 /** A summary line for a shape: "Title: moved" — but for a text box just "moved" (text goes without saying). */
 const lineText = (what: string, detail: string) => (what === 'Text' ? detail : `${what}: ${detail}`)
 
+/** The summary line for speaker notes that changed. */
+function notesLine(na: string, nb: string): SummaryLine {
+  const counts = wordDiff(na, nb)
+  const label = !na.trim() ? 'Notes added' : !nb.trim() ? 'Notes removed' : `Notes: ${wordsLabel(counts)}`
+  return { kind: 'changed', text: label, ops: notesPreview(na, nb), what: na.trim() && nb.trim() ? 'Notes' : label, counts }
+}
+const isNotesLine = (l: SummaryLine) => !l.ids && /^Notes/.test(l.text)
+
+/** Content first — text, data and notes changes, then shapes added and removed — then formatting, then position. */
+function lineRank(l: SummaryLine): number {
+  return l.text.startsWith('Comment') ? 2.5
+    : l.kind === 'added' ? 1 : l.kind === 'removed' ? 2
+      : /moved|resized/.test(l.text) && !/word|value|cell|series|replaced|label/.test(l.text) ? 4
+        : /formatting|fill\/line|: shape|: frame|: link|: contents|^Background/.test(l.text) && !/word|value|cell|series|replaced|label/.test(l.text) ? 3
+          : 0
+}
+
+const ONLY_MOVED = /^(moved|resized|moved, resized|rotated|flipped)$/
+
 /** What changed between the slides of a matched pair: summary lines and the shapes to mark. */
 function slideChanges(old: DeckSide, now: DeckSide, os: SlideData, ns: SlideData): { lines: SummaryLine[]; shapes: ShapeDiff[]; notes?: { old: string; new: string }; pairs: [string, string][]; comments: { kind: ChangeKind; id: string }[]; props: boolean } {
   const commentChanges: { kind: ChangeKind; id: string }[] = []
@@ -806,7 +831,7 @@ function slideChanges(old: DeckSide, now: DeckSide, os: SlideData, ns: SlideData
       d.ops = compactOps(textOps(ta, tb)) ?? (ta.trim() && tb.trim() ? notesPreview(ta, tb) : undefined)
     }
     shapes.push(d)
-    if (details.every((x) => /^(moved|resized|moved, resized|rotated|flipped)$/.test(x))) onlyMoved.push(d)
+    if (details.every((x) => ONLY_MOVED.test(x))) onlyMoved.push(d)
     else lines.push({ kind: 'changed', text: lineText(d.what, details.join(', ')), ids: [n.id], ...(d.ops ? { ops: d.ops, ...(d.what !== 'Text' ? { what: d.what } : {}) } : {}) })
   }
   // Shapes that only moved: one line for several.
@@ -832,9 +857,7 @@ function slideChanges(old: DeckSide, now: DeckSide, os: SlideData, ns: SlideData
   let notes: { old: string; new: string } | undefined
   if (na !== undefined && nb !== undefined && na.trim() !== nb.trim()) {
     notes = { old: na, new: nb }
-    const label = !na.trim() ? 'Notes added' : !nb.trim() ? 'Notes removed' : `Notes: ${wordsLabel(wordDiff(na, nb))}`
-    const counts = wordDiff(na, nb)
-    lines.push({ kind: 'changed', text: label, ops: notesPreview(na, nb), what: na.trim() && nb.trim() ? 'Notes' : label, counts })
+    lines.push(notesLine(na, nb))
   }
   // Review comments: matched by their ids (kept in every copy of the deck).
   if (old.comments && now.comments) {
@@ -865,14 +888,7 @@ function slideChanges(old: DeckSide, now: DeckSide, os: SlideData, ns: SlideData
     } else counted.set(k, { line: l, n: 1 })
   }
   const merged = [...counted.values()].map(({ line, n }) => (n > 1 ? { ...line, text: `${line.text} ×${n}` } : line))
-  // Content first — text, data and notes changes, then shapes added and removed — then formatting, then position.
-  const rank = (l: SummaryLine) =>
-    l.text.startsWith('Comment') ? 2.5
-    : l.kind === 'added' ? 1 : l.kind === 'removed' ? 2
-      : /moved|resized/.test(l.text) && !/word|value|cell|series|replaced|label/.test(l.text) ? 4
-        : /formatting|fill\/line|: shape|: frame|: link|: contents|^Background/.test(l.text) && !/word|value|cell|series|replaced|label/.test(l.text) ? 3
-          : 0
-  merged.sort((a, b) => rank(a) - rank(b))
+  merged.sort((a, b) => lineRank(a) - lineRank(b))
   return { lines: merged, shapes, notes, pairs: pairs.map(([o, n]) => [o.id, n.id]), comments: commentChanges, props }
 }
 
@@ -887,12 +903,50 @@ const ID_BONUS = 0.25
 /** Words (pictures…) on at least this share of all the slides are boilerplate, not content. */
 const BOILERPLATE = 0.5
 
-/** Compare two versions of a deck: `old` (the base) → `now`. */
-export function diffDecks(old: DeckSide, now: DeckSide): DeckDiff {
+type SlideChanges = ReturnType<typeof slideChanges>
+/** Per-slide work kept between diffs of one base against a live deck (see `diffDecks` `versions`). */
+const tokenCache = new WeakMap<PresentationData, Map<string, { v: number; t: Set<string> }>>()
+const changesCache = new WeakMap<DeckSide, WeakMap<PresentationData, Map<string, SlideChanges>>>()
+
+function cachedTokens(pres: PresentationData, slide: SlideData, v: number): Set<string> {
+  let m = tokenCache.get(pres)
+  if (!m) tokenCache.set(pres, (m = new Map()))
+  const hit = m.get(slide.id)
+  if (hit && hit.v === v) return hit.t
+  const t = slideTokens(pres, slide)
+  m.set(slide.id, { v, t })
+  return t
+}
+
+/**
+ * Compare two versions of a deck: `old` (the base) → `now`.
+ *
+ * `versions` (the live deck's slide versions: slide part → version, bumped by every edit of the
+ * slide): reuse each slide's tokens and changes while its version and notes are the same — for
+ * re-diffing as the user edits. `old` must then be a fixed version (a file or a backup). Slides are
+ * always paired afresh; only the per-slide comparisons are reused.
+ */
+export function diffDecks(old: DeckSide, now: DeckSide, versions?: Record<string, number>): DeckDiff {
   const oSlides = old.pres.slides, nSlides = now.pres.slides
   // What each slide has: its words, pictures and charts — less what most slides of the decks have
   // (footers, the company name, a logo), which would make any two slides look alike.
-  const oAll = oSlides.map((s) => slideTokens(old.pres, s)), nAll = nSlides.map((s) => slideTokens(now.pres, s))
+  const oAll = oSlides.map((s) => (versions ? cachedTokens(old.pres, s, 0) : slideTokens(old.pres, s)))
+  const nAll = nSlides.map((s) => (versions ? cachedTokens(now.pres, s, versions[s.id] ?? -1) : slideTokens(now.pres, s)))
+  let changes = (os: SlideData, ns: SlideData) => slideChanges(old, now, os, ns)
+  if (versions) {
+    let byNow = changesCache.get(old)
+    if (!byNow) changesCache.set(old, (byNow = new WeakMap()))
+    let m = byNow.get(now.pres)
+    if (!m) byNow.set(now.pres, (m = new Map()))
+    const memo = m
+    if (memo.size > 4000) memo.clear()
+    changes = (os, ns) => {
+      const k = `${os.id}>${ns.id}#${versions[ns.id] ?? -1}#${now.notes?.get(ns.id) ?? ''}`
+      let c = memo.get(k)
+      if (!c) memo.set(k, (c = slideChanges(old, now, os, ns)))
+      return c
+    }
+  }
   const df = new Map<string, number>()
   for (const t of [...oAll, ...nAll]) for (const w of t) df.set(w, (df.get(w) ?? 0) + 1)
   const common = (oAll.length + nAll.length) * BOILERPLATE
@@ -938,7 +992,7 @@ export function diffDecks(old: DeckSide, now: DeckSide): DeckDiff {
       rows.push({ status: 'added', newIndex: i, oldIndex: null, newSlide: ns.id, movedFrom: null, lines: [{ kind: 'added', text: 'New slide' }], shapes: [], key: [i, 0, 0] })
       return
     }
-    const { lines, shapes, notes, pairs, comments, props } = slideChanges(old, now, oSlides[j], ns)
+    const { lines, shapes, notes, pairs, comments, props } = changes(oSlides[j], ns)
     const movedFrom = moved.has(i) ? j + 1 : null
     rows.push({
       status: lines.length || shapes.length || movedFrom ? 'changed' : 'same',
@@ -966,18 +1020,74 @@ export function diffDecks(old: DeckSide, now: DeckSide): DeckDiff {
   if (removedL) deck.push(`${removedL} layout${removedL > 1 ? 's' : ''} removed`)
 
   const out = rows.map(({ key: _key, ...r }) => r)
+  return { rows: out, deck, common: matched.length, unrelated, counts: countsOf(out) }
+}
+
+function countsOf(rows: SlideDiff[]): DeckDiff['counts'] {
   return {
-    rows: out,
-    deck,
-    common: matched.length,
-    unrelated,
-    counts: {
-      added: out.filter((r) => r.status === 'added').length,
-      removed: out.filter((r) => r.status === 'removed').length,
-      changed: out.filter((r) => r.status === 'changed' && (r.lines.length || r.shapes.length)).length,
-      moved: out.filter((r) => r.movedFrom != null).length,
-    },
+    added: rows.filter((r) => r.status === 'added').length,
+    removed: rows.filter((r) => r.status === 'removed').length,
+    changed: rows.filter((r) => r.status === 'changed' && (r.lines.length || r.shapes.length)).length,
+    moved: rows.filter((r) => r.movedFrom != null).length,
   }
+}
+
+/** Text being typed and not yet saved: in a text box of a slide (`node`), or in its speaker notes. */
+export interface Typing {
+  slide: string
+  node?: string
+  text: string
+}
+
+/**
+ * The diff with one slide's row as it would be with `t`'s text — a preview while typing (the
+ * comparison of the saved deck replaces it once the text is saved). Only that row changes; the
+ * base and the slide pairing stay.
+ */
+export function typingPatch(diff: DeckDiff, old: DeckSide, now: PresentationData, t: Typing): DeckDiff {
+  const ri = diff.rows.findIndex((r) => r.newSlide === t.slide)
+  const row = diff.rows[ri]
+  if (!row || row.status === 'added' || !row.oldSlide) return diff
+  let lines = [...row.lines]
+  const shapes = [...row.shapes]
+  let notes = row.notes
+  if (!t.node) {
+    const na = old.notes?.get(row.oldSlide)
+    if (na === undefined) return diff
+    lines = lines.filter((l) => !isNotesLine(l))
+    notes = na.trim() !== t.text.trim() ? { old: na, new: t.text } : undefined
+    if (notes) lines.push(notesLine(na, t.text))
+  } else {
+    const pair = row.pairs?.find(([, n]) => n === t.node)
+    const o = pair && old.pres.slides.find((x) => x.id === row.oldSlide)?.nodes.find((x) => x.id === pair[0])
+    const n = now.slides.find((x) => x.id === t.slide)?.nodes.find((x) => x.id === t.node)
+    if (!o || !n) return diff
+    const ta = nodeText(o), tb = t.text
+    const at = shapes.findIndex((d) => d.id === t.node)
+    const prev = at >= 0 ? shapes[at] : undefined
+    const rest = (prev?.details ?? []).filter((x) => !/\bwords?$|^text edited$|^text formatting$/.test(x))
+    const details = ta !== tb ? [wordsLabel(wordDiff(ta, tb)), ...rest] : rest
+    lines = lines.filter((l) => !(l.kind === 'changed' && l.ids?.length === 1 && l.ids[0] === t.node))
+    if (!details.length) {
+      if (at >= 0) shapes.splice(at, 1)
+    } else {
+      const d: ShapeDiff = { ...(prev ?? { kind: 'changed', id: n.id, oldId: o.id, box: boxOf(n), oldBox: boxOf(o), what: whatIs(n), details: [] }), details }
+      if (ta !== tb) {
+        d.text = { old: ta, new: tb }
+        d.ops = compactOps(textOps(ta, tb)) ?? (ta.trim() && tb.trim() ? notesPreview(ta, tb) : undefined)
+      } else {
+        delete d.text
+        delete d.ops
+      }
+      if (at >= 0) shapes[at] = d
+      else shapes.push(d)
+      if (!details.every((x) => ONLY_MOVED.test(x))) lines.push({ kind: 'changed', text: lineText(d.what, details.join(', ')), ids: [n.id], ...(d.ops ? { ops: d.ops, ...(d.what !== 'Text' ? { what: d.what } : {}) } : {}) })
+    }
+  }
+  lines.sort((a, b) => lineRank(a) - lineRank(b))
+  const rows = [...diff.rows]
+  rows[ri] = { ...row, lines, shapes, notes, status: lines.length || shapes.length || row.movedFrom ? 'changed' : 'same' }
+  return { ...diff, rows, counts: countsOf(rows) }
 }
 
 /** The comparison in words, for the agent (and for copying). */

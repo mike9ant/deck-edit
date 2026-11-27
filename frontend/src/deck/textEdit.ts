@@ -13,6 +13,12 @@
 
 import { PPTX_ATTRS, type SetTextBodyParagraph, type SetTextBodyRun } from '@diceui/pptx-core'
 
+/**
+ * Text shown in an editable text that isn't part of it (removed words marked in place, see
+ * notesChangeMarks.ts): skipped like bullets when the text is read, or a caret position counted.
+ */
+export const GHOST_ATTR = 'data-text-ghost'
+
 export function textContainer(nodeEl: HTMLElement): HTMLElement | null {
   return (nodeEl.querySelector(`[${PPTX_ATTRS.paragraph}]`)?.parentElement as HTMLElement | null) ?? null
 }
@@ -123,7 +129,7 @@ export function readParagraphsAt(container: HTMLElement, points: [Node, number][
       return
     }
     if (!(node instanceof Element)) return
-    if (node.hasAttribute(PPTX_ATTRS.bullet)) return
+    if (node.hasAttribute(PPTX_ATTRS.bullet) || node.hasAttribute(GHOST_ATTR)) return
     if (node.tagName === 'BR') {
       if (node.hasAttribute(PPTX_ATTRS.emptyLine)) return
       // A trailing <br> the browser adds to keep an empty block open is not a line break.
@@ -169,11 +175,11 @@ export function domPointAt(container: HTMLElement, pos: TextPoint, bias: 'start'
   const w = document.createTreeWalker(para, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT)
   for (let n = w.nextNode(); n; n = w.nextNode()) {
     if (n instanceof Element) {
-      if (n.closest(`[${PPTX_ATTRS.bullet}]`)) continue
+      if (n.closest(`[${PPTX_ATTRS.bullet}], [${GHOST_ATTR}]`)) continue
       if (n.tagName === 'BR' && !n.hasAttribute(PPTX_ATTRS.emptyLine)) acc += 1
       continue
     }
-    if ((n.parentElement as Element | null)?.closest(`[${PPTX_ATTRS.bullet}]`)) continue
+    if ((n.parentElement as Element | null)?.closest(`[${PPTX_ATTRS.bullet}], [${GHOST_ATTR}]`)) continue
     const len = (n.textContent ?? '').length
     if (bias === 'start' ? pos.o < acc + len : pos.o <= acc + len) return [n, pos.o - acc]
     acc += len

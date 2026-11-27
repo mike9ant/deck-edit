@@ -10,13 +10,14 @@
  */
 
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { getTyping, useTyping } from './liveTyping'
 import { ArrowRight, ArrowLeftRight, Check, GitCompareArrows, History, ListChecks, Loader2, X } from 'lucide-react'
 import clsx from 'clsx'
 import { MiddleEllipsis } from '../components/MiddleEllipsis'
 import type { PresentationData } from '@diceui/pptx-core'
 import { useDecks, type DeckSession } from './deckStore'
 import { SlideRender } from './SlideRender'
-import { diffDecks, lcsKeep, type Box, type ChangeKind, type Op, type ShapeDiff, type SlideDiff, type SummaryLine } from './deckDiff'
+import { diffDecks, lcsKeep, typingPatch, type Box, type ChangeKind, type Op, type ShapeDiff, type SlideDiff, type SummaryLine } from './deckDiff'
 import { liveInfo, liveSide, reviewUnsaved, useCompare, type Compare, type SideInfo } from './compareStore'
 import { reviewItems, type Decision } from './review'
 import { ApplyDialog } from './ReviewView'
@@ -30,7 +31,17 @@ export const KIND_COLORS: Record<ChangeKind | 'moved', { dot: string; box: strin
   moved: { dot: 'bg-sky-500', box: '', tag: 'bg-sky-600', text: 'text-sky-800' },
 }
 
-/** Recompute the diff as the live deck changes (debounced while edits come in). */
+/** A full (uncached) re-diff this long after the last edit: what the quick ones showed, made sure. */
+const FULL_AFTER_MS = 1500
+/** Typing previews at most this often. */
+const TYPING_MS = 100
+
+/**
+ * Keep the diff current as the live deck changes. After an edit, a quick re-diff (only the edited
+ * slides compared again — their versions changed) and, once edits settle, a full one that corrects
+ * anything the quick one missed. While text is typed (a text box, the notes), its slide's row is
+ * previewed from the text as typed (`typingPatch`), before it's saved.
+ */
 export function useCompareDiff(session: DeckSession | undefined, compare: Compare | undefined) {
   const base = compare?.baseSide
   const key = session?.key
@@ -38,22 +49,53 @@ export function useCompareDiff(session: DeckSession | undefined, compare: Compar
   useEffect(() => {
     if (!base || !key || !session?.pres) return
     let live = true
-    const t = setTimeout(async () => {
+    const run = async (full: boolean) => {
       const s = useDecks.getState().sessions[key]
       if (!s?.pres) return
       try {
-        const now = await liveSide(s)
-        if (live) useCompare.getState().setDiff(key, diffDecks(base, now))
+        const t0 = performance.now()
+        const now = await liveSide(s, !full)
+        let d = diffDecks(base, now, full ? undefined : s.slideVersions)
+        if (!live) return
+        console.debug(`[deck diff] ${full ? 'full' : 'quick'}: ${Math.round(performance.now() - t0)} ms, ${s.pres.slides.length} slides`)
+        const typing = getTyping(key)
+        if (typing && !useCompare.getState().compares[key]?.review) d = typingPatch(d, base, s.pres, typing)
+        const cur = useCompare.getState().compares[key]?.diff
+        if (cur && JSON.stringify(cur) === JSON.stringify(d)) return
+        useCompare.getState().setDiff(key, d)
       } catch (e) {
         console.error('deck diff', e)
       }
-    }, hasDiff ? 300 : 0)
+    }
+    const quick = setTimeout(() => void run(!hasDiff), hasDiff ? 120 : 0)
+    const full = hasDiff ? setTimeout(() => void run(true), FULL_AFTER_MS) : undefined
     return () => {
       live = false
-      clearTimeout(t)
+      clearTimeout(quick)
+      clearTimeout(full)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key, base, session?.version, !!session?.pres])
+
+  // Typing: preview its slide's row (throttled); when it ends, the saved deck's diff takes over.
+  const typing = useTyping(key)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const lastRun = useRef(0)
+  useEffect(() => {
+    if (!base || !key) return
+    const apply = () => {
+      timer.current = null
+      lastRun.current = performance.now()
+      const s = useDecks.getState().sessions[key]
+      const c = useCompare.getState().compares[key]
+      const t = getTyping(key)
+      if (!s?.pres || !c?.diff || c.review || !t) return
+      useCompare.getState().update(key, { diff: typingPatch(c.diff, base, s.pres, t) })
+    }
+    if (!typing) return
+    if (!timer.current) timer.current = setTimeout(apply, Math.max(0, TYPING_MS - (performance.now() - lastRun.current)))
+  }, [typing, base, key])
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
 }
 
 const when = (ms?: number) => {
@@ -110,8 +152,9 @@ export function CompareBar({ compare, session }: { compare: Compare; session: De
     <div className="flex min-h-11 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-amber-200 bg-amber-50/70 px-2 py-1 text-xs" data-compare-bar>
       <GitCompareArrows size={15} className="shrink-0 text-amber-800" />
       {/* The files take the first line's room (long names show more of themselves); the rest grows
-          only when it has a line of its own. */}
-      <div className="flex min-w-[min(100%,340px)] items-center gap-1.5" style={{ flex: '999 1 340px' }}>
+          only when it has a line of its own. The totals and controls wrap under the files once the
+          names would get less than ~565px (the bar < ~975px wide), so the names keep more room. */}
+      <div className="flex min-w-[min(100%,340px)] items-center gap-1.5" style={{ flex: '999 1 565px' }}>
         <SideChip label="From" info={compare.baseInfo ?? (compare.base ? { name: compare.base.path.split('/').pop() ?? '' } : null)} tone="before" backup={compare.base.kind === 'snapshot'} />
         <ArrowRight size={14} className="shrink-0 text-ink-3" />
         <SideChip label="To" info={now} tone="after" />
@@ -239,13 +282,18 @@ export function OpsText({ ops }: { ops: Op[] }) {
  * text). Words are read across runs (a word split over two runs is one word); bullets are skipped.
  */
 function changedWordRects(el: Element, other: string): DOMRect[] {
+  return changedWordRanges(el, other).flatMap((r) => [...r.getClientRects()])
+}
+
+/** The words of `el` that aren't in `other`, as DOM ranges (see changedWordRects). */
+export function changedWordRanges(el: Element, other: string): Range[] {
   const pieces: { node: Text; at: number }[] = []
   let text = ''
   let para: Element | null = null
   const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
   while (walker.nextNode()) {
     const node = walker.currentNode as Text
-    if (node.parentElement?.closest('[data-pptx-bullet]')) continue
+    if (node.parentElement?.closest('[data-pptx-bullet], [data-text-ghost]')) continue
     const p = node.parentElement?.closest('[data-pptx-p]') ?? null
     if (p !== para && text) text += ' ' // paragraphs don't run into each other
     para = p
@@ -260,13 +308,13 @@ function changedWordRects(el: Element, other: string): DOMRect[] {
     while (k > 0 && (end ? pieces[k].at >= pos : pieces[k].at > pos)) k--
     return [pieces[k].node, Math.min(pos - pieces[k].at, pieces[k].node.data.length)]
   }
-  const out: DOMRect[] = []
+  const out: Range[] = []
   words.forEach((w, i) => {
     if (keep[i] || !/[\p{L}\p{N}]/u.test(w.w)) return
     const r = document.createRange()
     r.setStart(...pointAt(w.start, false))
     r.setEnd(...pointAt(w.end, true))
-    out.push(...r.getClientRects())
+    out.push(r)
   })
   return out
 }
@@ -274,13 +322,13 @@ function changedWordRects(el: Element, other: string): DOMRect[] {
 /** On the slide a changed shape's tag says only what changed — the shape itself is right there. */
 type Tone = 'add' | 'del' | 'restored'
 type Rect = { x: number; y: number; w: number; h: number; tone?: Tone }
-/** Words to mark in one rendered shape: those not in `other` (the text on the other side). */
-type WordSpec = { id: string; other: string; tone: Tone }
+/** Words to mark in one rendered shape: those not in `other` (the text on the other side); `self`: its own text (marks redone when it changes, e.g. while typing). */
+type WordSpec = { id: string; other: string; tone: Tone; self?: string }
 
 /** What to mark in each changed shape: the added words (side 'after') or the removed ones ('before'). */
 const wordSpecs = (shapes: ShapeDiff[], side: 'before' | 'after'): WordSpec[] =>
   shapes.filter((s) => s.kind === 'changed' && s.text).map((s) =>
-    side === 'after' ? { id: s.id, other: s.text!.old, tone: 'add' as const } : { id: s.oldId ?? s.id, other: s.text!.new, tone: 'del' as const })
+    side === 'after' ? { id: s.id, other: s.text!.old, tone: 'add' as const, self: s.text!.new } : { id: s.oldId ?? s.id, other: s.text!.new, tone: 'del' as const })
 
 const TONE: Record<Tone, string> = {
   add: 'bg-emerald-400/45 mix-blend-multiply',
@@ -305,7 +353,8 @@ function useWordMarks(host: React.RefObject<HTMLElement | null>, specs: WordSpec
       const out: Rect[] = []
       for (const sp of specs) {
         const node = slide.querySelector(`[data-pptx-node-id="${CSS.escape(sp.id)}"]`)
-        if (!node) continue
+        // Not in the text box being typed in: marks moving under the caret would be in the way.
+        if (!node || (node as HTMLElement).isContentEditable || node.querySelector('[contenteditable="true"]')) continue
         for (const r of changedWordRects(node, sp.other)) {
           if (r.width && r.height) out.push({ x: r.left - box.left, y: r.top - box.top, w: r.width, h: r.height, tone: sp.tone })
         }

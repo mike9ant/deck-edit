@@ -8,7 +8,7 @@ import { create } from 'zustand'
 import { ApiError, api, type OutgoingImage } from '../api/client'
 import { askConfirm } from '../components/confirmDialog'
 import type { ApprovalMode, Chat, ChatSummary, Posture, ServerEvent, TurnContext } from '../api/types'
-import { flushHeldEdits, setBusyProbe } from '../deck/deckStore'
+import { flushDeckSaves, flushHeldEdits, setBusyProbe } from '../deck/deckStore'
 import { useApp } from './appStore'
 
 interface ChatState {
@@ -206,6 +206,7 @@ export const useChat = create<ChatState>((set, get) => {
     },
 
     async revert(chatId, turnId) {
+      await flushDeckSaves() // (the files go back as they were: edits not yet written would be lost, or clash)
       try {
         try {
           await api.revert(chatId, turnId)
@@ -223,6 +224,7 @@ export const useChat = create<ChatState>((set, get) => {
     },
 
     async unrevert(chatId, turnId) {
+      await flushDeckSaves()
       try {
         await api.unrevert(chatId, turnId)
         await get().reloadChat(chatId)
