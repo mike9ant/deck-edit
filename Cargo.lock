@@ -779,7 +779,7 @@ dependencies = [
 
 [[package]]
 name = "deck-edit"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -807,7 +807,7 @@ dependencies = [
 
 [[package]]
 name = "deck-edit-desktop"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "deck-edit",
