@@ -234,14 +234,15 @@ export function CompareBar({ compare, session }: { compare: Compare; session: De
           </button>
         )}
         <button
-          className="flex items-center gap-1 rounded border border-hair bg-white px-1.5 py-0.5 text-ink-2 hover:bg-paper"
-          title="Stop comparing — back to the file"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-ink-3 hover:bg-amber-200/60 hover:text-ink"
+          title="Close the comparison — back to the file"
+          aria-label="Close the comparison"
           onClick={async () => {
             if (reviewUnsaved(compare) && !(await askConfirm(`Close the comparison? Your ${reviewUnsaved(compare)} accepted change(s) haven't been applied and will be lost.`, 'Close'))) return
             close(session.key)
           }}
         >
-          <X size={12} /> Close
+          <X size={14} />
         </button>
       </div>
       </div>

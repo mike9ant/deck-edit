@@ -462,21 +462,28 @@ export function NotesPane({ session }: { session: DeckSession }) {
           </span>
         )}
         {open && notesDiff && !removedSlide && (
-          <div className="mr-1 flex shrink-0 overflow-hidden rounded border border-hair bg-white text-[11px]" role="group" aria-label="Speaker notes view">
-            {(reviewing ? (['changes', 'edit'] as const) : (['changes', 'marked', 'edit'] as const)).map((v) => (
-              <button
-                key={v}
-                className={clsx('px-1.5 py-px', v === shownView ? 'bg-ink text-white' : 'text-ink-2 hover:bg-paper')}
-                title={{
-                  changes: 'How these notes changed: removed text struck through, new text in green. Read-only — start typing in it to edit with the changes marked',
-                  marked: 'Edit with the changes marked: removed text struck through (not editable, not kept), new text highlighted',
-                  edit: 'Edit the notes as they are now, without marks',
-                }[v]}
-                onClick={() => setView(v)}
-              >
-                {{ changes: 'Changes', marked: 'Edit + marks', edit: 'Edit' }[v]}
-              </button>
-            ))}
+          // Two toggles — Changes (the marks) and Edit — that can be on together (editing with the
+          // changes marked). Never both off: turning off the only one on switches to the other.
+          // While reviewing, one or the other (the decision's result can't be edited with marks).
+          <div className="mr-1 flex shrink-0 items-center gap-0.5 text-[11px]" role="group" aria-label="Speaker notes view">
+            {(['changes', 'edit'] as const).map((t) => {
+              const on = t === 'changes' ? shownView !== 'edit' : shownView !== 'changes'
+              const other = t === 'changes' ? 'edit' : 'changes'
+              const next = reviewing ? (on ? other : t) : on ? other : 'marked'
+              return (
+                <button
+                  key={t}
+                  aria-pressed={on}
+                  className={clsx('rounded border px-1.5 py-px', on ? 'border-ink bg-ink text-white' : 'border-hair bg-white text-ink-2 hover:bg-paper')}
+                  title={t === 'changes'
+                    ? `${on ? 'Hide' : 'Show'} how these notes changed: removed text struck through, new text in green.${shownView === 'changes' ? ' Read-only — start typing in it to edit with the changes marked.' : ''}`
+                    : `${on ? 'Stop editing' : 'Edit the notes'}${shownView !== 'edit' || !on ? ' — with Changes on, the changes stay marked while you edit' : ''}`}
+                  onClick={() => setView(next)}
+                >
+                  {t === 'changes' ? 'Changes' : 'Edit'}
+                </button>
+              )
+            })}
           </div>
         )}
         {open && !removedSlide && (
