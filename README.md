@@ -23,8 +23,8 @@ for the AI is pinned on slide 7.* Open `sample-project/` as a project to try it 
 
 ## Download
 
-**Deck Edit 0.2.1 for macOS** (universal — Apple Silicon and Intel — signed and notarized):
-[Deck-Edit-0.2.1.dmg](https://github.com/mike9ant/deck-edit/releases/download/v0.2.1/Deck-Edit-0.2.1.dmg)
+**Deck Edit 0.3.2 for macOS** (universal — Apple Silicon and Intel — signed and notarized):
+[Deck-Edit-0.3.2.dmg](https://github.com/mike9ant/deck-edit/releases/download/v0.3.2/Deck-Edit-0.3.2.dmg)
 · [all releases](https://github.com/mike9ant/deck-edit/releases). Open it and drag Deck Edit to
 Applications. The agent runs on [Claude Code](https://claude.com/claude-code); the app shows how to
 set it up if it isn't installed yet.
@@ -120,6 +120,28 @@ your platform.
   parsed defensively, see `backend/src/conversations.rs`). Found on macOS, Windows (incl. Microsoft
   Store installs) and Linux; Claude Code's `CLAUDE_CONFIG_DIR` is honored, and
   `DECKEDIT_CLAUDE_DESKTOP_DIR` adds another desktop-app folder. Agent settings shows what was found.
+- **Comparing and reviewing decks** — see how two versions of a deck differ, and merge the changes
+  you want into one deck.
+  - **Compare**: drop one deck onto the right half of another in the Files panel, use **Compare**
+    on an agent turn's changed deck (vs. how it was before the turn), or ask the agent ("compare
+    this with RAISE_2_CK"). The bar shows **From → To** (file, saved when and by whom; a backup
+    from before a turn is marked as such). Changes are marked on the slides — added green, changed
+    orange, removed red, with the changed words highlighted — and listed beside each thumbnail
+    (text edits as words added / removed, shapes added / removed / moved / resized, pictures
+    replaced or cropped, chart and table values, speaker notes, review comments, slides added,
+    removed or moved). Switch between **From** and **To** to see either version; removed slides
+    show where they were. Slides are paired by content, so a rebuilt or reordered deck still
+    compares sensibly; formatting noise from other apps (Google Slides' written-out defaults) is
+    ignored. The comparison follows your edits as you type, on the slide and in the notes.
+  - **Review**: go through the changes and **accept** or **reject** each one — a text box, a
+    picture, the speaker notes, a comment, a whole slide (added, removed or moved), or in bulk by
+    kind. The slides preview the result (rejected changes put back), then **Apply** writes the
+    accepted changes into the From deck (a backup is taken first, and **Undo apply** restores it)
+    or into a new copy. The agent can start a review and accept or reject changes for you ("accept
+    Constantine's text edits on slides 2–5"); applying is always yours.
+  - **Speaker notes while comparing**: **Changes** shows the notes' change (removed text struck
+    through, new text green); turn on **Edit** too to edit with the changes still marked, or turn
+    Changes off for plain editing.
 - **Other files**
   - **PDF** — page rail, reorder/duplicate/delete pages, drop an image onto a page, undo/redo. The page's
     text is selectable: the bar over a selection copies it or puts a **note for the agent** on it (the
