@@ -89,6 +89,11 @@ export interface DeckSession {
   agentChangedWhileHeld: string[]
   /** Undo-stack length the file on disk reflects (edits beyond it aren't saved yet). */
   savedAt: number
+  /**
+   * The undo entry on top of the stack when the deck last matched the file (null: an empty stack);
+   * undefined when unknown. Undoing back to it makes the deck match the file again: nothing to save.
+   */
+  savedTop?: UndoEntry | null
 }
 
 interface DeckStore {
@@ -424,6 +429,8 @@ export const useDecks = create<DeckStore>((set, get) => {
           agentChangedWhileHeld: holding ? [...new Set([...s1.agentChangedWhileHeld, ...changed])] : s1.agentChangedWhileHeld,
           dirty: external ? entries.length > 0 : false, sldIds, lastSlideXml: slideXml,
           savedAt: external ? 0 : s1.savedAt,
+          // The deck is the file now — unless held edits were replayed onto it.
+          savedTop: external && entries.length ? undefined : ((external ? entries : s1.undo).at(-1) ?? null),
           externallyChanged: external ? changed : s1.externallyChanged,
           externalAt: external ? Date.now() : s1.externalAt,
         }
@@ -449,7 +456,7 @@ export const useDecks = create<DeckStore>((set, get) => {
         key, pid, path, pres: null, etag: '', loading: true, error: null, version: 0, slideVersions: {},
         slideIndex: 0, selection: [], undo: [], redo: [], turnBaseline: 0, dirty: false, saving: false,
         sldIds: new Map(), externallyChanged: [], externalAt: 0, lastSlideXml: new Map(), reloading: false,
-        heldFrom: null, agentChangedWhileHeld: [], savedAt: 0,
+        heldFrom: null, agentChangedWhileHeld: [], savedAt: 0, savedTop: null,
       }
       set({ sessions: { ...get().sessions, [key]: s } })
       await get().reload(key, false)
@@ -510,15 +517,20 @@ export const useDecks = create<DeckStore>((set, get) => {
       const version = s.version + 1
       const slideVersions: Record<string, number> = {}
       for (const sl of s.pres.slides) slideVersions[sl.id] = version
+      const rest = s.undo.slice(0, -1)
+      // Back to what the file has (the entry on top when it was written): nothing to save. (Not
+      // while a save is under way, or while the agent works — edits are held then.)
+      const backToSaved = s.savedTop !== undefined && (rest.at(-1) ?? null) === s.savedTop && !s.saving && s.heldFrom == null && !isProjectBusy(s.pid)
       patch(key, {
-        version, slideVersions, dirty: true, selection: [],
-        undo: s.undo.slice(0, -1), redo: [...s.redo, entry],
+        version, slideVersions, dirty: !backToSaved, selection: [],
+        undo: rest, redo: [...s.redo, entry],
         turnBaseline: Math.min(s.turnBaseline, s.undo.length - 1),
         heldFrom: s.heldFrom != null && s.heldFrom >= s.undo.length - 1 ? null : s.heldFrom,
         savedAt: Math.min(s.savedAt, s.undo.length - 1),
         slideIndex: Math.min(s.slideIndex, s.pres.slides.length - 1),
       })
-      scheduleSave(key)
+      if (backToSaved) clearTimeout(saveTimers.get(key))
+      else scheduleSave(key)
     },
 
     async redo(key) {
@@ -604,7 +616,11 @@ export const useDecks = create<DeckStore>((set, get) => {
         const { bytes } = await repairPackage(raw)
         const { etag } = await api.writeFile(s.pid, s.path, bytes, s.etag)
         const { sldIds, slideXml } = await readSlideParts(bytes)
-        patch(key, { etag, saving: false, sldIds, lastSlideXml: slideXml, heldFrom: null, agentChangedWhileHeld: [], savedAt: upTo })
+        // What the file now has: the deck as it was when the save began — known only if nothing
+        // changed while it was being written.
+        const cur = get().sessions[key]!
+        const unchanged = !cur.dirty && cur.undo.length === upTo && cur.undo[upTo - 1] === s.undo[upTo - 1]
+        patch(key, { etag, saving: false, sldIds, lastSlideXml: slideXml, heldFrom: null, agentChangedWhileHeld: [], savedAt: upTo, savedTop: unchanged ? (s.undo[upTo - 1] ?? null) : undefined })
         publishMap(get().sessions[key]!)
       } catch (e) {
         patch(key, { saving: false })
