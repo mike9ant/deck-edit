@@ -273,7 +273,7 @@ async fn open_external(
 ) -> Result<Json<serde_json::Value>> {
     let root = state.projects.folder(&id)?;
     let path = resolve_under(&root, &q.path)?;
-    run_open(&[path.to_string_lossy().as_ref()]).await?;
+    open_path(&path, false).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -284,21 +284,29 @@ async fn reveal(
 ) -> Result<Json<serde_json::Value>> {
     let root = state.projects.folder(&id)?;
     let path = resolve_under(&root, &q.path)?;
-    run_open(&["-R", path.to_string_lossy().as_ref()]).await?;
+    open_path(&path, true).await?;
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn run_open(args: &[&str]) -> Result<()> {
+/// Open a file with its app (PowerPoint for a deck), or show it in the file manager (`reveal`):
+/// macOS `open` / `open -R`; Windows Explorer (`explorer /select,`, or the file itself: its default
+/// app — not `cmd /c start`, which would read `&` in a name as its own); elsewhere `xdg-open`
+/// (the folder, for reveal).
+async fn open_path(path: &Path, reveal: bool) -> Result<()> {
+    let p = path.to_string_lossy().into_owned();
     #[cfg(target_os = "macos")]
-    let program = "open";
-    #[cfg(not(target_os = "macos"))]
-    let program = "xdg-open";
-    let status = tokio::process::Command::new(program)
-        .args(args)
-        .status()
-        .await
-        .map_err(|e| AppError::Internal(format!("{program}: {e}")))?;
-    if !status.success() {
+    let (program, args, check): (&str, Vec<String>, bool) = ("open", if reveal { vec!["-R".into(), p] } else { vec![p] }, true);
+    // (Explorer's exit code says nothing about success.)
+    #[cfg(windows)]
+    let (program, args, check): (&str, Vec<String>, bool) = ("explorer", vec![if reveal { format!("/select,{p}") } else { p }], false);
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let (program, args, check): (&str, Vec<String>, bool) =
+        ("xdg-open", vec![if reveal { path.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or(p) } else { p }], true);
+    let mut cmd = tokio::process::Command::new(program);
+    cmd.args(&args);
+    crate::login_path::no_window(&mut cmd);
+    let status = cmd.status().await.map_err(|e| AppError::Internal(format!("{program}: {e}")))?;
+    if check && !status.success() {
         return Err(AppError::Internal(format!("{program} failed")));
     }
     Ok(())
@@ -317,9 +325,24 @@ async fn pick_folder() -> Result<Json<serde_json::Value>> {
         let path = path.trim_end_matches('/').to_string();
         Ok(Json(json!({ "path": if path.is_empty() { None } else { Some(path) } })))
     }
-    #[cfg(not(target_os = "macos"))]
+    // Windows: the system folder dialog (WinForms, from PowerShell), on top of the app.
+    #[cfg(windows)]
     {
-        Err(AppError::Internal("folder picker is only implemented on macOS; type the path instead".into()))
+        let script = "Add-Type -AssemblyName System.Windows.Forms; \
+            $owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true }; \
+            $d = New-Object System.Windows.Forms.FolderBrowserDialog; \
+            $d.Description = 'Choose the project folder'; $d.ShowNewFolderButton = $true; \
+            if ($d.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($d.SelectedPath) }";
+        let mut cmd = tokio::process::Command::new("powershell");
+        cmd.args(["-NoProfile", "-STA", "-NonInteractive", "-Command", script]);
+        crate::login_path::no_window(&mut cmd);
+        let out = cmd.output().await.map_err(|e| AppError::Internal(format!("folder dialog: {e}")))?;
+        let path = String::from_utf8_lossy(&out.stdout).trim().trim_end_matches('\\').to_string();
+        Ok(Json(json!({ "path": if path.is_empty() { None } else { Some(path) } })))
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        Err(AppError::Internal("the folder picker isn't available here; type the path instead".into()))
     }
 }
 

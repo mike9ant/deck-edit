@@ -8,6 +8,8 @@
 #   ./run.sh logs             Tail the server log
 #   ./run.sh test [frontend|backend]   Unit tests
 #   ./run.sh desktop          Build the macOS app, install it as /Applications/Deck Edit.app and open it
+#   ./run.sh check            Type-check the server and the desktop app (this machine), no install
+#   ./run.sh check-windows    Type-check the server and desktop app for Windows (x86_64), from a Mac
 #   ./run.sh release          Shareable build: universal app, signed + notarized, in a .dmg → release/
 #   ./run.sh push             Push main; bumps the patch version first when the commits are from a new day
 #
@@ -53,9 +55,14 @@ APP_INSTALLED="/Applications/$APP_NAME.app"
 # The app before it was renamed to Deck Edit; replaced on install.
 LEGACY_APP="/Applications/PPTX Edit.app"
 
-# The desktop app (desktop/, Tauri) runs the server in-process and bundles
-# frontend/dist, so the frontend must be built first. No beforeBuildCommand:
-# tauri's spawned shell can break node on some setups.
+# The desktop app (desktop/, Tauri) runs the server in-process and bundles the frontend — built
+# into frontend/dist-app, emptied each time (frontend/dist keeps old chunks for pages already open
+# on the dev server; an app has none). No beforeBuildCommand: tauri's spawned shell can break node
+# on some setups.
+build_frontend_app() {
+  [ -d "$FRONTEND/node_modules" ] || (cd "$FRONTEND" && npm install --no-audit --no-fund)
+  say "Building the frontend for the app"; (cd "$FRONTEND" && npm run build:app)
+}
 build_desktop() {
   say "Building the desktop app (the first build downloads and compiles Tauri — a few minutes)"
   (cd "$ROOT/desktop" && npx --yes @tauri-apps/cli@2 build)
@@ -111,7 +118,7 @@ release() {
   local dmg="$out/Deck-Edit-$version.dmg"
   say "Release $version — signing as: $identity"
 
-  build_frontend
+  build_frontend_app
   command -v rustup >/dev/null && rustup target add aarch64-apple-darwin x86_64-apple-darwin >/dev/null
   say "Building the universal app (Apple Silicon + Intel)"
   (cd "$ROOT/desktop" && APPLE_SIGNING_IDENTITY="$identity" npx --yes @tauri-apps/cli@2 build --target universal-apple-darwin --bundles app)
@@ -203,6 +210,35 @@ start_backend() {
   say "Server running → http://127.0.0.1:$PORT  (log: ./run.sh logs)  · $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
+check() {
+  mkdir -p "$FRONTEND/dist-app" # (the desktop build checks its bundled folder exists)
+  say "Type-checking the server and the desktop app"
+  (cd "$ROOT" && "$CARGO" check -p deck-edit --all-targets && "$CARGO" check -p deck-edit-desktop)
+}
+
+# Type-check for x86_64 Windows (compiles the Windows-only code paths; links nothing — the real
+# Windows build runs on a Windows machine / CI, see .github/workflows/windows.yml).
+check_windows() {
+  local target=x86_64-pc-windows-msvc
+  mkdir -p "$FRONTEND/dist-app"
+  if ! rustup target list --installed 2>/dev/null | grep -q "^$target\$"; then
+    say "Adding the Rust target $target"
+    rustup target add "$target"
+  fi
+  say "Type-checking the server for Windows"
+  (cd "$ROOT" && "$CARGO" check --target "$target" -p deck-edit --all-targets)
+  # The desktop app's build embeds its Windows resources (icon, version) with llvm-rc: Homebrew's
+  # `llvm` (keg-only — added to PATH for this only, so it doesn't shadow Apple's clang).
+  local llvm_bin
+  llvm_bin="$(brew --prefix llvm 2>/dev/null)/bin"
+  if [ ! -x "$llvm_bin/llvm-rc" ]; then
+    warn "llvm-rc not found — install it with: brew install llvm (skipping the desktop app)"
+    return 0
+  fi
+  say "Type-checking the desktop app for Windows"
+  (cd "$ROOT" && PATH="$llvm_bin:$PATH" "$CARGO" check --target "$target" -p deck-edit-desktop)
+}
+
 case "${1:-start}" in
   setup) setup ;;
   build) build_backend; build_frontend ;;
@@ -212,7 +248,9 @@ case "${1:-start}" in
     say "Vite dev server → http://127.0.0.1:5180  · $(date '+%Y-%m-%d %H:%M:%S')"
     cd "$FRONTEND" && DECKEDIT_BACKEND="http://127.0.0.1:$PORT" npx vite --host 127.0.0.1
     ;;
-  desktop) build_frontend; build_desktop; install_desktop ;;
+  desktop) build_frontend_app; build_desktop; install_desktop ;;
+  check) check ;;
+  check-windows) check_windows ;;
   release) release ;;
   push) push ;;
   stop) stop ;;
@@ -224,5 +262,5 @@ case "${1:-start}" in
       *) (cd "$ROOT" && "$CARGO" test -p deck-edit) && (cd "$FRONTEND" && npx vitest run) ;;
     esac
     ;;
-  *) echo "usage: ./run.sh [setup|start|build|dev|stop|logs|test [frontend|backend]|desktop|release|push]"; exit 1 ;;
+  *) echo "usage: ./run.sh [setup|start|build|dev|stop|logs|test [frontend|backend]|desktop|check|check-windows|release|push]"; exit 1 ;;
 esac

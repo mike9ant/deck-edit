@@ -863,8 +863,8 @@ pub fn system_prompt(state: &AppState) -> String {
     let python = state
         .python
         .bin()
-        .map(|b| format!("`{}/python3`", b.display()))
-        .unwrap_or_else(|| "`python3`".into());
+        .map(|b| format!("`{}`", b.join(crate::python_env::PYTHON).display()))
+        .unwrap_or_else(|| if cfg!(windows) { "`python`".into() } else { "`python3`".into() });
     let agent_settings = state.settings.get();
     let connectors = if agent_settings.user_mcp {
         "\n- The user's own MCP servers and connectors (e.g. Slack, Google Drive) are available besides the app's tools. Use them when the user asks (e.g. to pull content from a Slack thread into a slide). Anything that sends, posts or changes something outside the project needs the user's approval unless they chose auto approve — never send messages on their behalf unless asked. (The user can turn this off in Agent settings → Your connectors.)"

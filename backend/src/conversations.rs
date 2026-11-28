@@ -706,7 +706,7 @@ fn outputs_of(c: &ConversationInfo) -> Vec<OutputFile> {
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
         .filter_map(|e| {
-            let rel = e.path().strip_prefix(dir).ok()?.to_string_lossy().into_owned();
+            let rel = e.path().strip_prefix(dir).ok()?.to_string_lossy().replace('\\', "/");
             Some(OutputFile { path: rel, size: e.metadata().map(|m| m.len()).unwrap_or(0) })
         })
         .collect()
@@ -751,7 +751,7 @@ async fn import_output(
     let name = src.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let dst = crate::files::unique_path(&root.join(&name));
     std::fs::copy(&src, &dst)?;
-    let rel = dst.strip_prefix(&root).map(|p| p.to_string_lossy().into_owned()).unwrap_or(name);
+    let rel = dst.strip_prefix(&root).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or(name);
     Ok(Json(json!({ "path": rel })))
 }
 

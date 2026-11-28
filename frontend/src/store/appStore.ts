@@ -5,6 +5,7 @@
  */
 
 import { create } from 'zustand'
+import { keyLabel } from '../shortcutLabels'
 import { api } from '../api/client'
 import type { Project, TreeNode } from '../api/types'
 
@@ -214,7 +215,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   toast(text, kind = 'info') {
     const id = ++toastSeq
-    set({ toasts: [...get().toasts, { id, text, kind }] })
+    set({ toasts: [...get().toasts, { id, text: keyLabel(text), kind }] })
     setTimeout(() => set({ toasts: get().toasts.filter((t) => t.id !== id) }), kind === 'error' ? 8000 : 4000)
   },
 }))

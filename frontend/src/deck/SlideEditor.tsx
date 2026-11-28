@@ -21,6 +21,7 @@ import { ALIGN_LABEL, alignPositions, type AlignKind } from './align'
 import { SlideRender, type SlideRenderHandle } from './SlideRender'
 import { beginEditing, domPointAt, paragraphsText, readParagraphs, readParagraphsAt, textBodyChanged, textContainer, type TextPoint } from './textEdit'
 import { setTyping } from './liveTyping'
+import { isMac } from '../shortcutLabels'
 import { nodeText, short } from './deckModel'
 import { getClipboard, setClipboard } from './clipboard'
 import { fitSize, prepareImage } from './images'
@@ -822,14 +823,16 @@ export function SlideEditor({ session, noteMode, setNoteMode, showResolved, regi
       return
     }
     if (draft) setDraft(null)
-    const id = pickAt(e.clientX, e.clientY, { cycle: e.altKey, keepSelected: !e.shiftKey && !e.metaKey })
+    // Add to the selection: ⌘-click on the Mac, Ctrl-click elsewhere (or ⇧-click).
+    const addKey = isMac ? e.metaKey : e.ctrlKey
+    const id = pickAt(e.clientX, e.clientY, { cycle: e.altKey, keepSelected: !e.shiftKey && !addKey })
     if (!id) {
       if (!e.shiftKey) setSelection(key, [])
       startMarquee(e)
       return
     }
     let sel = selection
-    if (e.shiftKey || e.metaKey) sel = sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]
+    if (e.shiftKey || addKey) sel = sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]
     else if (!sel.includes(id)) sel = [id]
     setSelection(key, sel)
     if (sel.includes(id)) startMove(sel, e)

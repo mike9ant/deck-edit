@@ -803,6 +803,7 @@ dependencies = [
  "trash",
  "uuid",
  "walkdir",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

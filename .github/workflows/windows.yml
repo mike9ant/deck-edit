@@ -1,0 +1,46 @@
+# Windows (x86_64): the frontend's tests and build, the server's tests, and the desktop app's
+# installer (NSIS) as a downloadable artifact. The Mac build is made locally (./run.sh desktop /
+# release); this checks the Windows side, which can't be run on a Mac.
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      # Keep files as committed (LF): patch-package patches and test fixtures compare bytes.
+      - run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Frontend — install, test, build
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npx vitest run
+          npm run build:app
+
+      - name: Server — tests
+        run: cargo test -p deck-edit --locked
+
+      - name: Desktop app — installer
+        working-directory: desktop
+        run: npx --yes @tauri-apps/cli@2 build --bundles nsis
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deck-edit-windows-installer
+          path: target/release/bundle/nsis/*.exe
+          if-no-files-found: error

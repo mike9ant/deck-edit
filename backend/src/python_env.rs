@@ -13,6 +13,10 @@ use std::sync::{Arc, Mutex, RwLock};
 use anyhow::{bail, Context};
 
 const PACKAGES: [&str; 5] = ["python-pptx", "pymupdf", "pypdf", "pillow", "openpyxl"];
+
+/// A venv's programs folder (`bin`; `Scripts` on Windows) and its interpreter there.
+pub const BIN_DIR: &str = if cfg!(windows) { "Scripts" } else { "bin" };
+pub const PYTHON: &str = if cfg!(windows) { "python.exe" } else { "python3" };
 /// Written into `<data dir>/venv` once every package installed: a half-made env (no network, …) isn't used.
 const READY_MARKER: &str = ".deck-edit-ready";
 /// The marker an env made before the rename to Deck Edit carries.
@@ -30,10 +34,10 @@ impl PythonEnv {
         let own = data_dir.join("venv");
         let candidates = [
             std::env::var("DECKEDIT_PYTHON_BIN").ok().map(PathBuf::from),
-            (own.join(READY_MARKER).exists() || own.join(OLD_READY_MARKER).exists()).then(|| own.join("bin")),
-            Some(repo_root.join(".venv/bin")),
+            (own.join(READY_MARKER).exists() || own.join(OLD_READY_MARKER).exists()).then(|| own.join(BIN_DIR)),
+            Some(repo_root.join(".venv").join(BIN_DIR)),
         ];
-        let bin = candidates.into_iter().flatten().find(|b| b.join("python3").exists());
+        let bin = candidates.into_iter().flatten().find(|b| b.join(PYTHON).exists());
         Self { bin: RwLock::new(bin), status: Mutex::new(None) }
     }
 
@@ -65,11 +69,39 @@ impl PythonEnv {
 
 fn create(data_dir: &Path) -> anyhow::Result<PathBuf> {
     let venv = data_dir.join("venv");
-    let python = which("python3").unwrap_or_else(|| PathBuf::from("/usr/bin/python3"));
-    run(Command::new(&python).arg("-m").arg("venv").arg("--clear").arg(&venv)).with_context(|| format!("{} -m venv", python.display()))?;
-    run(Command::new(venv.join("bin/pip")).args(["install", "-q", "--upgrade"]).args(PACKAGES)).context("pip install")?;
+    // (Windows: `python` / the `py` launcher — there's no python3.exe, and `python` may be the
+    // Microsoft Store stub, which `-m venv` fails on: the next one is tried.)
+    let pythons: Vec<PathBuf> = if cfg!(windows) {
+        ["python.exe", "py.exe"].iter().filter_map(|b| which(b)).collect()
+    } else {
+        vec![which("python3").unwrap_or_else(|| PathBuf::from("/usr/bin/python3"))]
+    };
+    let mut made = Err(anyhow::anyhow!("no Python found (install Python 3 from python.org)"));
+    for python in &pythons {
+        let mut c = Command::new(python);
+        if python.file_stem().is_some_and(|s| s == "py") {
+            c.arg("-3");
+        }
+        made = run(no_window(c.arg("-m").arg("venv").arg("--clear").arg(&venv))).with_context(|| format!("{} -m venv", python.display()));
+        if made.is_ok() {
+            break;
+        }
+    }
+    made?;
+    let bin = venv.join(BIN_DIR);
+    run(no_window(Command::new(bin.join(PYTHON)).args(["-m", "pip", "install", "-q", "--upgrade"]).args(PACKAGES))).context("pip install")?;
     std::fs::write(venv.join(READY_MARKER), PACKAGES.join("\n"))?;
-    Ok(venv.join("bin"))
+    Ok(bin)
+}
+
+/// Windows: no console window for the setup's processes.
+fn no_window(cmd: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000);
+    }
+    cmd
 }
 
 fn run(cmd: &mut Command) -> anyhow::Result<()> {
@@ -83,7 +115,7 @@ fn run(cmd: &mut Command) -> anyhow::Result<()> {
 }
 
 fn which(bin: &str) -> Option<PathBuf> {
-    std::env::var("PATH").ok()?.split(':').map(|d| Path::new(d).join(bin)).find(|p| p.is_file())
+    std::env::var("PATH").ok()?.split(crate::login_path::SEP).map(|d| Path::new(d).join(bin)).find(|p| p.is_file())
 }
 
 #[cfg(test)]
@@ -94,19 +126,21 @@ mod tests {
     fn a_half_made_own_env_is_not_used() {
         let dir = tempfile::tempdir().unwrap();
         let repo = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join("venv/bin")).unwrap();
-        std::fs::write(dir.path().join("venv/bin/python3"), "").unwrap();
+        let bin = dir.path().join("venv").join(BIN_DIR);
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join(PYTHON), "").unwrap();
         assert_eq!(PythonEnv::locate(dir.path(), repo.path()).bin(), None);
         std::fs::write(dir.path().join("venv").join(READY_MARKER), "").unwrap();
-        assert_eq!(PythonEnv::locate(dir.path(), repo.path()).bin(), Some(dir.path().join("venv/bin")));
+        assert_eq!(PythonEnv::locate(dir.path(), repo.path()).bin(), Some(bin));
     }
 
     #[test]
     fn the_repo_env_is_the_fallback() {
         let dir = tempfile::tempdir().unwrap();
         let repo = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(repo.path().join(".venv/bin")).unwrap();
-        std::fs::write(repo.path().join(".venv/bin/python3"), "").unwrap();
-        assert_eq!(PythonEnv::locate(dir.path(), repo.path()).bin(), Some(repo.path().join(".venv/bin")));
+        let bin = repo.path().join(".venv").join(BIN_DIR);
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join(PYTHON), "").unwrap();
+        assert_eq!(PythonEnv::locate(dir.path(), repo.path()).bin(), Some(bin));
     }
 }

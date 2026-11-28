@@ -10,6 +10,10 @@
 //! isn't found (`refresh`): a user who installs it — or edits their shell profile — while the app
 //! runs is picked up without a restart. Every `claude` process is started through `command`, with
 //! this PATH (an npm-installed `claude` is a Node script: it needs `node` on its PATH too).
+//!
+//! Windows: an app gets the user's full PATH already (no login shell to ask); `claude` is
+//! `claude.exe` (native installer, `~\.local\bin`) or `claude.cmd` (npm, `%APPDATA%\npm`), found
+//! through PATHEXT; PATH entries are separated by `;`; processes start without a console window.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -21,14 +25,31 @@ const SHELL_TIMEOUT: Duration = Duration::from_secs(5);
 
 static CURRENT: RwLock<Option<String>> = RwLock::new(None);
 
+/// The PATH list separator: `;` on Windows, `:` elsewhere.
+pub const SEP: char = if cfg!(windows) { ';' } else { ':' };
+
 fn home() -> PathBuf {
-    std::env::var("HOME").map(PathBuf::from).unwrap_or_default()
+    dirs::home_dir().unwrap_or_default()
+}
+
+/// `dirs` joined into a PATH value.
+pub fn join(dirs: &[&str]) -> String {
+    dirs.iter().filter(|d| !d.is_empty()).copied().collect::<Vec<_>>().join(&SEP.to_string())
 }
 
 /// Where `claude` (and Node) usually live, whether or not they exist yet — so an install made
 /// while the app runs is found. Node version managers' versioned folders: the newest first.
 fn usual_dirs() -> Vec<PathBuf> {
     let home = home();
+    if cfg!(windows) {
+        let env = |k: &str| std::env::var(k).map(PathBuf::from).ok();
+        let mut dirs = vec![home.join(".local").join("bin"), home.join(".claude").join("local")];
+        dirs.extend(env("APPDATA").map(|d| d.join("npm")));
+        dirs.extend(env("ProgramFiles").map(|d| d.join("nodejs")));
+        dirs.extend(env("LOCALAPPDATA").map(|d| d.join("Volta").join("bin")));
+        dirs.push(home.join(".bun").join("bin"));
+        return dirs;
+    }
     let mut dirs = vec![
         home.join(".local/bin"),
         home.join(".claude/local"),
@@ -61,8 +82,12 @@ fn version_key(p: &Path) -> Vec<u64> {
     name.trim_start_matches('v').split('.').map(|n| n.parse().unwrap_or(0)).collect()
 }
 
-/// The login shell's PATH (`$SHELL -ilc`), or None if it fails or takes too long.
+/// The login shell's PATH (`$SHELL -ilc`), or None if it fails or takes too long. (None on
+/// Windows: there's no login shell to ask, and an app gets the user's PATH anyway.)
 fn shell_path_blocking() -> Option<String> {
+    if cfg!(windows) {
+        return None;
+    }
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
     let mut child = std::process::Command::new(&shell)
         .args(["-ilc", &format!("printf '{MARK}%s{MARK}' \"$PATH\"")])
@@ -97,12 +122,12 @@ fn parse_marked(text: &str) -> Option<String> {
 fn merge(shell: &str, rest: &str) -> String {
     let mut dirs: Vec<String> = Vec::new();
     let usual: Vec<String> = usual_dirs().iter().map(|p| p.to_string_lossy().into_owned()).collect();
-    for d in shell.split(':').map(str::to_string).chain(usual).chain(rest.split(':').map(str::to_string)) {
+    for d in shell.split(SEP).map(str::to_string).chain(usual).chain(rest.split(SEP).map(str::to_string)) {
         if !d.is_empty() && !dirs.contains(&d) {
             dirs.push(d);
         }
     }
-    dirs.join(":")
+    dirs.join(&SEP.to_string())
 }
 
 /// At startup, before any threads (the desktop app): adopt the login shell's PATH for the whole
@@ -130,19 +155,30 @@ pub async fn refresh() {
     *CURRENT.write().unwrap() = Some(next);
 }
 
+/// The file names `bin` may have: itself, and on Windows with each PATHEXT extension
+/// (`claude` → `claude.exe`, `claude.cmd`…) when it has none.
+fn candidates(bin: &str) -> Vec<String> {
+    if !cfg!(windows) || Path::new(bin).extension().is_some() {
+        return vec![bin.to_string()];
+    }
+    let exts = std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into());
+    exts.split(';').filter(|e| !e.is_empty()).map(|e| format!("{bin}{}", e.to_ascii_lowercase())).collect()
+}
+
 /// Where `bin` is: itself if it's a path, else the first match on `path()`.
 pub fn which(bin: &str) -> Option<PathBuf> {
-    if bin.contains('/') {
+    if bin.contains('/') || bin.contains('\\') {
         let p = PathBuf::from(bin);
-        return p.is_file().then_some(p);
+        return candidates(bin).into_iter().map(PathBuf::from).find(|c| c.is_file()).or(p.is_file().then_some(p));
     }
-    path().split(':').map(|d| Path::new(d).join(bin)).find(|p| p.is_file())
+    let names = candidates(bin);
+    path().split(SEP).find_map(|d| names.iter().map(|n| Path::new(d).join(n)).find(|p| p.is_file()))
 }
 
 /// The PATH to run `bin` with: its own folder first (for a Node script's `node`), then `path()`.
 pub fn run_path(bin: &str) -> String {
     match which(bin).as_deref().and_then(Path::parent) {
-        Some(dir) => format!("{}:{}", dir.display(), path()),
+        Some(dir) => format!("{}{SEP}{}", dir.display(), path()),
         None => path(),
     }
 }
@@ -152,7 +188,19 @@ pub fn command(bin: &str) -> tokio::process::Command {
     let resolved = which(bin);
     let mut cmd = tokio::process::Command::new(resolved.as_deref().unwrap_or(Path::new(bin)));
     cmd.env("PATH", run_path(bin));
+    no_window(&mut cmd);
     cmd
+}
+
+/// Windows: start the process without a console window (the app has none; each `claude` or tool
+/// run would flash one). Nothing elsewhere.
+pub fn no_window(cmd: &mut tokio::process::Command) {
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    let _ = cmd;
 }
 
 #[cfg(test)]
@@ -167,12 +215,23 @@ mod tests {
 
     #[test]
     fn merges_each_folder_once_shell_first() {
-        let m = merge("/shell/bin:/usr/bin", "/usr/bin:/rest/bin");
-        let dirs: Vec<&str> = m.split(':').collect();
+        let m = merge(&join(&["/shell/bin", "/usr/bin"]), &join(&["/usr/bin", "/rest/bin"]));
+        let dirs: Vec<&str> = m.split(SEP).collect();
         assert_eq!(dirs[0], "/shell/bin");
         assert_eq!(dirs.iter().filter(|d| **d == "/usr/bin").count(), 1);
         assert!(dirs.contains(&"/rest/bin"));
-        assert!(dirs.iter().any(|d| d.ends_with(".local/bin")));
+        assert!(dirs.iter().any(|d| Path::new(d).ends_with(Path::new(".local").join("bin"))));
+    }
+
+    #[test]
+    fn finds_a_bin_by_its_windows_extensions() {
+        let c = candidates("claude");
+        if cfg!(windows) {
+            assert!(c.contains(&"claude.exe".to_string()) && c.contains(&"claude.cmd".to_string()));
+        } else {
+            assert_eq!(c, vec!["claude".to_string()]);
+        }
+        assert_eq!(candidates("python.exe"), vec!["python.exe".to_string()]);
     }
 
     #[test]

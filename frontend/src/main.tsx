@@ -2,6 +2,10 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App'
+import { installShortcutLabels } from './shortcutLabels'
+
+// Windows / Linux: tooltips say Ctrl+… where the app writes ⌘….
+installShortcutLabels()
 
 // Saved UI state from before the rename to Deck Edit (pdfedit-… / pptxedit-… keys: open project,
 // tabs, panel sizes, drafts…) carries over once.

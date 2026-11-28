@@ -35,6 +35,7 @@ venv/
 .server.log
 .frontend.port
 frontend/dist/
+frontend/dist-app/
 
 # TypeScript build cache
 *.tsbuildinfo

@@ -63,7 +63,7 @@ impl Access {
 
 /// A path for display: relative to the project folder when inside it.
 pub fn rel(root: &Path, p: &Path) -> String {
-    p.strip_prefix(root).map(|r| r.to_string_lossy().into_owned()).unwrap_or_else(|_| p.to_string_lossy().into_owned())
+    p.strip_prefix(root).map(|r| r.to_string_lossy().replace('\\', "/")).unwrap_or_else(|_| p.to_string_lossy().into_owned())
 }
 
 /// Whether two paths overlap: the same, or one inside the other.
@@ -311,7 +311,9 @@ fn classify_cmd(cmd: &Cmd, cwd: &mut PathBuf) -> Access {
         }
     }
     let Some(prog_path) = words.first() else { return out };
-    let prog = prog_path.rsplit('/').next().unwrap_or(prog_path);
+    // (Windows: `C:\\…\\python.exe` too — the name without its folder or `.exe`.)
+    let prog = prog_path.rsplit(['/', '\\']).next().unwrap_or(prog_path);
+    let prog = prog.strip_suffix(".exe").unwrap_or(prog);
     let args = &words[1..];
     let positional = || args.iter().filter(|a| !a.is_empty() && !a.starts_with('-')).copied().collect::<Vec<_>>();
     let has = |flag: &str| args.iter().any(|a| *a == flag || (flag.len() == 2 && a.starts_with('-') && !a.starts_with("--") && a.contains(&flag[1..])));

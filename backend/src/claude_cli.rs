@@ -222,7 +222,7 @@ pub fn build_command(p: &TurnParams<'_>) -> tokio::process::Command {
     }
     // Put the app's Python env (python-pptx, pymupdf, pypdf) first on PATH.
     if let Some(bin) = p.python_bin {
-        cmd.env("PATH", format!("{}:{}", bin.display(), crate::login_path::run_path(p.claude_bin)));
+        cmd.env("PATH", format!("{}{}{}", bin.display(), crate::login_path::SEP, crate::login_path::run_path(p.claude_bin)));
         if let Some(venv) = bin.parent() {
             cmd.env("VIRTUAL_ENV", venv);
         }
@@ -311,7 +311,7 @@ fn rel_to_root(path: &str, root: &Path) -> String {
         let canon = p.parent().and_then(|d| d.canonicalize().ok()).map(|d| d.join(p.file_name().unwrap_or_default()));
         for candidate in [Some(p.to_path_buf()), canon].into_iter().flatten() {
             if let Ok(rel) = candidate.strip_prefix(root) {
-                return rel.to_string_lossy().into_owned();
+                return rel.to_string_lossy().replace('\\', "/");
             }
         }
         path.to_string()
